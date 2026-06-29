@@ -1,17 +1,16 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>inference</name>
+  <name>perception</name>
   <version>0.0.1</version>
-  <description>YOLO object detection node (traffic lights + turn signs)</description>
+  <description>OpenCV lane following and ArUco detection nodes</description>
   <maintainer email="team@example.com">d-racer team</maintainer>
   <license>Apache-2.0</license>
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
-  <exec_depend>inference_msgs</exec_depend>
+  <exec_depend>perception_msgs</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
-  <!-- ultralytics is installed via pip, not rosdep:  pip install ultralytics -->
 
   <export>
     <build_type>ament_python</build_type>

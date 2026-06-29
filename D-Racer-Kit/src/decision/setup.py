@@ -1,6 +1,8 @@
+import os
+from glob import glob
 from setuptools import setup
 
-package_name = 'inference'
+package_name = 'decision'
 
 setup(
     name=package_name,
@@ -9,16 +11,18 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
+        (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='d-racer team',
     maintainer_email='team@example.com',
-    description='YOLO object detection node (traffic lights + turn signs)',
+    description='State-machine decision node (lane PID + missions) for D-Racer',
     license='Apache-2.0',
     entry_points={
         'console_scripts': [
-            'yolo_node = inference.yolo_node:main',
+            'decision_node = decision.decision_node:main',
         ],
     },
 )

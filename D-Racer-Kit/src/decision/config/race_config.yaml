@@ -1,0 +1,36 @@
+# Sample params. Use with:
+#   ros2 launch decision auto_race.launch.py   (defaults)
+# or override a single node, e.g.:
+#   ros2 run decision decision_node --ros-args --params-file race_config.yaml
+
+lane_node:
+  ros__parameters:
+    roi_top_ratio: 0.55      # use bottom 45% of the frame
+    bright_thresh: 160       # white-line threshold (raise if floor reflects)
+    min_pixels: 40
+
+aruco_node:
+  ros__parameters:
+    dictionary: DICT_4X4_50  # match the marker dictionary the organisers use
+
+yolo_node:
+  ros__parameters:
+    model_path: /home/topst/D-Racer/models/best.pt
+    conf_threshold: 0.5
+    infer_hz: 10.0           # YOLO runs slower than lane following on purpose
+    imgsz: 320
+
+decision_node:
+  ros__parameters:
+    course: out              # 'out' or 'in'
+    kp: 0.6
+    ki: 0.0
+    kd: 0.15
+    steer_center: 0.0        # = STEER_TRIM
+    steer_scale: 1.0         # flip to negative if it steers the wrong way
+    drive_throttle: 0.18
+    slow_throttle: 0.12
+    fork_bias: 0.4
+    marker_area_trigger: 0.02
+    marker_clear_frames: 5
+    roundabout_seconds: 8.0  # TODO: replace with IMU yaw integration

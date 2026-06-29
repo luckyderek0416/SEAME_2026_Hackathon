@@ -1,6 +1,6 @@
 from setuptools import setup
 
-package_name = 'inference'
+package_name = 'perception'
 
 setup(
     name=package_name,
@@ -14,11 +14,12 @@ setup(
     zip_safe=True,
     maintainer='d-racer team',
     maintainer_email='team@example.com',
-    description='YOLO object detection node (traffic lights + turn signs)',
+    description='OpenCV lane following and ArUco detection nodes',
     license='Apache-2.0',
     entry_points={
         'console_scripts': [
-            'yolo_node = inference.yolo_node:main',
+            'lane_node = perception.lane_node:main',
+            'aruco_node = perception.aruco_node:main',
         ],
     },
 )

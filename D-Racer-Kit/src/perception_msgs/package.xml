@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>perception_msgs</name>
+  <version>0.0.1</version>
+  <description>Lane and ArUco perception messages for D-Racer</description>
+  <maintainer email="team@example.com">d-racer team</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
+  <depend>std_msgs</depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
