@@ -1,0 +1,20 @@
+# loun 브랜치 = 내 작업만 (training/ + opencv/ + WORKLOG)
+# 나머지(D-Racer-Kit, 팀 공용 ROS 패키지, 빌드 등)는 전부 제외
+
+# 1) 최상위는 기본 전부 무시 후, 내 폴더만 다시 포함
+/*
+!/training/
+!/opencv/
+!/WORKLOG.md
+!/.gitignore
+
+# 2) 어디에 있든 무시할 것 (데이터/모델/캐시 — 용량 큼)
+__pycache__/
+*.pyc
+*.pt
+*.onnx
+*.tflite
+dataset/
+frames/
+videos/
+runs/
