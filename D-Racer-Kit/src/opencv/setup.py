@@ -14,7 +14,7 @@ setup(
     zip_safe=True,
     maintainer='topst',
     maintainer_email='sooyong.park@telechips.com',
-    description='OpenCV image processing node for compressed image topics.',
+    description='OpenCV image processing node for compressed image topics (debug grayscale/blur/edge).',
     license='TODO: License declaration',
     extras_require={
         'test': ['pytest'],

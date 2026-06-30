@@ -9,6 +9,8 @@ YOLO inference is run on a TIMER (infer_hz), not on every camera frame, so
 it can run slower than lane following without blocking anything.
 """
 
+import os
+
 import cv2
 import numpy as np
 
@@ -25,7 +27,8 @@ class YoloNode(Node):
 
         self.declare_parameter('subscribe_topic', '/camera/image/compressed')
         self.declare_parameter('detections_topic', '/inference/detections')
-        self.declare_parameter('model_path', '/home/topst/D-Racer/models/best.pt')
+        self.declare_parameter('model_path', os.path.expanduser(
+            '~/SEAME_2026_Hackathon/training/best_ncnn_model'))
         self.declare_parameter('conf_threshold', 0.5)
         self.declare_parameter('infer_hz', 10.0)
         self.declare_parameter('imgsz', 320)
@@ -46,15 +49,17 @@ class YoloNode(Node):
         self.get_logger().info(f'yolo_node up. model={self.model_path} infer_hz={infer_hz}')
 
     def _load_model(self):
+        # model_path points at the exported NCNN folder (best_ncnn_model) for
+        # on-car deployment; a .pt file also works for desktop testing.
         try:
             from ultralytics import YOLO
-            model = YOLO(self.model_path)
-            self.get_logger().info('YOLO model loaded.')
+            model = YOLO(self.model_path, task='detect')
+            self.get_logger().info(f'YOLO (NCNN) model loaded from {self.model_path}')
             return model
         except Exception as exc:  # noqa: BLE001
             self.get_logger().error(
                 f'Could not load YOLO model ({exc}). '
-                'Publishing EMPTY detections until model_path points to a trained .pt file.'
+                'Publishing EMPTY detections until model_path points to a valid model.'
             )
             return None
 

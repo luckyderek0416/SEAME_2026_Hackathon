@@ -25,9 +25,10 @@ class LaneNode(Node):
         self.declare_parameter('publish_debug', True)
         self.declare_parameter('debug_topic', '/perception/lane/debug')
         self.declare_parameter('jpeg_quality', 80)
+        self.declare_parameter('mode', 'white')          # 'white' (boundary) / 'yellow' (center)
         self.declare_parameter('roi_top_ratio', 0.55)
-        self.declare_parameter('bright_thresh', 160)
-        self.declare_parameter('min_pixels', 40)
+        self.declare_parameter('lookahead', 0.4)         # how far up the ROI to sample (0..1)
+        self.declare_parameter('single_line_offset', 0.25)
 
         sub_topic = str(self.get_parameter('subscribe_topic').value)
         self.lane_topic = str(self.get_parameter('lane_topic').value)
@@ -36,9 +37,10 @@ class LaneNode(Node):
         self.jpeg_quality = int(self.get_parameter('jpeg_quality').value)
 
         self.detector = LaneDetector(
+            mode=str(self.get_parameter('mode').value),
             roi_top_ratio=float(self.get_parameter('roi_top_ratio').value),
-            bright_thresh=int(self.get_parameter('bright_thresh').value),
-            min_pixels=int(self.get_parameter('min_pixels').value),
+            lookahead=float(self.get_parameter('lookahead').value),
+            single_line_offset=float(self.get_parameter('single_line_offset').value),
         )
 
         self.pub = self.create_publisher(LaneState, self.lane_topic, 10)
