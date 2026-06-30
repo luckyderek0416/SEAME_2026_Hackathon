@@ -1,0 +1,18 @@
+# 데이터/모델/캐시만 무시 (용량 큼). 코드/문서는 추적.
+# (main 에 머지해도 안전하도록 '전부 무시' 방식은 쓰지 않음)
+
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 딥러닝 데이터/가중치 (NCNN 배포본 best_ncnn_model/ 은 추적함)
+*.pt
+*.onnx
+*.tflite
+dataset/
+frames/
+videos/
+runs/
+
+.DS_Store

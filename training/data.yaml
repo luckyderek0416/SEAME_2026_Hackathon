@@ -1,0 +1,19 @@
+# YOLO 데이터셋 설정 (SEA:ME 해커톤 4객체)
+# 주최측 제공 영상을 프레임으로 쪼개고 라벨링한 뒤 아래 구조로 둔다.
+#
+#   dataset/
+#     images/train/*.jpg   labels/train/*.txt
+#     images/val/*.jpg     labels/val/*.txt
+#
+# 라벨(.txt) 한 줄 형식 (YOLO):  <class_id> <x_center> <y_center> <w> <h>  (0~1 정규화)
+
+path: ./dataset
+train: images/train
+val: images/val
+
+# 클래스 순서 = class_id. 라벨링 때 이 순서를 반드시 지킬 것.
+names:
+  0: red_light      # 빨간불  (도착 시 정지)
+  1: green_light    # 초록불  (출발)
+  2: left_sign      # 좌회전 표지판 (갈림길)
+  3: right_sign     # 우회전 표지판 (갈림길)

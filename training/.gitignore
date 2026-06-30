@@ -1,0 +1,19 @@
+# 데이터셋/프레임 (용량 큼 — git 에 올리지 않음)
+dataset/
+frames/
+videos/
+
+# 학습 산출물 / 모델 가중치
+runs/
+*.pt
+*.onnx
+*.tflite
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 기타
+.DS_Store
