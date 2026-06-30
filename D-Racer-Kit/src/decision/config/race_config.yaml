@@ -6,8 +6,9 @@
 lane_node:
   ros__parameters:
     roi_top_ratio: 0.55      # use bottom 45% of the frame
-    bright_thresh: 160       # white-line threshold (raise if floor reflects)
-    min_pixels: 40
+    # NOTE: the HSV lane_node tunes color via node defaults (mode / lookahead /
+    # single_line_offset). The old brightness params (bright_thresh, min_pixels)
+    # were removed -- the HSV detector does not declare or read them.
 
 aruco_node:
   ros__parameters:
