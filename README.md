@@ -3,6 +3,21 @@ TEAM : chita
 
 ---
 
+## 🗺️ 전체 데이터 흐름 (자율주행 In 코스)
+
+<p align="center">
+  <img src="D-Racer-Kit/docs/dataflow.png" alt="D-Racer 자율주행 데이터 흐름" width="480">
+</p>
+
+```
+카메라 → (차선·마커·신호등 3갈래 인지) → decision 두뇌가 판단 → /control → 모터
+```
+- **① 인지**: lane_node(차선) / aruco_node(마커) / yolo_ncnn_node(신호등·표지판)
+- **② 판단**: decision_node(껍데기) + state_machine(두뇌: 미션 상태 + PID 조향 + 곡률감속)
+- **③ 구동**: control_node → D3Racer/PCA9685 → 서보·모터
+
+---
+
 ## 🔧 `taehulim` 브랜치 변경점 (자율주행 스택 보강)
 
 공식 클론(main) 기준으로 **라인추종·회전교차로·YOLO**를 보강한 브랜치입니다.
