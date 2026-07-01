@@ -120,6 +120,9 @@ class DecisionNode(Node):
             'yellow_enter_ratio': float(g('yellow_enter_ratio').value),
         }
         self.sm = RaceStateMachine(cfg)
+        # LIVE params: `ros2 param set /decision_node kp 0.8` etc. applies immediately
+        # (no restart), because the state machine reads self.sm.cfg every tick.
+        self.add_on_set_parameters_callback(self._on_set_params)
 
         # latest inputs (safe defaults)
         self.lane = LaneState()
@@ -135,6 +138,22 @@ class DecisionNode(Node):
         self.dt = 1.0 / float(g('control_hz').value)
         self.timer = self.create_timer(self.dt, self.on_timer)
         self.get_logger().info(f"decision_node up. course={cfg['course']}")
+
+    def _on_set_params(self, params):
+        """Apply live parameter changes to the running state machine."""
+        from rcl_interfaces.msg import SetParametersResult
+        for p in params:
+            v = p.value
+            if p.name in self.sm.cfg:
+                self.sm.cfg[p.name] = v
+            if p.name in ('kp', 'ki', 'kd'):
+                setattr(self.sm.pid, p.name, float(v))   # PID caches gains separately
+            if p.name == 'race_dir':                     # derive turn_direction from race_dir
+                rd = str(v).lower()
+                if rd in ('left', 'right'):
+                    self.sm.cfg['turn_direction'] = 1.0 if rd == 'right' else -1.0
+            self.get_logger().info(f'param live-updated: {p.name} = {v}')
+        return SetParametersResult(successful=True)
 
     def on_lane(self, msg):
         self.lane = msg
