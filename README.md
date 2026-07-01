@@ -3,7 +3,7 @@ TEAM : chita
 
 ---
 
-## 🗺️ 전체 데이터 흐름 (자율주행 In 코스)
+## 🗺️ 전체 데이터 흐름 (자율주행 In 코스) (일단 in 코스만 구현함)
 
 <p align="center">
   <img src="D-Racer-Kit/docs/dataflow.png" alt="D-Racer 자율주행 데이터 흐름" width="480">
