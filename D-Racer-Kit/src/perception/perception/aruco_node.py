@@ -21,21 +21,29 @@ class ArucoNode(Node):
 
         self.declare_parameter('subscribe_topic', '/camera/image/compressed')
         self.declare_parameter('aruco_topic', '/perception/aruco')
-        self.declare_parameter('dictionary', 'DICT_4X4_50')
+        self.declare_parameter('dictionary', 'DICT_4X4_50')   # MUST match the printed marker
+        self.declare_parameter('inverted', False)             # True if marker is white-on-black
 
         sub_topic = str(self.get_parameter('subscribe_topic').value)
         self.aruco_topic = str(self.get_parameter('aruco_topic').value)
         dict_name = str(self.get_parameter('dictionary').value)
+        inverted = bool(self.get_parameter('inverted').value)
 
         dict_id = getattr(cv2.aruco, dict_name, cv2.aruco.DICT_4X4_50)
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(dict_id)
         # OpenCV >= 4.7 uses ArucoDetector; older versions use detectMarkers(...)
         try:
-            self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, cv2.aruco.DetectorParameters())
+            params = cv2.aruco.DetectorParameters()
+            if inverted and hasattr(params, 'detectInvertedMarker'):
+                params.detectInvertedMarker = True
+            self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, params)
             self.use_new_api = True
         except AttributeError:
             self.params = cv2.aruco.DetectorParameters_create()
+            if inverted and hasattr(self.params, 'detectInvertedMarker'):
+                self.params.detectInvertedMarker = True
             self.use_new_api = False
+        self.get_logger().info(f'aruco dictionary={dict_name} inverted={inverted}')
 
         self.pub = self.create_publisher(ArucoState, self.aruco_topic, 10)
         self.create_subscription(CompressedImage, sub_topic, self.on_image, 10)

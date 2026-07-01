@@ -28,6 +28,24 @@ class LaneNode(Node):
         self.declare_parameter('roi_top_ratio', 0.55)
         self.declare_parameter('bright_thresh', 160)
         self.declare_parameter('min_pixels', 40)
+        # --- robust lane following (multi-band look-ahead, curvature, smoothing) ---
+        self.declare_parameter('num_bands', 4)        # look-ahead bands for curves
+        self.declare_parameter('morph_kernel', 3)     # noise cleanup (glare/dashes); 0=off
+        self.declare_parameter('width_ema', 0.1)      # lane-width memory adapt rate
+        self.declare_parameter('smooth_alpha', 0.5)   # offset smoothing (lower=smoother)
+        self.declare_parameter('race_dir', 'left')                 # 'left'/'right' master; derives junction_side
+        self.declare_parameter('junction_side', 'right')           # used only if race_dir is not left/right
+        self.declare_parameter('junction_dash_transitions', 3)     # vertical on/off changes => dashed
+        self.declare_parameter('junction_min_row_pixels', 2)       # row counts as 'line' above this
+        self.declare_parameter('junction_gap_rows', 2)             # full-opening fallback
+        # --- colour masking (white + yellow lanes) ---
+        self.declare_parameter('mask_mode', 'hsv')            # 'hsv' (white|yellow) or 'gray'
+        self.declare_parameter('use_white', True)
+        self.declare_parameter('use_yellow', True)            # yellow roundabout lane
+        self.declare_parameter('white_hsv_lo', [0, 0, 180])   # H,S,V lower (OpenCV H 0-179)
+        self.declare_parameter('white_hsv_hi', [179, 60, 255])
+        self.declare_parameter('yellow_hsv_lo', [18, 80, 80])
+        self.declare_parameter('yellow_hsv_hi', [38, 255, 255])
 
         sub_topic = str(self.get_parameter('subscribe_topic').value)
         self.lane_topic = str(self.get_parameter('lane_topic').value)
@@ -35,10 +53,35 @@ class LaneNode(Node):
         self.debug_topic = str(self.get_parameter('debug_topic').value)
         self.jpeg_quality = int(self.get_parameter('jpeg_quality').value)
 
+        gp = self.get_parameter
+        # race_dir master: derive which side the dashed junction shows on.
+        # 'left' (CCW) -> junction on the right; 'right' (CW) -> junction on the left.
+        race_dir = str(gp('race_dir').value).lower()
+        if race_dir == 'right':
+            junction_side = 'left'
+        elif race_dir == 'left':
+            junction_side = 'right'
+        else:
+            junction_side = str(gp('junction_side').value)
         self.detector = LaneDetector(
-            roi_top_ratio=float(self.get_parameter('roi_top_ratio').value),
-            bright_thresh=int(self.get_parameter('bright_thresh').value),
-            min_pixels=int(self.get_parameter('min_pixels').value),
+            roi_top_ratio=float(gp('roi_top_ratio').value),
+            bright_thresh=int(gp('bright_thresh').value),
+            min_pixels=int(gp('min_pixels').value),
+            junction_side=junction_side,
+            junction_dash_transitions=int(gp('junction_dash_transitions').value),
+            junction_min_row_pixels=int(gp('junction_min_row_pixels').value),
+            junction_gap_rows=int(gp('junction_gap_rows').value),
+            mask_mode=str(gp('mask_mode').value),
+            use_white=bool(gp('use_white').value),
+            use_yellow=bool(gp('use_yellow').value),
+            white_hsv_lo=[int(x) for x in gp('white_hsv_lo').value],
+            white_hsv_hi=[int(x) for x in gp('white_hsv_hi').value],
+            yellow_hsv_lo=[int(x) for x in gp('yellow_hsv_lo').value],
+            yellow_hsv_hi=[int(x) for x in gp('yellow_hsv_hi').value],
+            num_bands=int(gp('num_bands').value),
+            morph_kernel=int(gp('morph_kernel').value),
+            width_ema=float(gp('width_ema').value),
+            smooth_alpha=float(gp('smooth_alpha').value),
         )
 
         self.pub = self.create_publisher(LaneState, self.lane_topic, 10)
@@ -54,14 +97,18 @@ class LaneNode(Node):
         if frame is None:
             return
 
-        lane_found, offset, num_lanes, debug = self.detector.process(frame)
+        (lane_found, offset, num_lanes, junction,
+         yellow_ratio, yellow_offset, curvature, debug) = self.detector.process(frame)
 
         out = LaneState()
         out.header = msg.header
         out.lane_found = bool(lane_found)
         out.offset = float(offset)
-        out.curvature = 0.0
+        out.curvature = float(curvature)
         out.num_lanes = int(num_lanes)
+        out.junction = bool(junction)
+        out.yellow_ratio = float(yellow_ratio)
+        out.yellow_offset = float(yellow_offset)
         self.pub.publish(out)
 
         if self.debug_pub is not None:

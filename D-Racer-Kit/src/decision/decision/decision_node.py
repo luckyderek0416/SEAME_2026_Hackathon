@@ -28,6 +28,7 @@ class DecisionNode(Node):
 
         # ----- strategy -----
         self.declare_parameter('course', 'out')     # 'out' = S-curve+fork, 'in' = roundabout
+        self.declare_parameter('skip_missions', False)  # True = pure lane-following test (no missions)
 
         # ----- lane PID + steering mapping -----
         self.declare_parameter('kp', 0.6)
@@ -40,6 +41,7 @@ class DecisionNode(Node):
         self.declare_parameter('drive_throttle', 0.18)
         self.declare_parameter('slow_throttle', 0.12)
         self.declare_parameter('stop_throttle', 0.0)
+        self.declare_parameter('curve_slow', 0.5)     # DRIVE: slow on curves (per |curvature|)
 
         # ----- mission tuning -----
         self.declare_parameter('conf_threshold', 0.5)
@@ -48,24 +50,74 @@ class DecisionNode(Node):
         self.declare_parameter('marker_area_trigger', 0.02)
         self.declare_parameter('marker_clear_frames', 5)
         self.declare_parameter('fork_bias', 0.4)
-        self.declare_parameter('roundabout_seconds', 8.0)
+
+        # ----- roundabout (junction-count, no IMU) -----
+        self.declare_parameter('enter_curvature', 0.45)   # |lane offset| above this ...
+        self.declare_parameter('enter_sustain_s', 0.6)    # ... for this long -> enter circle
+        # race_dir MASTER (set on the day): 'left' (CCW) or 'right' (CW). Derives the
+        # roundabout turn_direction here AND lane_node's junction_side. One value flips
+        # everything direction-dependent. turn_direction below is used only if race_dir
+        # is not left/right.
+        self.declare_parameter('race_dir', 'left')
+        self.declare_parameter('turn_direction', -1.0)    # +1 CW (steer right), -1 CCW
+        # In/Out branch (AUTO, direction-agnostic): at the fork, steer toward the yellow
+        # path for the In course / away from it for Out. Uses where the yellow is, so it
+        # works whichever side it appears -> no day setup needed.
+        self.declare_parameter('branch_bias', 0.35)        # steer bias at the fork
+        self.declare_parameter('branch_yellow_min', 0.03)  # yellow_ratio above this => fork in view
+        self.declare_parameter('circle_steer_bias', 0.15) # hold the ring, don't exit early
+        self.declare_parameter('target_loops', 1)
+        self.declare_parameter('min_loop_time_s', 3.0)    # cannot finish a lap faster (HARD floor)
+        self.declare_parameter('max_loop_time_s', 20.0)   # failsafe exit if all estimates fail
+        self.declare_parameter('junction_cooldown_s', 2.0)
+        # --- lap voting (junction + steering-integral + time), no IMU/marker ---
+        self.declare_parameter('yaw_lap_threshold', 6.0)   # steering-integral per lap; CALIBRATE on track
+        self.declare_parameter('nominal_loop_time_s', 8.0) # measured one-lap time at race speed
+        self.declare_parameter('lap_votes_needed', 2)      # of {junction, yaw, time} to exit
+        # yellow gates roundabout entry (the roundabout is yellow; the outer loop is white)
+        self.declare_parameter('use_yellow_entry', True)
+        self.declare_parameter('yellow_enter_ratio', 0.06)  # ROI yellow fraction => in roundabout
 
         g = self.get_parameter
+        race_dir = str(g('race_dir').value).lower()
+        if race_dir == 'right':
+            turn_direction = 1.0
+        elif race_dir == 'left':
+            turn_direction = -1.0
+        else:
+            turn_direction = float(g('turn_direction').value)
         cfg = {
             'course': str(g('course').value),
+            'skip_missions': bool(g('skip_missions').value),
+            'race_dir': race_dir,
             'kp': float(g('kp').value), 'ki': float(g('ki').value), 'kd': float(g('kd').value),
             'steer_center': float(g('steer_center').value),
             'steer_scale': float(g('steer_scale').value),
             'drive_throttle': float(g('drive_throttle').value),
             'slow_throttle': float(g('slow_throttle').value),
             'stop_throttle': float(g('stop_throttle').value),
+            'curve_slow': float(g('curve_slow').value),
             'conf_threshold': float(g('conf_threshold').value),
             'green_frames': int(g('green_frames').value),
             'red_frames': int(g('red_frames').value),
             'marker_area_trigger': float(g('marker_area_trigger').value),
             'marker_clear_frames': int(g('marker_clear_frames').value),
             'fork_bias': float(g('fork_bias').value),
-            'roundabout_seconds': float(g('roundabout_seconds').value),
+            'enter_curvature': float(g('enter_curvature').value),
+            'enter_sustain_s': float(g('enter_sustain_s').value),
+            'turn_direction': turn_direction,
+            'branch_bias': float(g('branch_bias').value),
+            'branch_yellow_min': float(g('branch_yellow_min').value),
+            'circle_steer_bias': float(g('circle_steer_bias').value),
+            'target_loops': int(g('target_loops').value),
+            'min_loop_time_s': float(g('min_loop_time_s').value),
+            'max_loop_time_s': float(g('max_loop_time_s').value),
+            'junction_cooldown_s': float(g('junction_cooldown_s').value),
+            'yaw_lap_threshold': float(g('yaw_lap_threshold').value),
+            'nominal_loop_time_s': float(g('nominal_loop_time_s').value),
+            'lap_votes_needed': int(g('lap_votes_needed').value),
+            'use_yellow_entry': bool(g('use_yellow_entry').value),
+            'yellow_enter_ratio': float(g('yellow_enter_ratio').value),
         }
         self.sm = RaceStateMachine(cfg)
 
