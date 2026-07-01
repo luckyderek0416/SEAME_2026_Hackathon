@@ -57,9 +57,7 @@ class MonitorNode(Node):
         self.declare_parameter('battery_topic', 'battery_status')
         self.declare_parameter('image_topic', '/camera/image/compressed')
         self.declare_parameter('debug_image',True)
-        self.declare_parameter('opencv_grayscale_topic', '/opencv/image/grayscale')
-        self.declare_parameter('opencv_blur_topic', '/opencv/image/blur')
-        self.declare_parameter('opencv_edge_topic', '/opencv/image/edge')
+        self.declare_parameter('lane_debug_topic', '/perception/lane/debug')
         self.declare_parameter('control_topic', '/control')
         self.declare_parameter('joystick_topic', 'joystick')
         self.declare_parameter('storage_path', '/')
@@ -85,9 +83,7 @@ class MonitorNode(Node):
         self.image_topic = self.get_yaml_or_param_str(yaml_config, 'IMAGE_TOPIC', 'image_topic')
         self.control_topic = self.get_yaml_or_param_str(yaml_config, 'CONTROL_TOPIC', 'control_topic')
         self.debug_image = self.get_yaml_or_param_bool_multi(yaml_config, ('OPENCV_DEBUG_MODE', 'DEBUG_IMAGE'), 'debug_image')
-        self.opencv_grayscale_topic = self.get_yaml_or_param_str(yaml_config, 'OPENCV_GRAYSCALE_TOPIC', 'opencv_grayscale_topic')
-        self.opencv_blur_topic = self.get_yaml_or_param_str(yaml_config, 'OPENCV_BLUR_TOPIC', 'opencv_blur_topic')
-        self.opencv_edge_topic = self.get_yaml_or_param_str(yaml_config, 'OPENCV_EDGE_TOPIC', 'opencv_edge_topic')
+        self.lane_debug_topic = self.get_yaml_or_param_str(yaml_config, 'LANE_DEBUG_TOPIC', 'lane_debug_topic')
         self.joystick_topic = self.get_yaml_or_param_str(yaml_config, 'JOYSTICK_TOPIC', 'joystick_topic')
         if not self.control_topic:
             # Backward compatibility for legacy typo key.
@@ -152,9 +148,7 @@ class MonitorNode(Node):
             self.image_display_width,
             self.image_display_height,
             self.debug_image,
-            self.opencv_grayscale_topic,
-            self.opencv_blur_topic,
-            self.opencv_edge_topic,
+            self.lane_debug_topic,
         )
         self.server_thread = FlaskServerThread(self.app, self.web_host, self.web_port)
 
@@ -173,20 +167,8 @@ class MonitorNode(Node):
         if self.debug_image:
             self.create_subscription(
                 CompressedImage,
-                self.opencv_grayscale_topic,
-                self.debug_grayscale_callback,
-                10,
-            )
-            self.create_subscription(
-                CompressedImage,
-                self.opencv_blur_topic,
-                self.debug_blur_callback,
-                10,
-            )
-            self.create_subscription(
-                CompressedImage,
-                self.opencv_edge_topic,
-                self.debug_edge_callback,
+                self.lane_debug_topic,
+                self.debug_lane_callback,
                 10,
             )
         self.create_subscription(
@@ -215,6 +197,7 @@ class MonitorNode(Node):
             f'battery_topic={self.battery_topic} \n'
             f'image_topic={self.image_topic} \n'
             f'debug_image={self.debug_image}, \n'
+            f'lane_debug_topic={self.lane_debug_topic}, \n'
             f'control_topic={self.control_topic}, \n'
             f'joystick_topic={self.joystick_topic}, \n'
             f'storage_path={self.storage_path}, \n'
@@ -305,14 +288,8 @@ class MonitorNode(Node):
         except Exception as exc:
             self.get_logger().error(f'Failed to process {topic} frame: {exc}')
 
-    def debug_grayscale_callback(self, msg):
-        self._debug_image_callback(msg, 'grayscale', self.opencv_grayscale_topic)
-
-    def debug_blur_callback(self, msg):
-        self._debug_image_callback(msg, 'blur', self.opencv_blur_topic)
-
-    def debug_edge_callback(self, msg):
-        self._debug_image_callback(msg, 'edge', self.opencv_edge_topic)
+    def debug_lane_callback(self, msg):
+        self._debug_image_callback(msg, 'hsv', self.lane_debug_topic)
 
     def joystick_callback(self, msg):
         self.state.update_recording(msg.is_recording)

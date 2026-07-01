@@ -20,6 +20,7 @@ def generate_launch_description():
     aruco_inverted = LaunchConfiguration('aruco_inverted')
     model_param = LaunchConfiguration('model_param')
     model_bin = LaunchConfiguration('model_bin')
+    skip_missions = LaunchConfiguration('skip_missions')
 
     return LaunchDescription([
         DeclareLaunchArgument('course', default_value='out',
@@ -35,6 +36,9 @@ def generate_launch_description():
                               default_value='/home/topst/D-Racer/models/model.ncnn.param'),
         DeclareLaunchArgument('model_bin',
                               default_value='/home/topst/D-Racer/models/model.ncnn.bin'),
+        DeclareLaunchArgument('skip_missions', default_value='false',
+                              description='true = pure lane-following test (no green light / roundabout / '
+                                          'obstacle missions); starts driving immediately.'),
 
         # --- kit: camera ---
         Node(package='camera', executable='camera_node', name='camera_node', output='screen'),
@@ -51,7 +55,7 @@ def generate_launch_description():
 
         # --- new: decision (state machine + PID) ---
         Node(package='decision', executable='decision_node', name='decision_node', output='screen',
-             parameters=[{'course': course, 'race_dir': race_dir}]),
+             parameters=[{'course': course, 'race_dir': race_dir, 'skip_missions': skip_missions}]),
 
         # --- kit: control in AUTO mode ---
         Node(package='control', executable='control_node', name='control_node', output='screen',
@@ -59,4 +63,10 @@ def generate_launch_description():
 
         # --- kit: joystick kept alive for E-STOP safety ---
         Node(package='joystick', executable='joystick_node', name='joystick_node', output='screen'),
+
+        # --- kit: battery (publishes battery_status for the monitor) ---
+        Node(package='battery', executable='battery_node', name='battery_node', output='screen'),
+
+        # --- kit: web monitor (shows camera + battery status) ---
+        Node(package='monitor', executable='monitor_node', name='monitor_node', output='screen'),
     ])

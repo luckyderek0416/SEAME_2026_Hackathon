@@ -49,4 +49,21 @@ def generate_launch_description():
                 },
             ],
         ),
+        Node(
+            package='battery',
+            executable='battery_node',
+            name='battery_node',
+            output='screen',
+        ),
+        Node(
+            package='monitor',
+            executable='monitor_node',
+            name='monitor_node',
+            output='screen',
+            parameters=[
+                {
+                    'vehicle_config_file': vehicle_config_path,
+                },
+            ],
+        ),
     ])

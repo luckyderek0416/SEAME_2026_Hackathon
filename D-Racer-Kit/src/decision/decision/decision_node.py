@@ -6,6 +6,7 @@ Run control_node with use_joystick_control:=False so it listens to /control.
 
 import rclpy
 from rclpy.node import Node
+from rcl_interfaces.msg import SetParametersResult
 from std_msgs.msg import Header
 
 from perception_msgs.msg import LaneState, ArucoState
@@ -34,11 +35,11 @@ class DecisionNode(Node):
         self.declare_parameter('kp', 0.6)
         self.declare_parameter('ki', 0.0)
         self.declare_parameter('kd', 0.15)
-        self.declare_parameter('steer_center', 0.0)  # = STEER_TRIM from vehicle_config.yaml
+        self.declare_parameter('steer_center', 0.2)  # steering bias to correct drift
         self.declare_parameter('steer_scale', 1.0)   # set NEGATIVE if steering is inverted
 
         # ----- throttle levels (kit's set_throttle_percent convention) -----
-        self.declare_parameter('drive_throttle', 0.18)
+        self.declare_parameter('drive_throttle', 0.28)
         self.declare_parameter('slow_throttle', 0.12)
         self.declare_parameter('stop_throttle', 0.0)
         self.declare_parameter('curve_slow', 0.5)     # DRIVE: slow on curves (per |curvature|)
@@ -120,9 +121,13 @@ class DecisionNode(Node):
             'yellow_enter_ratio': float(g('yellow_enter_ratio').value),
         }
         self.sm = RaceStateMachine(cfg)
-        # LIVE params: `ros2 param set /decision_node kp 0.8` etc. applies immediately
-        # (no restart), because the state machine reads self.sm.cfg every tick.
-        self.add_on_set_parameters_callback(self._on_set_params)
+
+        # ----- live-tunable params (ros2 param set 으로 주행 중 변경 가능) -----
+        # state_machine 이 매 step 마다 self.sm.cfg 를 읽으므로 값만 갱신하면 즉시 반영됨.
+        self.live_tunable = {
+            'drive_throttle', 'slow_throttle', 'stop_throttle', 'curve_slow',
+        }
+        self.add_on_set_parameters_callback(self._on_set_parameters)
 
         # latest inputs (safe defaults)
         self.lane = LaneState()
@@ -139,20 +144,19 @@ class DecisionNode(Node):
         self.timer = self.create_timer(self.dt, self.on_timer)
         self.get_logger().info(f"decision_node up. course={cfg['course']}")
 
-    def _on_set_params(self, params):
-        """Apply live parameter changes to the running state machine."""
-        from rcl_interfaces.msg import SetParametersResult
+    def _on_set_parameters(self, params):
+        """ros2 param set 요청을 받아 state_machine 설정을 라이브로 갱신."""
         for p in params:
-            v = p.value
-            if p.name in self.sm.cfg:
-                self.sm.cfg[p.name] = v
-            if p.name in ('kp', 'ki', 'kd'):
-                setattr(self.sm.pid, p.name, float(v))   # PID caches gains separately
-            if p.name == 'race_dir':                     # derive turn_direction from race_dir
-                rd = str(v).lower()
-                if rd in ('left', 'right'):
-                    self.sm.cfg['turn_direction'] = 1.0 if rd == 'right' else -1.0
-            self.get_logger().info(f'param live-updated: {p.name} = {v}')
+            if p.name in self.live_tunable and p.name in self.sm.cfg:
+                try:
+                    value = float(p.value)
+                except (TypeError, ValueError):
+                    return SetParametersResult(
+                        successful=False,
+                        reason=f'{p.name} 는 숫자여야 합니다',
+                    )
+                self.sm.cfg[p.name] = value
+                self.get_logger().info(f'[live] {p.name} -> {value:g}')
         return SetParametersResult(successful=True)
 
     def on_lane(self, msg):

@@ -90,26 +90,7 @@ class LaneNode(Node):
             self.debug_pub = self.create_publisher(CompressedImage, self.debug_topic, 10)
 
         self.create_subscription(CompressedImage, sub_topic, self.on_image, 10)
-        # LIVE params: `ros2 param set /lane_node yellow_hsv_lo "[15,90,90]"` etc. applies
-        # immediately by updating the detector attributes (no restart needed).
-        self.add_on_set_parameters_callback(self._on_set_params)
         self.get_logger().info(f'lane_node up. in={sub_topic} out={self.lane_topic}')
-
-    def _on_set_params(self, params):
-        from rcl_interfaces.msg import SetParametersResult
-        hsv_keys = {'white_hsv_lo', 'white_hsv_hi', 'yellow_hsv_lo', 'yellow_hsv_hi'}
-        for p in params:
-            n, v = p.name, p.value
-            if n in hsv_keys:
-                setattr(self.detector, n, tuple(int(x) for x in v))
-            elif n == 'race_dir':
-                rd = str(v).lower()
-                if rd in ('left', 'right'):
-                    self.detector.junction_side = 'left' if rd == 'right' else 'right'
-            elif hasattr(self.detector, n):
-                setattr(self.detector, n, v)
-            self.get_logger().info(f'param live-updated: {n} = {v}')
-        return SetParametersResult(successful=True)
 
     def on_image(self, msg: CompressedImage):
         frame = cv2.imdecode(np.frombuffer(msg.data, dtype=np.uint8), cv2.IMREAD_COLOR)

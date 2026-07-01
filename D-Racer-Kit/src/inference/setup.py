@@ -20,7 +20,6 @@ setup(
         'console_scripts': [
             'yolo_node = inference.yolo_node:main',
             'yolo_ncnn_node = inference.yolo_ncnn_node:main',
-            'detection_viz_node = inference.detection_viz_node:main',
         ],
     },
 )

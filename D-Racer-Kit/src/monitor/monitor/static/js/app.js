@@ -21,9 +21,7 @@ const CARD_CLASSES = [
 const config = window.MONITOR_CONFIG || {
   statusEndpoint: '/api/status',
   frameEndpoint: '/api/frame',
-  debugFrameGrayscaleEndpoint: '/api/frame/grayscale',
-  debugFrameBlurEndpoint: '/api/frame/blur',
-  debugFrameEdgeEndpoint: '/api/frame/edge',
+  debugFrameHsvEndpoint: '/api/frame/hsv',
   debugImageEnabled: false,
   placeholderUrl: '/api/frame/placeholder',
   refreshIntervalMs: 1000,
@@ -41,9 +39,7 @@ const elements = {
   imageUpdated: document.getElementById('image-updated'),
   imageResolution: document.getElementById('image-resolution'),
   cameraFrame: document.getElementById('camera-frame'),
-  debugFrameGrayscale: document.getElementById('debug-frame-grayscale'),
-  debugFrameBlur: document.getElementById('debug-frame-blur'),
-  debugFrameEdge: document.getElementById('debug-frame-edge'),
+  debugFrameHsv: document.getElementById('debug-frame-hsv'),
   recordBadge: document.getElementById('record-badge'),
   recordBadgeLabel: document.getElementById('record-badge-label'),
   controlCard: document.getElementById('control-card'),
@@ -375,9 +371,7 @@ function refreshDebugFrames() {
   }
 
   debugImageRequestInFlight = true;
-  refreshImageByEndpoint(elements.debugFrameGrayscale, config.debugFrameGrayscaleEndpoint);
-  refreshImageByEndpoint(elements.debugFrameBlur, config.debugFrameBlurEndpoint);
-  refreshImageByEndpoint(elements.debugFrameEdge, config.debugFrameEdgeEndpoint);
+  refreshImageByEndpoint(elements.debugFrameHsv, config.debugFrameHsvEndpoint);
   debugImageRequestInFlight = false;
 }
 

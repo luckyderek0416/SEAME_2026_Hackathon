@@ -138,7 +138,7 @@ class LaneDetector:
 
         junction = self._detect_junction(clean, w)
 
-        debug = self._draw_debug(roi, lane_center)
+        debug = self._draw_debug(roi, clean, lane_center)
         return lane_found, offset, num_lanes, junction, yellow_ratio, yellow_offset, curvature, debug
 
     def _band_center(self, band, w):
@@ -195,8 +195,12 @@ class LaneDetector:
             return None
         return float(np.mean(xs)) + x_offset
 
-    def _draw_debug(self, roi, lane_center):
+    def _draw_debug(self, roi, mask, lane_center):
+        """Visualise the HSV colour-masking result: the lane pixels the mask selected
+        (cyan) painted over the ROI, plus the detected lane centre (red) and image
+        centre (green). This is what the monitor dashboard shows."""
         dbg = roi.copy()
+        dbg[mask > 0] = (255, 255, 0)                                     # HSV-selected lane pixels (cyan)
         cx = int(max(0, min(dbg.shape[1] - 1, lane_center)))
         cv2.line(dbg, (cx, 0), (cx, dbg.shape[0]), (0, 0, 255), 2)        # detected lane center (red)
         cv2.line(dbg, (dbg.shape[1] // 2, 0), (dbg.shape[1] // 2, dbg.shape[0]), (0, 255, 0), 1)  # image center (green)

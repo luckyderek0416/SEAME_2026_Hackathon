@@ -38,7 +38,7 @@ def create_app( state, page_title,
                 refresh_interval_ms, image_refresh_interval_ms,
                 header_logo_path, telechips_logo_path, topst_logo_path, 
                 image_display_width, image_display_height,
-                debug_image, opencv_grayscale_topic, opencv_blur_topic, opencv_edge_topic ):
+                debug_image, lane_debug_topic ):
     
     app = Flask( __name__, template_folder=str(TEMPLATE_DIR), static_folder=str(STATIC_DIR),)
     app.json.sort_keys = False
@@ -59,9 +59,7 @@ def create_app( state, page_title,
             telechips_logo_url='/assets/telechips-logo',
             topst_logo_url='/assets/topst-logo',
             debug_image=debug_image,
-            opencv_grayscale_topic=opencv_grayscale_topic,
-            opencv_blur_topic=opencv_blur_topic,
-            opencv_edge_topic=opencv_edge_topic,
+            lane_debug_topic=lane_debug_topic,
         )
 
     @app.get('/api/status')
@@ -89,45 +87,13 @@ def create_app( state, page_title,
             mimetype='image/svg+xml',
         )
 
-    @app.get('/api/frame/grayscale')
-    def api_frame_grayscale():
-        frame_bytes = state.get_debug_frame('grayscale')
+    @app.get('/api/frame/hsv')
+    def api_frame_hsv():
+        frame_bytes = state.get_debug_frame('hsv')
         if frame_bytes is None:
             return Response(
                 build_camera_placeholder_svg(
-                    image_display_width, image_display_height, opencv_grayscale_topic
-                ),
-                mimetype='image/svg+xml',
-            )
-
-        response = Response(frame_bytes, mimetype='image/jpeg')
-        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-        response.headers['Pragma'] = 'no-cache'
-        return response
-
-    @app.get('/api/frame/blur')
-    def api_frame_blur():
-        frame_bytes = state.get_debug_frame('blur')
-        if frame_bytes is None:
-            return Response(
-                build_camera_placeholder_svg(
-                    image_display_width, image_display_height, opencv_blur_topic
-                ),
-                mimetype='image/svg+xml',
-            )
-
-        response = Response(frame_bytes, mimetype='image/jpeg')
-        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-        response.headers['Pragma'] = 'no-cache'
-        return response
-
-    @app.get('/api/frame/edge')
-    def api_frame_edge():
-        frame_bytes = state.get_debug_frame('edge')
-        if frame_bytes is None:
-            return Response(
-                build_camera_placeholder_svg(
-                    image_display_width, image_display_height, opencv_edge_topic
+                    image_display_width, image_display_height, lane_debug_topic
                 ),
                 mimetype='image/svg+xml',
             )
