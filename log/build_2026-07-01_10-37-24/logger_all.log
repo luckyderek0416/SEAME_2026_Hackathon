@@ -1,0 +1,546 @@
+[0.365s] DEBUG:colcon:Command line arguments: ['/usr/bin/colcon', 'build', '--packages-select', 'decision', 'perception', 'monitor', 'control']
+[0.365s] DEBUG:colcon:Parsed command line arguments: Namespace(log_base=None, log_level=None, verb_name='build', build_base='build', install_base='install', merge_install=False, symlink_install=False, test_result_base=None, continue_on_error=False, executor='parallel', parallel_workers=4, event_handlers=None, ignore_user_meta=False, metas=['./colcon.meta'], base_paths=['.'], packages_ignore=None, packages_ignore_regex=None, paths=None, packages_up_to=None, packages_up_to_regex=None, packages_above=None, packages_above_and_dependencies=None, packages_above_depth=None, packages_select_by_dep=None, packages_skip_by_dep=None, packages_skip_up_to=None, packages_select_build_failed=False, packages_skip_build_finished=False, packages_select_test_failures=False, packages_skip_test_passed=False, packages_select=['decision', 'perception', 'monitor', 'control'], packages_skip=None, packages_select_regex=None, packages_skip_regex=None, packages_start=None, packages_end=None, cmake_args=None, cmake_target=None, cmake_target_skip_unavailable=False, cmake_clean_cache=False, cmake_clean_first=False, cmake_force_configure=False, ament_cmake_args=None, catkin_cmake_args=None, catkin_skip_building_tests=False, mixin_files=None, mixin=None, verb_parser=<colcon_mixin.mixin.mixin_argument.MixinArgumentDecorator object at 0x7f8d3ffe20>, verb_extension=<colcon_core.verb.build.BuildVerb object at 0x7f8d3ff940>, main=<bound method BuildVerb.main of <colcon_core.verb.build.BuildVerb object at 0x7f8d3ff940>>, mixin_verb=('build',))
+[0.939s] Level 1:colcon.colcon_core.package_discovery:discover_packages(colcon_meta) check parameters
+[0.939s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) check parameters
+[0.939s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) check parameters
+[0.940s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) check parameters
+[0.940s] Level 1:colcon.colcon_core.package_discovery:discover_packages(colcon_meta) discover
+[0.940s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) discover
+[0.940s] INFO:colcon.colcon_core.package_discovery:Crawling recursively for packages in '/home/topst/SEAME_2026_Hackathon-clone'
+[0.940s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['ignore', 'ignore_ament_install']
+[0.941s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ignore'
+[0.941s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ignore_ament_install'
+[0.941s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['colcon_pkg']
+[0.941s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'colcon_pkg'
+[0.941s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['colcon_meta']
+[0.941s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'colcon_meta'
+[0.941s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['ros']
+[0.942s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ros'
+[1.046s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['cmake', 'python']
+[1.046s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'cmake'
+[1.046s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'python'
+[1.046s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['python_setup_py']
+[1.046s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'python_setup_py'
+[1.047s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit) by extensions ['ignore', 'ignore_ament_install']
+[1.047s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit) by extension 'ignore'
+[1.047s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit) by extension 'ignore_ament_install'
+[1.047s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit) by extensions ['colcon_pkg']
+[1.048s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit) by extension 'colcon_pkg'
+[1.048s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit) by extensions ['colcon_meta']
+[1.048s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit) by extension 'colcon_meta'
+[1.048s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit) by extensions ['ros']
+[1.048s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit) by extension 'ros'
+[1.048s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit) by extensions ['cmake', 'python']
+[1.049s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit) by extension 'cmake'
+[1.049s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit) by extension 'python'
+[1.049s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit) by extensions ['python_setup_py']
+[1.049s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit) by extension 'python_setup_py'
+[1.049s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile) by extensions ['ignore', 'ignore_ament_install']
+[1.050s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile) by extension 'ignore'
+[1.050s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile) by extension 'ignore_ament_install'
+[1.050s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile) by extensions ['colcon_pkg']
+[1.050s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile) by extension 'colcon_pkg'
+[1.050s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile) by extensions ['colcon_meta']
+[1.050s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile) by extension 'colcon_meta'
+[1.050s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile) by extensions ['ros']
+[1.051s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile) by extension 'ros'
+[1.051s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile) by extensions ['cmake', 'python']
+[1.051s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile) by extension 'cmake'
+[1.051s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile) by extension 'python'
+[1.051s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile) by extensions ['python_setup_py']
+[1.051s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile) by extension 'python_setup_py'
+[1.052s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_084612) by extensions ['ignore', 'ignore_ament_install']
+[1.052s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_084612) by extension 'ignore'
+[1.052s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_084612) by extension 'ignore_ament_install'
+[1.052s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_084612) by extensions ['colcon_pkg']
+[1.052s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_084612) by extension 'colcon_pkg'
+[1.053s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_084612) by extensions ['colcon_meta']
+[1.053s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_084612) by extension 'colcon_meta'
+[1.053s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_084612) by extensions ['ros']
+[1.053s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_084612) by extension 'ros'
+[1.053s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_084612) by extensions ['cmake', 'python']
+[1.053s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_084612) by extension 'cmake'
+[1.054s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_084612) by extension 'python'
+[1.054s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_084612) by extensions ['python_setup_py']
+[1.054s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_084612) by extension 'python_setup_py'
+[1.054s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085408) by extensions ['ignore', 'ignore_ament_install']
+[1.054s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085408) by extension 'ignore'
+[1.055s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085408) by extension 'ignore_ament_install'
+[1.055s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085408) by extensions ['colcon_pkg']
+[1.055s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085408) by extension 'colcon_pkg'
+[1.055s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085408) by extensions ['colcon_meta']
+[1.055s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085408) by extension 'colcon_meta'
+[1.055s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085408) by extensions ['ros']
+[1.055s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085408) by extension 'ros'
+[1.056s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085408) by extensions ['cmake', 'python']
+[1.056s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085408) by extension 'cmake'
+[1.056s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085408) by extension 'python'
+[1.056s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085408) by extensions ['python_setup_py']
+[1.056s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085408) by extension 'python_setup_py'
+[1.057s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085411) by extensions ['ignore', 'ignore_ament_install']
+[1.057s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085411) by extension 'ignore'
+[1.057s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085411) by extension 'ignore_ament_install'
+[1.057s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085411) by extensions ['colcon_pkg']
+[1.057s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085411) by extension 'colcon_pkg'
+[1.058s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085411) by extensions ['colcon_meta']
+[1.058s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085411) by extension 'colcon_meta'
+[1.058s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085411) by extensions ['ros']
+[1.058s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085411) by extension 'ros'
+[1.058s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085411) by extensions ['cmake', 'python']
+[1.058s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085411) by extension 'cmake'
+[1.059s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085411) by extension 'python'
+[1.059s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085411) by extensions ['python_setup_py']
+[1.059s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/bagfile/bag_20260630_085411) by extension 'python_setup_py'
+[1.059s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/build) by extensions ['ignore', 'ignore_ament_install']
+[1.059s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/build) by extension 'ignore'
+[1.060s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/build) ignored
+[1.060s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs) by extensions ['ignore', 'ignore_ament_install']
+[1.060s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs) by extension 'ignore'
+[1.060s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs) by extension 'ignore_ament_install'
+[1.061s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs) by extensions ['colcon_pkg']
+[1.061s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs) by extension 'colcon_pkg'
+[1.061s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs) by extensions ['colcon_meta']
+[1.061s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs) by extension 'colcon_meta'
+[1.061s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs) by extensions ['ros']
+[1.061s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs) by extension 'ros'
+[1.062s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs) by extensions ['cmake', 'python']
+[1.062s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs) by extension 'cmake'
+[1.062s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs) by extension 'python'
+[1.062s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs) by extensions ['python_setup_py']
+[1.062s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs) by extension 'python_setup_py'
+[1.062s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset) by extensions ['ignore', 'ignore_ament_install']
+[1.063s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset) by extension 'ignore'
+[1.063s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset) by extension 'ignore_ament_install'
+[1.063s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset) by extensions ['colcon_pkg']
+[1.063s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset) by extension 'colcon_pkg'
+[1.063s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset) by extensions ['colcon_meta']
+[1.063s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset) by extension 'colcon_meta'
+[1.064s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset) by extensions ['ros']
+[1.064s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset) by extension 'ros'
+[1.064s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset) by extensions ['cmake', 'python']
+[1.064s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset) by extension 'cmake'
+[1.064s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset) by extension 'python'
+[1.064s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset) by extensions ['python_setup_py']
+[1.064s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset) by extension 'python_setup_py'
+[1.065s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/4) by extensions ['ignore', 'ignore_ament_install']
+[1.065s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/4) by extension 'ignore'
+[1.065s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/4) by extension 'ignore_ament_install'
+[1.065s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/4) by extensions ['colcon_pkg']
+[1.066s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/4) by extension 'colcon_pkg'
+[1.066s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/4) by extensions ['colcon_meta']
+[1.066s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/4) by extension 'colcon_meta'
+[1.066s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/4) by extensions ['ros']
+[1.066s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/4) by extension 'ros'
+[1.066s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/4) by extensions ['cmake', 'python']
+[1.067s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/4) by extension 'cmake'
+[1.067s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/4) by extension 'python'
+[1.067s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/4) by extensions ['python_setup_py']
+[1.067s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/4) by extension 'python_setup_py'
+[1.067s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/5) by extensions ['ignore', 'ignore_ament_install']
+[1.068s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/5) by extension 'ignore'
+[1.068s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/5) by extension 'ignore_ament_install'
+[1.068s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/5) by extensions ['colcon_pkg']
+[1.068s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/5) by extension 'colcon_pkg'
+[1.068s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/5) by extensions ['colcon_meta']
+[1.068s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/5) by extension 'colcon_meta'
+[1.068s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/5) by extensions ['ros']
+[1.069s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/5) by extension 'ros'
+[1.069s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/5) by extensions ['cmake', 'python']
+[1.069s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/5) by extension 'cmake'
+[1.069s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/5) by extension 'python'
+[1.069s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/5) by extensions ['python_setup_py']
+[1.069s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/5) by extension 'python_setup_py'
+[1.070s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/6) by extensions ['ignore', 'ignore_ament_install']
+[1.070s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/6) by extension 'ignore'
+[1.070s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/6) by extension 'ignore_ament_install'
+[1.070s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/6) by extensions ['colcon_pkg']
+[1.070s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/6) by extension 'colcon_pkg'
+[1.071s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/6) by extensions ['colcon_meta']
+[1.071s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/6) by extension 'colcon_meta'
+[1.071s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/6) by extensions ['ros']
+[1.071s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/6) by extension 'ros'
+[1.071s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/6) by extensions ['cmake', 'python']
+[1.071s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/6) by extension 'cmake'
+[1.072s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/6) by extension 'python'
+[1.072s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/6) by extensions ['python_setup_py']
+[1.072s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/6) by extension 'python_setup_py'
+[1.072s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/7) by extensions ['ignore', 'ignore_ament_install']
+[1.072s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/7) by extension 'ignore'
+[1.073s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/7) by extension 'ignore_ament_install'
+[1.073s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/7) by extensions ['colcon_pkg']
+[1.073s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/7) by extension 'colcon_pkg'
+[1.073s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/7) by extensions ['colcon_meta']
+[1.073s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/7) by extension 'colcon_meta'
+[1.073s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/7) by extensions ['ros']
+[1.073s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/7) by extension 'ros'
+[1.074s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/7) by extensions ['cmake', 'python']
+[1.074s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/7) by extension 'cmake'
+[1.074s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/7) by extension 'python'
+[1.074s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/7) by extensions ['python_setup_py']
+[1.074s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/docs/asset/7) by extension 'python_setup_py'
+[1.075s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/install) by extensions ['ignore', 'ignore_ament_install']
+[1.075s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/install) by extension 'ignore'
+[1.075s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/install) ignored
+[1.075s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/log) by extensions ['ignore', 'ignore_ament_install']
+[1.076s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/log) by extension 'ignore'
+[1.076s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/log) ignored
+[1.076s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/recordings) by extensions ['ignore', 'ignore_ament_install']
+[1.076s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/recordings) by extension 'ignore'
+[1.076s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/recordings) by extension 'ignore_ament_install'
+[1.077s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/recordings) by extensions ['colcon_pkg']
+[1.077s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/recordings) by extension 'colcon_pkg'
+[1.077s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/recordings) by extensions ['colcon_meta']
+[1.077s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/recordings) by extension 'colcon_meta'
+[1.077s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/recordings) by extensions ['ros']
+[1.077s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/recordings) by extension 'ros'
+[1.078s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/recordings) by extensions ['cmake', 'python']
+[1.078s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/recordings) by extension 'cmake'
+[1.078s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/recordings) by extension 'python'
+[1.078s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/recordings) by extensions ['python_setup_py']
+[1.078s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/recordings) by extension 'python_setup_py'
+[1.078s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src) by extensions ['ignore', 'ignore_ament_install']
+[1.079s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src) by extension 'ignore'
+[1.079s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src) by extension 'ignore_ament_install'
+[1.079s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src) by extensions ['colcon_pkg']
+[1.079s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src) by extension 'colcon_pkg'
+[1.079s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src) by extensions ['colcon_meta']
+[1.079s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src) by extension 'colcon_meta'
+[1.080s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src) by extensions ['ros']
+[1.080s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src) by extension 'ros'
+[1.080s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src) by extensions ['cmake', 'python']
+[1.080s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src) by extension 'cmake'
+[1.080s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src) by extension 'python'
+[1.080s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src) by extensions ['python_setup_py']
+[1.081s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src) by extension 'python_setup_py'
+[1.081s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/battery) by extensions ['ignore', 'ignore_ament_install']
+[1.081s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/battery) by extension 'ignore'
+[1.081s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/battery) by extension 'ignore_ament_install'
+[1.082s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/battery) by extensions ['colcon_pkg']
+[1.082s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/battery) by extension 'colcon_pkg'
+[1.082s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/battery) by extensions ['colcon_meta']
+[1.082s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/battery) by extension 'colcon_meta'
+[1.082s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/battery) by extensions ['ros']
+[1.082s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/battery) by extension 'ros'
+[1.094s] DEBUG:colcon.colcon_core.package_identification:Package 'D-Racer-Kit/src/battery' with type 'ros.ament_python' and name 'battery'
+[1.094s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/battery_msgs) by extensions ['ignore', 'ignore_ament_install']
+[1.095s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/battery_msgs) by extension 'ignore'
+[1.095s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/battery_msgs) by extension 'ignore_ament_install'
+[1.095s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/battery_msgs) by extensions ['colcon_pkg']
+[1.095s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/battery_msgs) by extension 'colcon_pkg'
+[1.095s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/battery_msgs) by extensions ['colcon_meta']
+[1.095s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/battery_msgs) by extension 'colcon_meta'
+[1.096s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/battery_msgs) by extensions ['ros']
+[1.096s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/battery_msgs) by extension 'ros'
+[1.098s] DEBUG:colcon.colcon_core.package_identification:Package 'D-Racer-Kit/src/battery_msgs' with type 'ros.ament_cmake' and name 'battery_msgs'
+[1.098s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/camera) by extensions ['ignore', 'ignore_ament_install']
+[1.098s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/camera) by extension 'ignore'
+[1.099s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/camera) by extension 'ignore_ament_install'
+[1.099s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/camera) by extensions ['colcon_pkg']
+[1.099s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/camera) by extension 'colcon_pkg'
+[1.099s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/camera) by extensions ['colcon_meta']
+[1.099s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/camera) by extension 'colcon_meta'
+[1.099s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/camera) by extensions ['ros']
+[1.100s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/camera) by extension 'ros'
+[1.101s] DEBUG:colcon.colcon_core.package_identification:Package 'D-Racer-Kit/src/camera' with type 'ros.ament_python' and name 'camera'
+[1.102s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/config) by extensions ['ignore', 'ignore_ament_install']
+[1.102s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/config) by extension 'ignore'
+[1.102s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/config) by extension 'ignore_ament_install'
+[1.102s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/config) by extensions ['colcon_pkg']
+[1.102s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/config) by extension 'colcon_pkg'
+[1.102s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/config) by extensions ['colcon_meta']
+[1.103s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/config) by extension 'colcon_meta'
+[1.103s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/config) by extensions ['ros']
+[1.103s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/config) by extension 'ros'
+[1.103s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/config) by extensions ['cmake', 'python']
+[1.103s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/config) by extension 'cmake'
+[1.103s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/config) by extension 'python'
+[1.104s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/config) by extensions ['python_setup_py']
+[1.104s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/config) by extension 'python_setup_py'
+[1.104s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/control) by extensions ['ignore', 'ignore_ament_install']
+[1.104s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/control) by extension 'ignore'
+[1.104s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/control) by extension 'ignore_ament_install'
+[1.105s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/control) by extensions ['colcon_pkg']
+[1.105s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/control) by extension 'colcon_pkg'
+[1.105s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/control) by extensions ['colcon_meta']
+[1.105s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/control) by extension 'colcon_meta'
+[1.105s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/control) by extensions ['ros']
+[1.105s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/control) by extension 'ros'
+[1.107s] DEBUG:colcon.colcon_core.package_identification:Package 'D-Racer-Kit/src/control' with type 'ros.ament_python' and name 'control'
+[1.108s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/control_msgs) by extensions ['ignore', 'ignore_ament_install']
+[1.108s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/control_msgs) by extension 'ignore'
+[1.108s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/control_msgs) by extension 'ignore_ament_install'
+[1.108s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/control_msgs) by extensions ['colcon_pkg']
+[1.108s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/control_msgs) by extension 'colcon_pkg'
+[1.108s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/control_msgs) by extensions ['colcon_meta']
+[1.109s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/control_msgs) by extension 'colcon_meta'
+[1.109s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/control_msgs) by extensions ['ros']
+[1.109s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/control_msgs) by extension 'ros'
+[1.111s] DEBUG:colcon.colcon_core.package_identification:Package 'D-Racer-Kit/src/control_msgs' with type 'ros.ament_cmake' and name 'control_msgs'
+[1.111s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/decision) by extensions ['ignore', 'ignore_ament_install']
+[1.111s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/decision) by extension 'ignore'
+[1.112s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/decision) by extension 'ignore_ament_install'
+[1.112s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/decision) by extensions ['colcon_pkg']
+[1.112s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/decision) by extension 'colcon_pkg'
+[1.112s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/decision) by extensions ['colcon_meta']
+[1.112s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/decision) by extension 'colcon_meta'
+[1.112s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/decision) by extensions ['ros']
+[1.113s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/decision) by extension 'ros'
+[1.144s] DEBUG:colcon.colcon_core.package_identification:Package 'D-Racer-Kit/src/decision' with type 'ros.ament_python' and name 'decision'
+[1.144s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/inference) by extensions ['ignore', 'ignore_ament_install']
+[1.144s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/inference) by extension 'ignore'
+[1.145s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/inference) by extension 'ignore_ament_install'
+[1.145s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/inference) by extensions ['colcon_pkg']
+[1.145s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/inference) by extension 'colcon_pkg'
+[1.145s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/inference) by extensions ['colcon_meta']
+[1.145s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/inference) by extension 'colcon_meta'
+[1.145s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/inference) by extensions ['ros']
+[1.145s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/inference) by extension 'ros'
+[1.147s] DEBUG:colcon.colcon_core.package_identification:Package 'D-Racer-Kit/src/inference' with type 'ros.ament_python' and name 'inference'
+[1.148s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/inference_msgs) by extensions ['ignore', 'ignore_ament_install']
+[1.148s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/inference_msgs) by extension 'ignore'
+[1.148s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/inference_msgs) by extension 'ignore_ament_install'
+[1.148s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/inference_msgs) by extensions ['colcon_pkg']
+[1.148s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/inference_msgs) by extension 'colcon_pkg'
+[1.149s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/inference_msgs) by extensions ['colcon_meta']
+[1.149s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/inference_msgs) by extension 'colcon_meta'
+[1.149s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/inference_msgs) by extensions ['ros']
+[1.149s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/inference_msgs) by extension 'ros'
+[1.151s] DEBUG:colcon.colcon_core.package_identification:Package 'D-Racer-Kit/src/inference_msgs' with type 'ros.ament_cmake' and name 'inference_msgs'
+[1.151s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/joystick) by extensions ['ignore', 'ignore_ament_install']
+[1.151s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/joystick) by extension 'ignore'
+[1.151s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/joystick) by extension 'ignore_ament_install'
+[1.152s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/joystick) by extensions ['colcon_pkg']
+[1.152s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/joystick) by extension 'colcon_pkg'
+[1.152s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/joystick) by extensions ['colcon_meta']
+[1.152s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/joystick) by extension 'colcon_meta'
+[1.152s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/joystick) by extensions ['ros']
+[1.152s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/joystick) by extension 'ros'
+[1.155s] DEBUG:colcon.colcon_core.package_identification:Package 'D-Racer-Kit/src/joystick' with type 'ros.ament_python' and name 'joystick'
+[1.156s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/joystick_msgs) by extensions ['ignore', 'ignore_ament_install']
+[1.156s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/joystick_msgs) by extension 'ignore'
+[1.156s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/joystick_msgs) by extension 'ignore_ament_install'
+[1.156s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/joystick_msgs) by extensions ['colcon_pkg']
+[1.156s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/joystick_msgs) by extension 'colcon_pkg'
+[1.156s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/joystick_msgs) by extensions ['colcon_meta']
+[1.157s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/joystick_msgs) by extension 'colcon_meta'
+[1.157s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/joystick_msgs) by extensions ['ros']
+[1.157s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/joystick_msgs) by extension 'ros'
+[1.159s] DEBUG:colcon.colcon_core.package_identification:Package 'D-Racer-Kit/src/joystick_msgs' with type 'ros.ament_cmake' and name 'joystick_msgs'
+[1.159s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/monitor) by extensions ['ignore', 'ignore_ament_install']
+[1.159s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/monitor) by extension 'ignore'
+[1.159s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/monitor) by extension 'ignore_ament_install'
+[1.160s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/monitor) by extensions ['colcon_pkg']
+[1.160s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/monitor) by extension 'colcon_pkg'
+[1.160s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/monitor) by extensions ['colcon_meta']
+[1.160s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/monitor) by extension 'colcon_meta'
+[1.160s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/monitor) by extensions ['ros']
+[1.160s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/monitor) by extension 'ros'
+[1.162s] DEBUG:colcon.colcon_core.package_identification:Package 'D-Racer-Kit/src/monitor' with type 'ros.ament_python' and name 'monitor'
+[1.163s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/perception) by extensions ['ignore', 'ignore_ament_install']
+[1.163s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/perception) by extension 'ignore'
+[1.163s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/perception) by extension 'ignore_ament_install'
+[1.163s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/perception) by extensions ['colcon_pkg']
+[1.163s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/perception) by extension 'colcon_pkg'
+[1.164s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/perception) by extensions ['colcon_meta']
+[1.164s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/perception) by extension 'colcon_meta'
+[1.164s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/perception) by extensions ['ros']
+[1.164s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/perception) by extension 'ros'
+[1.166s] DEBUG:colcon.colcon_core.package_identification:Package 'D-Racer-Kit/src/perception' with type 'ros.ament_python' and name 'perception'
+[1.166s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/perception_msgs) by extensions ['ignore', 'ignore_ament_install']
+[1.166s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/perception_msgs) by extension 'ignore'
+[1.166s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/perception_msgs) by extension 'ignore_ament_install'
+[1.166s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/perception_msgs) by extensions ['colcon_pkg']
+[1.167s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/perception_msgs) by extension 'colcon_pkg'
+[1.167s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/perception_msgs) by extensions ['colcon_meta']
+[1.167s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/perception_msgs) by extension 'colcon_meta'
+[1.167s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/perception_msgs) by extensions ['ros']
+[1.167s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/perception_msgs) by extension 'ros'
+[1.169s] DEBUG:colcon.colcon_core.package_identification:Package 'D-Racer-Kit/src/perception_msgs' with type 'ros.ament_cmake' and name 'perception_msgs'
+[1.169s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/topst_utils) by extensions ['ignore', 'ignore_ament_install']
+[1.169s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/topst_utils) by extension 'ignore'
+[1.170s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/topst_utils) by extension 'ignore_ament_install'
+[1.170s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/topst_utils) by extensions ['colcon_pkg']
+[1.170s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/topst_utils) by extension 'colcon_pkg'
+[1.170s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/topst_utils) by extensions ['colcon_meta']
+[1.170s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/topst_utils) by extension 'colcon_meta'
+[1.170s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/topst_utils) by extensions ['ros']
+[1.170s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/src/topst_utils) by extension 'ros'
+[1.172s] DEBUG:colcon.colcon_core.package_identification:Package 'D-Racer-Kit/src/topst_utils' with type 'ros.ament_python' and name 'topst_utils'
+[1.172s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools) by extensions ['ignore', 'ignore_ament_install']
+[1.172s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools) by extension 'ignore'
+[1.173s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools) by extension 'ignore_ament_install'
+[1.173s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools) by extensions ['colcon_pkg']
+[1.173s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools) by extension 'colcon_pkg'
+[1.173s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools) by extensions ['colcon_meta']
+[1.173s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools) by extension 'colcon_meta'
+[1.173s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools) by extensions ['ros']
+[1.173s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools) by extension 'ros'
+[1.174s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools) by extensions ['cmake', 'python']
+[1.174s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools) by extension 'cmake'
+[1.174s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools) by extension 'python'
+[1.174s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools) by extensions ['python_setup_py']
+[1.174s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools) by extension 'python_setup_py'
+[1.175s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools/__pycache__) by extensions ['ignore', 'ignore_ament_install']
+[1.175s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools/__pycache__) by extension 'ignore'
+[1.175s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools/__pycache__) by extension 'ignore_ament_install'
+[1.175s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools/__pycache__) by extensions ['colcon_pkg']
+[1.175s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools/__pycache__) by extension 'colcon_pkg'
+[1.176s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools/__pycache__) by extensions ['colcon_meta']
+[1.176s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools/__pycache__) by extension 'colcon_meta'
+[1.176s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools/__pycache__) by extensions ['ros']
+[1.176s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools/__pycache__) by extension 'ros'
+[1.176s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools/__pycache__) by extensions ['cmake', 'python']
+[1.176s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools/__pycache__) by extension 'cmake'
+[1.176s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools/__pycache__) by extension 'python'
+[1.177s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools/__pycache__) by extensions ['python_setup_py']
+[1.177s] Level 1:colcon.colcon_core.package_identification:_identify(D-Racer-Kit/tools/__pycache__) by extension 'python_setup_py'
+[1.177s] Level 1:colcon.colcon_core.package_identification:_identify(build) by extensions ['ignore', 'ignore_ament_install']
+[1.177s] Level 1:colcon.colcon_core.package_identification:_identify(build) by extension 'ignore'
+[1.177s] Level 1:colcon.colcon_core.package_identification:_identify(build) ignored
+[1.178s] Level 1:colcon.colcon_core.package_identification:_identify(install) by extensions ['ignore', 'ignore_ament_install']
+[1.178s] Level 1:colcon.colcon_core.package_identification:_identify(install) by extension 'ignore'
+[1.178s] Level 1:colcon.colcon_core.package_identification:_identify(install) ignored
+[1.178s] Level 1:colcon.colcon_core.package_identification:_identify(log) by extensions ['ignore', 'ignore_ament_install']
+[1.178s] Level 1:colcon.colcon_core.package_identification:_identify(log) by extension 'ignore'
+[1.179s] Level 1:colcon.colcon_core.package_identification:_identify(log) ignored
+[1.179s] Level 1:colcon.colcon_core.package_identification:_identify(models) by extensions ['ignore', 'ignore_ament_install']
+[1.179s] Level 1:colcon.colcon_core.package_identification:_identify(models) by extension 'ignore'
+[1.179s] Level 1:colcon.colcon_core.package_identification:_identify(models) by extension 'ignore_ament_install'
+[1.180s] Level 1:colcon.colcon_core.package_identification:_identify(models) by extensions ['colcon_pkg']
+[1.180s] Level 1:colcon.colcon_core.package_identification:_identify(models) by extension 'colcon_pkg'
+[1.180s] Level 1:colcon.colcon_core.package_identification:_identify(models) by extensions ['colcon_meta']
+[1.180s] Level 1:colcon.colcon_core.package_identification:_identify(models) by extension 'colcon_meta'
+[1.180s] Level 1:colcon.colcon_core.package_identification:_identify(models) by extensions ['ros']
+[1.180s] Level 1:colcon.colcon_core.package_identification:_identify(models) by extension 'ros'
+[1.181s] Level 1:colcon.colcon_core.package_identification:_identify(models) by extensions ['cmake', 'python']
+[1.181s] Level 1:colcon.colcon_core.package_identification:_identify(models) by extension 'cmake'
+[1.181s] Level 1:colcon.colcon_core.package_identification:_identify(models) by extension 'python'
+[1.181s] Level 1:colcon.colcon_core.package_identification:_identify(models) by extensions ['python_setup_py']
+[1.181s] Level 1:colcon.colcon_core.package_identification:_identify(models) by extension 'python_setup_py'
+[1.181s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) using defaults
+[1.181s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) discover
+[1.181s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) using defaults
+[1.182s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) discover
+[1.182s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) using defaults
+[1.256s] INFO:colcon.colcon_core.package_selection:Skipping not selected package 'battery_msgs' in 'D-Racer-Kit/src/battery_msgs'
+[1.256s] INFO:colcon.colcon_core.package_selection:Skipping not selected package 'camera' in 'D-Racer-Kit/src/camera'
+[1.256s] INFO:colcon.colcon_core.package_selection:Skipping not selected package 'control_msgs' in 'D-Racer-Kit/src/control_msgs'
+[1.256s] INFO:colcon.colcon_core.package_selection:Skipping not selected package 'inference_msgs' in 'D-Racer-Kit/src/inference_msgs'
+[1.256s] INFO:colcon.colcon_core.package_selection:Skipping not selected package 'perception_msgs' in 'D-Racer-Kit/src/perception_msgs'
+[1.257s] INFO:colcon.colcon_core.package_selection:Skipping not selected package 'topst_utils' in 'D-Racer-Kit/src/topst_utils'
+[1.257s] INFO:colcon.colcon_core.package_selection:Skipping not selected package 'battery' in 'D-Racer-Kit/src/battery'
+[1.257s] INFO:colcon.colcon_core.package_selection:Skipping not selected package 'inference' in 'D-Racer-Kit/src/inference'
+[1.257s] INFO:colcon.colcon_core.package_selection:Skipping not selected package 'joystick_msgs' in 'D-Racer-Kit/src/joystick_msgs'
+[1.257s] INFO:colcon.colcon_core.package_selection:Skipping not selected package 'joystick' in 'D-Racer-Kit/src/joystick'
+[1.258s] Level 5:colcon.colcon_core.verb:set package 'decision' build argument 'cmake_args' from command line to 'None'
+[1.258s] Level 5:colcon.colcon_core.verb:set package 'decision' build argument 'cmake_target' from command line to 'None'
+[1.259s] Level 5:colcon.colcon_core.verb:set package 'decision' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[1.259s] Level 5:colcon.colcon_core.verb:set package 'decision' build argument 'cmake_clean_cache' from command line to 'False'
+[1.259s] Level 5:colcon.colcon_core.verb:set package 'decision' build argument 'cmake_clean_first' from command line to 'False'
+[1.259s] Level 5:colcon.colcon_core.verb:set package 'decision' build argument 'cmake_force_configure' from command line to 'False'
+[1.259s] Level 5:colcon.colcon_core.verb:set package 'decision' build argument 'ament_cmake_args' from command line to 'None'
+[1.259s] Level 5:colcon.colcon_core.verb:set package 'decision' build argument 'catkin_cmake_args' from command line to 'None'
+[1.259s] Level 5:colcon.colcon_core.verb:set package 'decision' build argument 'catkin_skip_building_tests' from command line to 'False'
+[1.259s] DEBUG:colcon.colcon_core.verb:Building package 'decision' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/topst/SEAME_2026_Hackathon-clone/build/decision', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/topst/SEAME_2026_Hackathon-clone/install/decision', 'merge_install': False, 'path': '/home/topst/SEAME_2026_Hackathon-clone/D-Racer-Kit/src/decision', 'symlink_install': False, 'test_result_base': None}
+[1.261s] Level 5:colcon.colcon_core.verb:set package 'perception' build argument 'cmake_args' from command line to 'None'
+[1.261s] Level 5:colcon.colcon_core.verb:set package 'perception' build argument 'cmake_target' from command line to 'None'
+[1.261s] Level 5:colcon.colcon_core.verb:set package 'perception' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[1.261s] Level 5:colcon.colcon_core.verb:set package 'perception' build argument 'cmake_clean_cache' from command line to 'False'
+[1.261s] Level 5:colcon.colcon_core.verb:set package 'perception' build argument 'cmake_clean_first' from command line to 'False'
+[1.261s] Level 5:colcon.colcon_core.verb:set package 'perception' build argument 'cmake_force_configure' from command line to 'False'
+[1.261s] Level 5:colcon.colcon_core.verb:set package 'perception' build argument 'ament_cmake_args' from command line to 'None'
+[1.261s] Level 5:colcon.colcon_core.verb:set package 'perception' build argument 'catkin_cmake_args' from command line to 'None'
+[1.261s] Level 5:colcon.colcon_core.verb:set package 'perception' build argument 'catkin_skip_building_tests' from command line to 'False'
+[1.262s] DEBUG:colcon.colcon_core.verb:Building package 'perception' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/topst/SEAME_2026_Hackathon-clone/build/perception', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/topst/SEAME_2026_Hackathon-clone/install/perception', 'merge_install': False, 'path': '/home/topst/SEAME_2026_Hackathon-clone/D-Racer-Kit/src/perception', 'symlink_install': False, 'test_result_base': None}
+[1.263s] Level 5:colcon.colcon_core.verb:set package 'control' build argument 'cmake_args' from command line to 'None'
+[1.263s] Level 5:colcon.colcon_core.verb:set package 'control' build argument 'cmake_target' from command line to 'None'
+[1.263s] Level 5:colcon.colcon_core.verb:set package 'control' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[1.263s] Level 5:colcon.colcon_core.verb:set package 'control' build argument 'cmake_clean_cache' from command line to 'False'
+[1.263s] Level 5:colcon.colcon_core.verb:set package 'control' build argument 'cmake_clean_first' from command line to 'False'
+[1.263s] Level 5:colcon.colcon_core.verb:set package 'control' build argument 'cmake_force_configure' from command line to 'False'
+[1.263s] Level 5:colcon.colcon_core.verb:set package 'control' build argument 'ament_cmake_args' from command line to 'None'
+[1.264s] Level 5:colcon.colcon_core.verb:set package 'control' build argument 'catkin_cmake_args' from command line to 'None'
+[1.264s] Level 5:colcon.colcon_core.verb:set package 'control' build argument 'catkin_skip_building_tests' from command line to 'False'
+[1.264s] DEBUG:colcon.colcon_core.verb:Building package 'control' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/topst/SEAME_2026_Hackathon-clone/build/control', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/topst/SEAME_2026_Hackathon-clone/install/control', 'merge_install': False, 'path': '/home/topst/SEAME_2026_Hackathon-clone/D-Racer-Kit/src/control', 'symlink_install': False, 'test_result_base': None}
+[1.265s] Level 5:colcon.colcon_core.verb:set package 'monitor' build argument 'cmake_args' from command line to 'None'
+[1.265s] Level 5:colcon.colcon_core.verb:set package 'monitor' build argument 'cmake_target' from command line to 'None'
+[1.265s] Level 5:colcon.colcon_core.verb:set package 'monitor' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[1.265s] Level 5:colcon.colcon_core.verb:set package 'monitor' build argument 'cmake_clean_cache' from command line to 'False'
+[1.265s] Level 5:colcon.colcon_core.verb:set package 'monitor' build argument 'cmake_clean_first' from command line to 'False'
+[1.266s] Level 5:colcon.colcon_core.verb:set package 'monitor' build argument 'cmake_force_configure' from command line to 'False'
+[1.266s] Level 5:colcon.colcon_core.verb:set package 'monitor' build argument 'ament_cmake_args' from command line to 'None'
+[1.266s] Level 5:colcon.colcon_core.verb:set package 'monitor' build argument 'catkin_cmake_args' from command line to 'None'
+[1.266s] Level 5:colcon.colcon_core.verb:set package 'monitor' build argument 'catkin_skip_building_tests' from command line to 'False'
+[1.266s] DEBUG:colcon.colcon_core.verb:Building package 'monitor' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/topst/SEAME_2026_Hackathon-clone/build/monitor', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/topst/SEAME_2026_Hackathon-clone/install/monitor', 'merge_install': False, 'path': '/home/topst/SEAME_2026_Hackathon-clone/D-Racer-Kit/src/monitor', 'symlink_install': False, 'test_result_base': None}
+[1.266s] INFO:colcon.colcon_core.executor:Executing jobs using 'parallel' executor
+[1.269s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:run_until_complete
+[1.270s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/topst/SEAME_2026_Hackathon-clone/D-Racer-Kit/src/decision' with build type 'ament_python'
+[1.270s] Level 1:colcon.colcon_core.shell:create_environment_hook('decision', 'ament_prefix_path')
+[1.278s] INFO:colcon.colcon_core.plugin_system:Skipping extension 'colcon_core.shell.bat': Not used on non-Windows systems
+[1.279s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/topst/SEAME_2026_Hackathon-clone/install/decision/share/decision/hook/ament_prefix_path.ps1'
+[1.281s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/topst/SEAME_2026_Hackathon-clone/install/decision/share/decision/hook/ament_prefix_path.dsv'
+[1.283s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/topst/SEAME_2026_Hackathon-clone/install/decision/share/decision/hook/ament_prefix_path.sh'
+[1.285s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[1.285s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[1.294s] ERROR:colcon.colcon_ros.task.ament_python.build:Failed to find the following files:
+- /home/topst/SEAME_2026_Hackathon-clone/install/control_msgs/share/control_msgs/package.sh
+- /home/topst/SEAME_2026_Hackathon-clone/install/inference_msgs/share/inference_msgs/package.sh
+- /home/topst/SEAME_2026_Hackathon-clone/install/perception_msgs/share/perception_msgs/package.sh
+Check that the following packages have been built:
+- control_msgs
+- inference_msgs
+- perception_msgs
+[1.294s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/topst/SEAME_2026_Hackathon-clone/D-Racer-Kit/src/perception' with build type 'ament_python'
+[1.294s] Level 1:colcon.colcon_core.shell:create_environment_hook('perception', 'ament_prefix_path')
+[1.295s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/topst/SEAME_2026_Hackathon-clone/install/perception/share/perception/hook/ament_prefix_path.ps1'
+[1.297s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/topst/SEAME_2026_Hackathon-clone/install/perception/share/perception/hook/ament_prefix_path.dsv'
+[1.298s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/topst/SEAME_2026_Hackathon-clone/install/perception/share/perception/hook/ament_prefix_path.sh'
+[1.300s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[1.300s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[1.304s] ERROR:colcon.colcon_ros.task.ament_python.build:Failed to find the following files:
+- /home/topst/SEAME_2026_Hackathon-clone/install/perception_msgs/share/perception_msgs/package.sh
+Check that the following packages have been built:
+- perception_msgs
+[1.304s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/topst/SEAME_2026_Hackathon-clone/D-Racer-Kit/src/control' with build type 'ament_python'
+[1.304s] Level 1:colcon.colcon_core.shell:create_environment_hook('control', 'ament_prefix_path')
+[1.305s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/topst/SEAME_2026_Hackathon-clone/install/control/share/control/hook/ament_prefix_path.ps1'
+[1.307s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/topst/SEAME_2026_Hackathon-clone/install/control/share/control/hook/ament_prefix_path.dsv'
+[1.308s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/topst/SEAME_2026_Hackathon-clone/install/control/share/control/hook/ament_prefix_path.sh'
+[1.309s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[1.309s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[1.313s] ERROR:colcon.colcon_ros.task.ament_python.build:Failed to find the following files:
+- /home/topst/SEAME_2026_Hackathon-clone/install/control_msgs/share/control_msgs/package.sh
+- /home/topst/SEAME_2026_Hackathon-clone/install/joystick_msgs/share/joystick_msgs/package.sh
+Check that the following packages have been built:
+- control_msgs
+- joystick_msgs
+[1.314s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/topst/SEAME_2026_Hackathon-clone/D-Racer-Kit/src/monitor' with build type 'ament_python'
+[1.314s] Level 1:colcon.colcon_core.shell:create_environment_hook('monitor', 'ament_prefix_path')
+[1.315s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/topst/SEAME_2026_Hackathon-clone/install/monitor/share/monitor/hook/ament_prefix_path.ps1'
+[1.316s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/topst/SEAME_2026_Hackathon-clone/install/monitor/share/monitor/hook/ament_prefix_path.dsv'
+[1.317s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/topst/SEAME_2026_Hackathon-clone/install/monitor/share/monitor/hook/ament_prefix_path.sh'
+[1.319s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[1.319s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[1.323s] ERROR:colcon.colcon_ros.task.ament_python.build:Failed to find the following files:
+- /home/topst/SEAME_2026_Hackathon-clone/install/battery_msgs/share/battery_msgs/package.sh
+- /home/topst/SEAME_2026_Hackathon-clone/install/control_msgs/share/control_msgs/package.sh
+- /home/topst/SEAME_2026_Hackathon-clone/install/joystick_msgs/share/joystick_msgs/package.sh
+Check that the following packages have been built:
+- battery_msgs
+- control_msgs
+- joystick_msgs
+[1.334s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:closing loop
+[1.334s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:loop closed
+[1.334s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:run_until_complete finished with '1'
+[1.334s] DEBUG:colcon.colcon_core.event_reactor:joining thread
+[1.334s] DEBUG:colcon.colcon_core.event_reactor:joined thread
+[1.335s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/topst/SEAME_2026_Hackathon-clone/install/local_setup.ps1'
+[1.338s] INFO:colcon.colcon_core.shell:Creating prefix util module '/home/topst/SEAME_2026_Hackathon-clone/install/_local_setup_util_ps1.py'
+[1.343s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/topst/SEAME_2026_Hackathon-clone/install/setup.ps1'
+[1.346s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/topst/SEAME_2026_Hackathon-clone/install/local_setup.sh'
+[1.349s] INFO:colcon.colcon_core.shell:Creating prefix util module '/home/topst/SEAME_2026_Hackathon-clone/install/_local_setup_util_sh.py'
+[1.350s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/topst/SEAME_2026_Hackathon-clone/install/setup.sh'
+[1.353s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/topst/SEAME_2026_Hackathon-clone/install/local_setup.bash'
+[1.355s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/topst/SEAME_2026_Hackathon-clone/install/setup.bash'
+[1.358s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/topst/SEAME_2026_Hackathon-clone/install/local_setup.zsh'
+[1.360s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/topst/SEAME_2026_Hackathon-clone/install/setup.zsh'

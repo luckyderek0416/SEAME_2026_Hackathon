@@ -39,8 +39,8 @@ class DecisionNode(Node):
         self.declare_parameter('steer_scale', 1.0)   # set NEGATIVE if steering is inverted
 
         # ----- throttle levels (kit's set_throttle_percent convention) -----
-        self.declare_parameter('drive_throttle', 0.28)
-        self.declare_parameter('slow_throttle', 0.12)
+        self.declare_parameter('drive_throttle', 0.2)
+        self.declare_parameter('slow_throttle', 0.16)
         self.declare_parameter('stop_throttle', 0.0)
         self.declare_parameter('curve_slow', 0.5)     # DRIVE: slow on curves (per |curvature|)
 

@@ -32,6 +32,9 @@ class ControlNode(Node):
         self.declare_parameter('joystick_topic', 'joystick')
         self.declare_parameter('control_topic', '/control')
         self.declare_parameter('command_hz', 10.0)
+        # ESC needs a neutral throttle signal held for a few seconds at startup to arm.
+        # Until then, incoming throttle is ignored (kept at neutral) or the ESC never arms.
+        self.declare_parameter('esc_arm_sec', 3.0)
 
         i2c_bus = int(self.get_parameter('i2c_bus').value)
         pca9685_addr = int(self.get_parameter('pca9685_addr').value)
@@ -48,6 +51,7 @@ class ControlNode(Node):
             raise ValueError('command_hz must be greater than 0')
 
         self.command_hz = command_hz
+        self.esc_arm_sec = float(self.get_parameter('esc_arm_sec').value)
         self.steer_trim = self.load_steer_trim()
 
         self.d3_racer = D3Racer(
@@ -75,6 +79,10 @@ class ControlNode(Node):
         self.steering = self.steer_trim
         self.e_stop_active = False
 
+        # ESC arming: hold neutral throttle for esc_arm_sec before honoring commands.
+        self.arming = self.esc_arm_sec > 0.0
+        self._arm_start = self.get_clock().now()
+
         # Control inputs
         self.create_subscription(
             Joystick,
@@ -96,6 +104,15 @@ class ControlNode(Node):
         if self.e_stop_active:
             self.apply_actuation(self.steering, 0.0)
             return
+
+        if self.arming:
+            elapsed = (self.get_clock().now() - self._arm_start).nanoseconds / 1e9
+            if elapsed < self.esc_arm_sec:
+                # Steering is free to move, but throttle stays neutral so the ESC arms.
+                self.apply_actuation(self.steering, 0.0)
+                return
+            self.arming = False
+            self.get_logger().info(f'ESC arming complete ({self.esc_arm_sec:g}s neutral). Throttle enabled.')
 
         self.apply_actuation(self.steering, self.throttle)
 

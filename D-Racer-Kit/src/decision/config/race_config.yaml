@@ -28,8 +28,8 @@ decision_node:
     kd: 0.15
     steer_center: 0.2        # steering bias to correct drift
     steer_scale: 1.0         # flip to negative if it steers the wrong way
-    drive_throttle: 0.28
-    slow_throttle: 0.12
+    drive_throttle: 0.2
+    slow_throttle: 0.16
     fork_bias: 0.4
     marker_area_trigger: 0.02
     marker_clear_frames: 5

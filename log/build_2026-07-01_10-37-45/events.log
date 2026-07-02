@@ -1,0 +1,24 @@
+[0.000000] (-) TimerEvent: {}
+[0.000240] (-) JobUnselected: {'identifier': 'battery'}
+[0.000539] (-) JobUnselected: {'identifier': 'battery_msgs'}
+[0.001215] (-) JobUnselected: {'identifier': 'camera'}
+[0.001580] (-) JobUnselected: {'identifier': 'control_msgs'}
+[0.001984] (-) JobUnselected: {'identifier': 'inference'}
+[0.002123] (-) JobUnselected: {'identifier': 'inference_msgs'}
+[0.002243] (-) JobUnselected: {'identifier': 'joystick'}
+[0.002361] (-) JobUnselected: {'identifier': 'joystick_msgs'}
+[0.002477] (-) JobUnselected: {'identifier': 'perception_msgs'}
+[0.002592] (-) JobUnselected: {'identifier': 'topst_utils'}
+[0.002711] (decision) JobQueued: {'identifier': 'decision', 'dependencies': OrderedDict([('control_msgs', '/home/topst/SEAME_2026_Hackathon-clone/install/control_msgs'), ('inference_msgs', '/home/topst/SEAME_2026_Hackathon-clone/install/inference_msgs'), ('perception_msgs', '/home/topst/SEAME_2026_Hackathon-clone/install/perception_msgs')])}
+[0.002841] (perception) JobQueued: {'identifier': 'perception', 'dependencies': OrderedDict([('perception_msgs', '/home/topst/SEAME_2026_Hackathon-clone/install/perception_msgs')])}
+[0.002975] (control) JobQueued: {'identifier': 'control', 'dependencies': OrderedDict([('control_msgs', '/home/topst/SEAME_2026_Hackathon-clone/install/control_msgs'), ('joystick_msgs', '/home/topst/SEAME_2026_Hackathon-clone/install/joystick_msgs')])}
+[0.003096] (monitor) JobQueued: {'identifier': 'monitor', 'dependencies': OrderedDict([('battery_msgs', '/home/topst/SEAME_2026_Hackathon-clone/install/battery_msgs'), ('control_msgs', '/home/topst/SEAME_2026_Hackathon-clone/install/control_msgs'), ('joystick_msgs', '/home/topst/SEAME_2026_Hackathon-clone/install/joystick_msgs')])}
+[0.003306] (decision) JobStarted: {'identifier': 'decision'}
+[0.023319] (decision) JobEnded: {'identifier': 'decision', 'rc': 1}
+[0.025724] (perception) JobStarted: {'identifier': 'perception'}
+[0.034475] (perception) JobEnded: {'identifier': 'perception', 'rc': 1}
+[0.036810] (control) JobStarted: {'identifier': 'control'}
+[0.045579] (control) JobEnded: {'identifier': 'control', 'rc': 1}
+[0.048132] (monitor) JobStarted: {'identifier': 'monitor'}
+[0.057348] (monitor) JobEnded: {'identifier': 'monitor', 'rc': 1}
+[0.068116] (-) EventReactorShutdown: {}
