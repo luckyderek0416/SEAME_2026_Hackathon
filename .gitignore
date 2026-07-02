@@ -1,1 +1,18 @@
-models/backup_old/
+# ROS 2 빌드 및 로그 결과물
+build/
+install/
+log/
+
+# 파이썬 캐시 파일
+__pycache__/
+
+# 주행 기록 및 대용량 레코딩 데이터
+recordings/
+
+# 대용량 딥러닝 모델 가중치 파일
+*.pt
+*.onnx
+*.engine
+
+# VS Code 개인 설정 폴더
+.vscode/
