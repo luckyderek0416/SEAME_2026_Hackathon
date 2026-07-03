@@ -1,0 +1,27 @@
+# 매 세션 훑지 않아도 되는 대용량/생성물 경로 (.gitignore 와 동일 취지)
+# 참고: Claude Code 는 기본적으로 .gitignore 를 존중하므로 아래 대부분은 이미 검색에서 제외됨.
+#       확실한 행동 제어는 CLAUDE.md 에 명시되어 있음.
+
+# ROS 2 빌드/설치/로그 산출물
+build/
+install/
+log/
+**/build/
+**/install/
+**/log/
+
+# 파이썬 캐시
+__pycache__/
+**/__pycache__/
+
+# 주행 기록, rosbag, 대용량 데이터
+recordings/
+**/recordings/
+bagfile/
+**/bagfile/
+
+# 대용량 모델 가중치
+*.pt
+*.onnx
+*.engine
+*.ncnn.bin
