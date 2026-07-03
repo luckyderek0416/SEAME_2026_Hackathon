@@ -1,3 +1,5 @@
+import time
+
 from smbus2 import SMBus
 
 import rclpy
@@ -43,12 +45,27 @@ class BatteryPublisher(Node):
 
         self.publisher_ = self.create_publisher(Battery, publish_topic, 10)
         self.bus = SMBus(i2c_bus)
-        self.ina219 = INA219(
-            self.bus,
-            ina_addr,
-            r_shunt_ohm=r_shunt_ohm,
-            max_current_a=max_current_a,
-        )
+        # control_node 와 동시에 시작하면 같은 I2C 버스를 동시에 초기화하다 순간 충돌(EBUSY 등)이
+        # 날 수 있다. 한 번의 글리치로 노드가 죽지 않도록 backoff 재시도한다.
+        self.ina219 = None
+        for attempt in range(1, 11):
+            try:
+                self.ina219 = INA219(
+                    self.bus,
+                    ina_addr,
+                    r_shunt_ohm=r_shunt_ohm,
+                    max_current_a=max_current_a,
+                )
+                break
+            except OSError as exc:
+                self.get_logger().warning(
+                    f'INA219(0x{ina_addr:02X}) init 실패 ({attempt}/10): {exc}. 0.5s 후 재시도'
+                )
+                time.sleep(0.5)
+        if self.ina219 is None:
+            raise RuntimeError(
+                f'INA219(0x{ina_addr:02X}) 를 여러 번 시도 후에도 열지 못함 (I2C busy).'
+            )
         self.timer = self.create_timer(1.0 / self.publish_hz, self.timer_callback)
 
         self.get_logger().info(

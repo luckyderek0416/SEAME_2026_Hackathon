@@ -48,6 +48,26 @@ class LaneNode(Node):
         self.declare_parameter('white_hsv_hi', [179, 60, 255])
         self.declare_parameter('yellow_hsv_lo', [18, 45, 110])   # S floor lowered for pale/faded yellow lines
         self.declare_parameter('yellow_hsv_hi', [40, 255, 255])
+        # --- bird-eye view (default ON; src/dst below are GENERIC guesses -> tune on track) ---
+        # flat ratio lists [x1,y1, x2,y2, x3,y3, x4,y4] (TL,TR,BR,BL), 0..1 of ROI size
+        self.declare_parameter('use_birdeye', True)
+        self.declare_parameter('birdeye_src_ratio', [0.25, 0.05, 0.75, 0.05, 0.95, 0.95, 0.05, 0.95])
+        self.declare_parameter('birdeye_dst_ratio', [0.20, 0.00, 0.80, 0.00, 0.80, 1.00, 0.20, 1.00])
+        # --- guided band search (default ON) ---
+        self.declare_parameter('use_guided_band', True)
+        self.declare_parameter('guide_margin_px', 60)         # search ± px around previous band centre
+        self.declare_parameter('guide_margin_growth_px', 10)  # margin += i*growth toward far bands
+        self.declare_parameter('guide_min_pixels', 20)        # narrow window -> lower than min_pixels
+        self.declare_parameter('guide_use_previous_frame', True)
+        self.declare_parameter('guide_max_jump_px', 80)       # clamp band-to-band centre jumps
+        # --- look-ahead steering blend (partial pure-pursuit; default ON) ---
+        self.declare_parameter('use_lookahead_control', True)
+        self.declare_parameter('near_weight', 0.7)            # nearest-band weight
+        self.declare_parameter('lookahead_weight', 0.3)       # far-band weight
+        self.declare_parameter('lookahead_band_index', -1)    # -1 = farthest detected band
+        self.declare_parameter('adaptive_lookahead', False)   # boost lookahead on sharp curves
+        self.declare_parameter('curve_lookahead_weight', 0.4)
+        self.declare_parameter('curve_lookahead_thresh', 0.25)
 
         sub_topic = str(self.get_parameter('subscribe_topic').value)
         self.lane_topic = str(self.get_parameter('lane_topic').value)
@@ -84,6 +104,22 @@ class LaneNode(Node):
             morph_kernel=int(gp('morph_kernel').value),
             width_ema=float(gp('width_ema').value),
             smooth_alpha=float(gp('smooth_alpha').value),
+            use_birdeye=bool(gp('use_birdeye').value),
+            birdeye_src_ratio=[float(x) for x in gp('birdeye_src_ratio').value],
+            birdeye_dst_ratio=[float(x) for x in gp('birdeye_dst_ratio').value],
+            use_guided_band=bool(gp('use_guided_band').value),
+            guide_margin_px=int(gp('guide_margin_px').value),
+            guide_margin_growth_px=int(gp('guide_margin_growth_px').value),
+            guide_min_pixels=int(gp('guide_min_pixels').value),
+            guide_use_previous_frame=bool(gp('guide_use_previous_frame').value),
+            guide_max_jump_px=int(gp('guide_max_jump_px').value),
+            use_lookahead_control=bool(gp('use_lookahead_control').value),
+            near_weight=float(gp('near_weight').value),
+            lookahead_weight=float(gp('lookahead_weight').value),
+            lookahead_band_index=int(gp('lookahead_band_index').value),
+            adaptive_lookahead=bool(gp('adaptive_lookahead').value),
+            curve_lookahead_weight=float(gp('curve_lookahead_weight').value),
+            curve_lookahead_thresh=float(gp('curve_lookahead_thresh').value),
         )
 
         self.pub = self.create_publisher(LaneState, self.lane_topic, 10)
@@ -104,7 +140,12 @@ class LaneNode(Node):
             n, v = p.name, p.value
             if n in hsv_keys:
                 setattr(self.detector, n, tuple(int(x) for x in v))
-            elif n in ('use_white', 'use_yellow'):
+            elif n in ('birdeye_src_ratio', 'birdeye_dst_ratio'):
+                setattr(self.detector, n, [float(x) for x in v])
+                self.detector.invalidate_birdeye_cache()   # matrix must be rebuilt
+            elif n in ('use_white', 'use_yellow', 'use_birdeye', 'use_guided_band',
+                       'guide_use_previous_frame', 'use_lookahead_control',
+                       'adaptive_lookahead'):
                 setattr(self.detector, n, bool(v))
             elif hasattr(self.detector, n):
                 setattr(self.detector, n, v)

@@ -26,7 +26,13 @@ class LaneDetector:
                  mask_mode='hsv', use_white=True, use_yellow=True,
                  white_hsv_lo=(0, 0, 180), white_hsv_hi=(179, 60, 255),
                  yellow_hsv_lo=(18, 80, 80), yellow_hsv_hi=(38, 255, 255),
-                 num_bands=4, morph_kernel=3, width_ema=0.1, smooth_alpha=0.5):
+                 num_bands=4, morph_kernel=3, width_ema=0.1, smooth_alpha=0.5,
+                 use_birdeye=False, birdeye_src_ratio=None, birdeye_dst_ratio=None,
+                 use_guided_band=False, guide_margin_px=60, guide_margin_growth_px=10,
+                 guide_min_pixels=20, guide_use_previous_frame=True, guide_max_jump_px=80,
+                 use_lookahead_control=False, near_weight=0.7, lookahead_weight=0.3,
+                 lookahead_band_index=-1, adaptive_lookahead=False,
+                 curve_lookahead_weight=0.4, curve_lookahead_thresh=0.25):
         self.roi_top_ratio = roi_top_ratio        # use only the bottom (1 - ratio) of the frame
         self.bright_thresh = bright_thresh         # gray-mode white-line brightness threshold (0-255)
         self.min_pixels = min_pixels               # min lane pixels per side to trust it
@@ -54,6 +60,39 @@ class LaneDetector:
         self.white_hsv_hi = tuple(white_hsv_hi)
         self.yellow_hsv_lo = tuple(yellow_hsv_lo)
         self.yellow_hsv_hi = tuple(yellow_hsv_hi)
+        # --- bird-eye view (optional, default OFF = legacy behaviour) ---
+        # src/dst are flat ratio lists [x1,y1, x2,y2, x3,y3, x4,y4] (TL,TR,BR,BL) in 0..1
+        # of the ROI size, so they survive resolution changes.
+        self.use_birdeye = use_birdeye
+        self.birdeye_src_ratio = (list(birdeye_src_ratio) if birdeye_src_ratio
+                                  else [0.25, 0.05, 0.75, 0.05, 0.95, 0.95, 0.05, 0.95])
+        self.birdeye_dst_ratio = (list(birdeye_dst_ratio) if birdeye_dst_ratio
+                                  else [0.20, 0.00, 0.80, 0.00, 0.80, 1.00, 0.20, 1.00])
+        self._bev_matrix = None
+        self._bev_key = None       # (w, h, src, dst) the cached matrix was built for
+        self._bev_warned = False
+        # --- guided band search (optional, default OFF = legacy multi-band) ---
+        # Each band only searches around the previous band's centre so a far
+        # exit/branch line cannot yank the lane centre (roundabout/fork robustness).
+        self.use_guided_band = use_guided_band
+        self.guide_margin_px = guide_margin_px
+        self.guide_margin_growth_px = guide_margin_growth_px
+        self.guide_min_pixels = guide_min_pixels
+        self.guide_use_previous_frame = guide_use_previous_frame
+        self.guide_max_jump_px = guide_max_jump_px
+        self._prev_center = None   # last frame's lane_center (guide seed)
+        # --- look-ahead steering blend (partial pure-pursuit; default OFF) ---
+        # Legacy lane_center is the all-band weighted average. With this ON the
+        # centre becomes near_weight*nearest_band + lookahead_weight*far_band, so
+        # the car starts turning into a curve earlier. NOT a full pure-pursuit:
+        # the PID in decision stays the controller, we only shape its input.
+        self.use_lookahead_control = use_lookahead_control
+        self.near_weight = near_weight
+        self.lookahead_weight = lookahead_weight
+        self.lookahead_band_index = lookahead_band_index   # -1 = farthest detected band
+        self.adaptive_lookahead = adaptive_lookahead
+        self.curve_lookahead_weight = curve_lookahead_weight  # lookahead weight on sharp curves
+        self.curve_lookahead_thresh = curve_lookahead_thresh  # |curvature| that counts as sharp
 
     def _build_mask(self, roi):
         """Return (lane_mask, yellow_ratio, yellow_offset).
@@ -89,6 +128,10 @@ class LaneDetector:
         roi_top = int(h * self.roi_top_ratio)
         roi = bgr[roi_top:h, 0:w]
 
+        roi_raw = roi   # keep the pre-warp ROI so the debug view can show the BEV source region
+        if self.use_birdeye:
+            roi = self._apply_birdeye(roi)   # falls back to raw ROI on failure
+
         mask, yellow_ratio, yellow_offset = self._build_mask(roi)
 
         # (4) noise cleanup: MORPH_OPEN removes marble-floor glare specks and the small
@@ -103,20 +146,25 @@ class LaneDetector:
         # find the lane centre in each. Near bands steer; far bands anticipate curves.
         roi_h = clean.shape[0]
         band_h = max(1, roi_h // self.num_bands)
-        bands = []   # (center_x, weight, band_index)  band 0 = nearest (bottom of ROI)
-        near_lanes = 0
-        for i in range(self.num_bands):
-            y1 = roi_h - i * band_h
-            y0 = max(0, roi_h - (i + 1) * band_h)
-            if y1 - y0 < 2:
-                continue
-            cx, nlanes = self._band_center(clean[y0:y1, :], w)
-            if cx is not None:
-                bands.append((cx, float(self.num_bands - i), i))  # nearer -> heavier
-                if i == 0:
-                    near_lanes = nlanes
+        band_windows = []   # guided-mode search windows, for the debug overlay
+        if self.use_guided_band:
+            bands, near_lanes, band_windows = self._guided_bands(clean, w, roi_h, band_h)
+        else:
+            bands = []   # (center_x, weight, band_index)  band 0 = nearest (bottom of ROI)
+            near_lanes = 0
+            for i in range(self.num_bands):
+                y1 = roi_h - i * band_h
+                y0 = max(0, roi_h - (i + 1) * band_h)
+                if y1 - y0 < 2:
+                    continue
+                cx, nlanes = self._band_center(clean[y0:y1, :], w)
+                if cx is not None:
+                    bands.append((cx, float(self.num_bands - i), i))  # nearer -> heavier
+                    if i == 0:
+                        near_lanes = nlanes
 
         mid = w / 2.0
+        near_cx, la_cx = None, None
         if not bands:
             lane_found, num_lanes = False, 0
             lane_center, curvature = mid, 0.0
@@ -128,26 +176,44 @@ class LaneDetector:
             # (2) curvature = how far the lane drifts from near to far band, normalised.
             # sign = curve direction, magnitude = sharpness (used by decision to slow down).
             curvature = self._estimate_curvature(bands, w)
+            # partial pure-pursuit: blend nearest + look-ahead band centres instead of
+            # the all-band average. OFF (default) keeps lane_center above unchanged.
+            near_cx = bands[0][0]                    # nearest detected band
+            la_cx = self._lookahead_center(bands)
+            if self.use_lookahead_control and la_cx is not None:
+                nw, lw = self.near_weight, self.lookahead_weight
+                if self.adaptive_lookahead and abs(curvature) >= self.curve_lookahead_thresh:
+                    lw = self.curve_lookahead_weight  # sharp curve: look further ahead
+                    nw = max(0.0, 1.0 - lw)
+                if nw + lw > 0.0:
+                    lane_center = (nw * near_cx + lw * la_cx) / (nw + lw)
 
         raw_offset = float(max(-1.0, min(1.0, (lane_center - mid) / (w / 2.0))))
         # (5) temporal smoothing (EMA) to reduce frame-to-frame steering jitter.
         if lane_found:
             self._offset_ema = (self.smooth_alpha * raw_offset
                                 + (1.0 - self.smooth_alpha) * self._offset_ema)
+            self._prev_center = lane_center   # guide seed for the next frame
         offset = float(self._offset_ema)
 
         junction = self._detect_junction(clean, w)
 
-        debug = self._draw_debug(roi, clean, lane_center)
+        debug = self._draw_debug(roi, clean, lane_center, offset, yellow_ratio,
+                                 curvature, band_windows, roi_raw, near_cx, la_cx)
         return lane_found, offset, num_lanes, junction, yellow_ratio, yellow_offset, curvature, debug
 
     def _band_center(self, band, w):
-        """Lane centre for one horizontal band. (3) When both lines are seen, remember
-        the lane width; when only one is seen, place the centre half-a-width away — far
-        more accurate on curves than a fixed fraction."""
+        """Lane centre for one horizontal band, searching the FULL width and
+        splitting left/right at the fixed image middle (legacy behaviour)."""
         mid = w // 2
         lx = self._mean_x(band[:, 0:mid], 0)
         rx = self._mean_x(band[:, mid:w], mid)
+        return self._combine_lr(lx, rx, w)
+
+    def _combine_lr(self, lx, rx, w):
+        """Combine left/right line x-positions into a lane centre. (3) When both
+        lines are seen, remember the lane width; when only one is seen, place the
+        centre half-a-width away — far more accurate on curves than a fixed fraction."""
         if lx is not None and rx is not None:
             width = rx - lx
             if width > 0:
@@ -161,6 +227,108 @@ class LaneDetector:
         if rx is not None:
             return rx - half, 1
         return None, 0
+
+    # ---------- guided band search (optional) ----------
+    def _guided_bands(self, clean, w, roi_h, band_h):
+        """Multi-band centres where each band only searches around the previous
+        band's centre (± margin). Keeps _band_center's left/right split and
+        lane-width memory — just windowed — so a far exit/branch line cannot
+        yank the centre. NOT a sliding-window/polyfit fit.
+
+        Returns (bands, near_lanes, band_windows) with bands in the legacy
+        [(center_x, weight, band_index), ...] format and band_windows =
+        [(x0, y0, x1, y1, cx_or_None), ...] for the debug overlay."""
+        bands = []
+        band_windows = []
+        near_lanes = 0
+        guide = None
+        for i in range(self.num_bands):
+            y1 = roi_h - i * band_h
+            y0 = max(0, roi_h - (i + 1) * band_h)
+            if y1 - y0 < 2:
+                continue
+            band = clean[y0:y1, :]
+            if guide is None:
+                # no guide yet: full-width search (band 0, or all bands so far empty)
+                cx, nlanes = self._band_center(band, w)
+                x0, x1 = 0, w
+                if (cx is None and i == 0 and self.guide_use_previous_frame
+                        and self._prev_center is not None):
+                    x0, x1, cx, nlanes = self._windowed_center(band, w, self._prev_center, i)
+            else:
+                x0, x1, cx, nlanes = self._windowed_center(band, w, guide, i)
+            if cx is not None:
+                if guide is not None:
+                    jump = cx - guide
+                    if abs(jump) > self.guide_max_jump_px:   # clamp sudden centre jumps
+                        cx = guide + (self.guide_max_jump_px if jump > 0
+                                      else -self.guide_max_jump_px)
+                bands.append((cx, float(self.num_bands - i), i))  # nearer -> heavier
+                if i == 0:
+                    near_lanes = nlanes
+                guide = cx
+            band_windows.append((x0, y0, x1, y1, cx))
+        return bands, near_lanes, band_windows
+
+    def _windowed_center(self, band, w, guide, band_index):
+        """_band_center restricted to [guide-margin, guide+margin], with the
+        left/right split at the guide centre instead of the fixed w//2."""
+        margin = self.guide_margin_px + band_index * self.guide_margin_growth_px
+        x0 = int(max(0, min(w - 2, guide - margin)))
+        x1 = int(max(x0 + 2, min(w, guide + margin)))
+        mid = int(max(x0 + 1, min(x1 - 1, round(guide))))
+        lx = self._mean_x(band[:, x0:mid], x0, self.guide_min_pixels)
+        rx = self._mean_x(band[:, mid:x1], mid, self.guide_min_pixels)
+        cx, nlanes = self._combine_lr(lx, rx, w)
+        return x0, x1, cx, nlanes
+
+    # ---------- bird-eye view (optional) ----------
+    def invalidate_birdeye_cache(self):
+        """Force the perspective matrix to be rebuilt (call after src/dst change)."""
+        self._bev_key = None
+        self._bev_warned = False
+
+    def _apply_birdeye(self, roi):
+        """Warp the ROI to a top-down view (same size). Returns the input ROI
+        unchanged on any failure so lane following never dies from bad points."""
+        h, w = roi.shape[:2]
+        key = (w, h, tuple(self.birdeye_src_ratio), tuple(self.birdeye_dst_ratio))
+        if key != self._bev_key:
+            self._bev_key = key
+            self._bev_matrix = None
+            try:
+                if len(self.birdeye_src_ratio) != 8 or len(self.birdeye_dst_ratio) != 8:
+                    raise ValueError('birdeye_*_ratio must be 8 floats [x1,y1,...,x4,y4]')
+                src = np.float32([(self.birdeye_src_ratio[i] * w,
+                                   self.birdeye_src_ratio[i + 1] * h) for i in range(0, 8, 2)])
+                dst = np.float32([(self.birdeye_dst_ratio[i] * w,
+                                   self.birdeye_dst_ratio[i + 1] * h) for i in range(0, 8, 2)])
+                self._bev_matrix = cv2.getPerspectiveTransform(src, dst)
+            except Exception as exc:
+                if not self._bev_warned:
+                    print(f'[lane_detector] bird-eye disabled, using raw ROI: {exc}')
+                    self._bev_warned = True
+        if self._bev_matrix is None:
+            return roi
+        try:
+            return cv2.warpPerspective(roi, self._bev_matrix, (w, h))
+        except cv2.error as exc:
+            if not self._bev_warned:
+                print(f'[lane_detector] bird-eye warp failed, using raw ROI: {exc}')
+                self._bev_warned = True
+            return roi
+
+    def _lookahead_center(self, bands):
+        """Centre x of the look-ahead band: lookahead_band_index if that band was
+        detected this frame, otherwise the farthest detected band (-1 = always
+        farthest). bands are ordered near -> far."""
+        if not bands:
+            return None
+        if self.lookahead_band_index >= 0:
+            for cx, _, i in bands:
+                if i == self.lookahead_band_index:
+                    return cx
+        return bands[-1][0]
 
     @staticmethod
     def _estimate_curvature(bands, w):
@@ -189,19 +357,61 @@ class LaneDetector:
         full_gap = present_rows <= self.junction_gap_rows
         return bool(dashed or full_gap)
 
-    def _mean_x(self, half_mask, x_offset):
+    def _mean_x(self, half_mask, x_offset, min_pixels=None):
+        # min_pixels=None keeps the legacy threshold; guided windows are narrow so
+        # they pass their own (lower) guide_min_pixels.
         xs = np.nonzero(half_mask)[1]
-        if xs.size < self.min_pixels:
+        if xs.size < (self.min_pixels if min_pixels is None else min_pixels):
             return None
         return float(np.mean(xs)) + x_offset
 
-    def _draw_debug(self, roi, mask, lane_center):
-        """Visualise the HSV colour-masking result: the lane pixels the mask selected
-        (cyan) painted over the ROI, plus the detected lane centre (red) and image
-        centre (green). This is what the monitor dashboard shows."""
+    def _draw_debug(self, roi, mask, lane_center, offset=0.0, yellow_ratio=0.0,
+                    curvature=0.0, band_windows=(), roi_raw=None,
+                    near_cx=None, la_cx=None):
+        """Build the debug image the monitor shows on /perception/lane/debug.
+
+        Bottom (always): the ANALYSED ROI (bird-eye warped if on) with the HSV mask
+        pixels (cyan), guided search windows (magenta) + found centres (orange), the
+        detected lane centre (red) and image centre (green), plus status text.
+
+        Top (only when bird-eye is on): the RAW pre-warp ROI with the bird-eye SOURCE
+        quad (yellow) drawn on it, so you can tune birdeye_src_ratio by eye instead of
+        guessing from the warped result alone."""
         dbg = roi.copy()
         dbg[mask > 0] = (255, 255, 0)                                     # HSV-selected lane pixels (cyan)
+        for x0, y0, x1, y1, bcx in band_windows:                          # guided search windows
+            cv2.rectangle(dbg, (int(x0), int(y0)), (int(x1) - 1, int(y1) - 1), (255, 0, 255), 1)
+            if bcx is not None:
+                cv2.circle(dbg, (int(bcx), int((y0 + y1) / 2)), 2, (0, 165, 255), -1)
         cx = int(max(0, min(dbg.shape[1] - 1, lane_center)))
         cv2.line(dbg, (cx, 0), (cx, dbg.shape[0]), (0, 0, 255), 2)        # detected lane center (red)
         cv2.line(dbg, (dbg.shape[1] // 2, 0), (dbg.shape[1] // 2, dbg.shape[0]), (0, 255, 0), 1)  # image center (green)
+        if self.use_lookahead_control:
+            dh = dbg.shape[0]
+            if near_cx is not None:   # near band centre = blue tick (bottom third)
+                nx = int(max(0, min(dbg.shape[1] - 1, near_cx)))
+                cv2.line(dbg, (nx, dh * 2 // 3), (nx, dh), (255, 0, 0), 1)
+            if la_cx is not None:     # look-ahead centre = orange tick (top third)
+                lx = int(max(0, min(dbg.shape[1] - 1, la_cx)))
+                cv2.line(dbg, (lx, 0), (lx, dh // 3), (0, 165, 255), 1)
+        # status text (frame is only ~320x72: keep the font tiny)
+        mode = (f"BEV {'ON' if self.use_birdeye else 'OFF'}  "
+                f"GUIDED {'ON' if self.use_guided_band else 'OFF'}  "
+                f"LA {'ON' if self.use_lookahead_control else 'OFF'}")
+        vals = f"off {offset:+.2f}  yr {yellow_ratio:.2f}  cv {curvature:+.2f}"
+        cv2.putText(dbg, mode, (2, 10), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
+        cv2.putText(dbg, vals, (2, dbg.shape[0] - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
+
+        # BEV on: stack the raw ROI (with the source quad) on top for src tuning.
+        if self.use_birdeye and roi_raw is not None and roi_raw.shape == roi.shape:
+            src_view = roi_raw.copy()
+            h, w = src_view.shape[:2]
+            pts = np.int32([(int(self.birdeye_src_ratio[i] * w),
+                             int(self.birdeye_src_ratio[i + 1] * h)) for i in range(0, 8, 2)])
+            cv2.polylines(src_view, [pts], True, (0, 255, 255), 1)        # BEV source quad (yellow)
+            for px, py in pts:
+                cv2.circle(src_view, (int(px), int(py)), 2, (0, 255, 255), -1)
+            cv2.putText(src_view, 'SRC (raw ROI)', (2, 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 255), 1)
+            return np.vstack([src_view, dbg])
         return dbg

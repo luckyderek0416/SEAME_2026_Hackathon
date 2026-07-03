@@ -36,13 +36,16 @@ class DecisionNode(Node):
         self.declare_parameter('ki', 0.0)
         self.declare_parameter('kd', 0.15)
         self.declare_parameter('steer_center', 0.2)  # steering bias to correct drift
-        self.declare_parameter('steer_scale', 1.0)   # set NEGATIVE if steering is inverted
+        self.declare_parameter('steer_scale', -1.0)   # NEGATIVE: 트랙 검증 결과 조향 부호가 반대였음(오른쪽 치우침 offset<0 -> 더 왼쪽 조향해야 교정)
 
         # ----- throttle levels (kit's set_throttle_percent convention) -----
-        self.declare_parameter('drive_throttle', 0.2)
-        self.declare_parameter('slow_throttle', 0.16)
+        self.declare_parameter('drive_throttle', 0.20)
+        self.declare_parameter('slow_throttle', 0.12)
         self.declare_parameter('stop_throttle', 0.0)
         self.declare_parameter('curve_slow', 0.5)     # DRIVE: slow on curves (per |curvature|)
+        # ----- look-ahead 보조 (기본 0 = 기존 동작 그대로) -----
+        self.declare_parameter('max_steering_delta', 0.0)  # 틱당 조향 변화 상한; 0=off
+        self.declare_parameter('steer_slow', 0.0)          # |조향|에 비례한 감속 게인; 0=off
 
         # ----- mission tuning -----
         self.declare_parameter('conf_threshold', 0.5)
@@ -51,6 +54,7 @@ class DecisionNode(Node):
         self.declare_parameter('marker_area_trigger', 0.02)
         self.declare_parameter('marker_clear_frames', 5)
         self.declare_parameter('fork_bias', 0.4)
+        self.declare_parameter('fork_hold_s', 6.0)  # 표지판 마지막 인식 후 fork_bias 유지 시간(초)
 
         # ----- roundabout (junction-count, no IMU) -----
         self.declare_parameter('enter_curvature', 0.45)   # |lane offset| above this ...
@@ -98,12 +102,15 @@ class DecisionNode(Node):
             'slow_throttle': float(g('slow_throttle').value),
             'stop_throttle': float(g('stop_throttle').value),
             'curve_slow': float(g('curve_slow').value),
+            'max_steering_delta': float(g('max_steering_delta').value),
+            'steer_slow': float(g('steer_slow').value),
             'conf_threshold': float(g('conf_threshold').value),
             'green_frames': int(g('green_frames').value),
             'red_frames': int(g('red_frames').value),
             'marker_area_trigger': float(g('marker_area_trigger').value),
             'marker_clear_frames': int(g('marker_clear_frames').value),
             'fork_bias': float(g('fork_bias').value),
+            'fork_hold_s': float(g('fork_hold_s').value),
             'enter_curvature': float(g('enter_curvature').value),
             'enter_sustain_s': float(g('enter_sustain_s').value),
             'turn_direction': turn_direction,
@@ -124,9 +131,16 @@ class DecisionNode(Node):
 
         # ----- live-tunable params (ros2 param set 으로 주행 중 변경 가능) -----
         # state_machine 이 매 step 마다 self.sm.cfg 를 읽으므로 값만 갱신하면 즉시 반영됨.
+        # state_machine 이 매 step 마다 self.sm.cfg 에서 읽는 값들만 라이브 변경 가능.
+        # (steer_center/steer_scale 는 _lane_steer 에서 매번 cfg 를 읽으므로 즉시 반영됨)
         self.live_tunable = {
             'drive_throttle', 'slow_throttle', 'stop_throttle', 'curve_slow',
+            'steer_center', 'steer_scale',
+            'kp', 'ki', 'kd',   # PID 게인 (조향 세기) 트랙에서 라이브 튜닝
+            'max_steering_delta', 'steer_slow',   # look-ahead 보조 (rate limit / 조향 감속)
+            'fork_bias', 'fork_hold_s',           # 갈림길 편향 세기 / 유지 시간
         }
+        self._prev_steer = None   # rate limit 용 직전 조향값
         self.add_on_set_parameters_callback(self._on_set_parameters)
 
         # latest inputs (safe defaults)
@@ -156,6 +170,9 @@ class DecisionNode(Node):
                         reason=f'{p.name} 는 숫자여야 합니다',
                     )
                 self.sm.cfg[p.name] = value
+                # PID 게인은 state_machine 의 PID 객체에도 반영해야 즉시 적용됨.
+                if p.name in ('kp', 'ki', 'kd'):
+                    setattr(self.sm.pid, p.name, value)
                 self.get_logger().info(f'[live] {p.name} -> {value:g}')
         return SetParametersResult(successful=True)
 
@@ -170,13 +187,30 @@ class DecisionNode(Node):
 
     def on_timer(self):
         steer, throttle, state = self.sm.step(self.lane, self.aruco, self.dets, self.dt)
+        cfg = self.sm.cfg
+        # 조향 rate limit: 틱당 변화량 제한으로 프레임 간 조향 급변(튐)을 막는다.
+        # 0 이면 완전 비활성(기존 동작). roundabout 의 yaw 적분은 제한 전 값을 쓰지만
+        # 편향이 '늦게 나가기' 쪽이라 랩 카운트 안전에는 문제 없음.
+        delta = float(cfg.get('max_steering_delta', 0.0))
+        if delta > 0.0 and self._prev_steer is not None:
+            steer = max(self._prev_steer - delta, min(self._prev_steer + delta, steer))
+        self._prev_steer = steer
+        # 조향이 클수록 감속(steer_slow). curvature 기반 감속(curve_slow)과 별개로,
+        # 실제 출력 조향각 기준으로 한 번 더 줄인다. slow_throttle 아래로는 안 내림.
+        ss = float(cfg.get('steer_slow', 0.0))
+        if ss > 0.0 and throttle > 0.0:
+            cut = max(0.0, 1.0 - ss * min(1.0, abs(steer - float(cfg['steer_center']))))
+            throttle = max(min(throttle, float(cfg['slow_throttle'])), throttle * cut)
         out = Control()
         out.header = Header()
         out.header.stamp = self.get_clock().now().to_msg()
         out.steering = float(steer)
         out.throttle = float(throttle)
         self.pub.publish(out)
-        self.get_logger().debug(f'[{state}] steer={steer:.3f} thr={throttle:.3f}')
+        self.get_logger().debug(
+            f'[{state}] steer={steer:.3f} thr={throttle:.3f} '
+            f'off={self.lane.offset:+.3f} curv={self.lane.curvature:+.3f}'
+        )
 
 
 def main(args=None):

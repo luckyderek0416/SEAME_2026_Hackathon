@@ -21,6 +21,7 @@ def generate_launch_description():
     model_param = LaunchConfiguration('model_param')
     model_bin = LaunchConfiguration('model_bin')
     skip_missions = LaunchConfiguration('skip_missions')
+    vehicle_config = LaunchConfiguration('vehicle_config')
 
     return LaunchDescription([
         DeclareLaunchArgument('course', default_value='out',
@@ -39,9 +40,17 @@ def generate_launch_description():
         DeclareLaunchArgument('skip_missions', default_value='false',
                               description='true = pure lane-following test (no green light / roundabout / '
                                           'obstacle missions); starts driving immediately.'),
+        # Absolute path so the camera finds it regardless of which workspace is sourced.
+        # Without it, camera_node cannot locate src/config/vehicle_config.yaml and silently
+        # falls back to MIPI 640x480 defaults -> USB camera fails to open and the node dies.
+        DeclareLaunchArgument('vehicle_config',
+                              default_value='/home/topst/SEAME_2026_Hackathon-clone/D-Racer-Kit/'
+                                            'src/config/vehicle_config.yaml',
+                              description='Vehicle/camera config (USB vs MIPI, device, resolution).'),
 
         # --- kit: camera ---
-        Node(package='camera', executable='camera_node', name='camera_node', output='screen'),
+        Node(package='camera', executable='camera_node', name='camera_node', output='screen',
+             parameters=[{'vehicle_config_file': vehicle_config}]),
 
         # --- new: perception (OpenCV) ---
         Node(package='perception', executable='lane_node', name='lane_node', output='screen',
@@ -58,14 +67,18 @@ def generate_launch_description():
              parameters=[{'course': course, 'race_dir': race_dir, 'skip_missions': skip_missions}]),
 
         # --- kit: control in AUTO mode ---
+        # respawn: control_node 가 죽으면 모터가 조용히 멈추므로 자동 재시작한다.
+        # (재시작 시 ESC 아밍 3초가 다시 돌지만 안전상 문제 없음.)
         Node(package='control', executable='control_node', name='control_node', output='screen',
+             respawn=True, respawn_delay=1.0,
              parameters=[{'use_joystick_control': False, 'control_topic': '/control'}]),
 
         # --- kit: joystick kept alive for E-STOP safety ---
         Node(package='joystick', executable='joystick_node', name='joystick_node', output='screen'),
 
         # --- kit: battery (publishes battery_status for the monitor) ---
-        Node(package='battery', executable='battery_node', name='battery_node', output='screen'),
+        Node(package='battery', executable='battery_node', name='battery_node', output='screen',
+             respawn=True, respawn_delay=2.0),
 
         # --- kit: web monitor (shows camera + battery status) ---
         Node(package='monitor', executable='monitor_node', name='monitor_node', output='screen'),

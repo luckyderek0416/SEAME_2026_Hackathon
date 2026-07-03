@@ -50,6 +50,7 @@ class RaceStateMachine:
         self.state = State.DRIVE if cfg.get('skip_missions') else State.WAIT_GREEN
 
         self.turn_latch = None        # 'left' / 'right' once a turn sign is seen
+        self.turn_latch_age = 0.0     # seconds since the sign was last seen
         self.green_count = 0
         self.red_count = 0
         self.marker_gone = 0
@@ -84,6 +85,10 @@ class RaceStateMachine:
         return float(self.cfg['steer_center'] + correction * self.cfg['steer_scale'])
 
     def _turn_bias(self):
+        # Fork bias applies only while driving; a stale latch in ROUNDABOUT etc.
+        # must not tilt the steering.
+        if self.state != State.DRIVE:
+            return 0.0
         if self.turn_latch == 'left':
             return -self.cfg['fork_bias']
         if self.turn_latch == 'right':
@@ -144,11 +149,20 @@ class RaceStateMachine:
         if self.cooldown > 0.0:
             self.cooldown = max(0.0, self.cooldown - dt)
 
-        # latch a turn sign whenever one is clearly seen (Out course fork)
+        # latch a turn sign whenever one is clearly seen (Out course fork).
+        # The latch EXPIRES fork_hold_s after the sign was last seen: the fork is
+        # right after the sign, and holding the bias forever would keep pulling the
+        # car sideways for the rest of the race (lane-departure risk).
         if self._seen(dets, 'left_sign'):
             self.turn_latch = 'left'
+            self.turn_latch_age = 0.0
         elif self._seen(dets, 'right_sign'):
             self.turn_latch = 'right'
+            self.turn_latch_age = 0.0
+        elif self.turn_latch is not None:
+            self.turn_latch_age += dt
+            if self.turn_latch_age >= self.cfg.get('fork_hold_s', 6.0):
+                self.turn_latch = None
 
         # ----- WAIT_GREEN -----
         if self.state == State.WAIT_GREEN:

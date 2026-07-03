@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 
 import rclpy
@@ -54,12 +55,28 @@ class ControlNode(Node):
         self.esc_arm_sec = float(self.get_parameter('esc_arm_sec').value)
         self.steer_trim = self.load_steer_trim()
 
-        self.d3_racer = D3Racer(
-            i2c_bus=i2c_bus,
-            pca9685_addr=pca9685_addr,
-            steering_channel=steering_channel,
-            throttle_channel=throttle_channel,
-        )
+        # PCA9685 초기화. respawn 재시작 시 직전 인스턴스가 아직 I2C fd 를 놓지 않아
+        # OSError [Errno 16] Device or resource busy 가 날 수 있으므로 backoff 재시도한다.
+        self.d3_racer = None
+        for attempt in range(1, 11):
+            try:
+                self.d3_racer = D3Racer(
+                    i2c_bus=i2c_bus,
+                    pca9685_addr=pca9685_addr,
+                    steering_channel=steering_channel,
+                    throttle_channel=throttle_channel,
+                )
+                break
+            except OSError as exc:
+                self.get_logger().warning(
+                    f'PCA9685(0x{pca9685_addr:02X}) init 실패 ({attempt}/10): {exc}. 0.5s 후 재시도'
+                )
+                time.sleep(0.5)
+        if self.d3_racer is None:
+            raise RuntimeError(
+                f'PCA9685(0x{pca9685_addr:02X}) 를 여러 번 시도 후에도 열지 못함 (I2C busy). '
+                '다른 control_node/launch 가 동시에 도는지, 중복 실행이 없는지 확인하세요.'
+            )
 
         self.get_logger().info(
             'd3_racer configured:\n'
@@ -78,6 +95,7 @@ class ControlNode(Node):
         self.throttle = 0.0
         self.steering = self.steer_trim
         self.e_stop_active = False
+        self._io_err_streak = 0  # 연속 I2C 쓰기 실패 카운트 (로그 rate-limit 용)
 
         # ESC arming: hold neutral throttle for esc_arm_sec before honoring commands.
         self.arming = self.esc_arm_sec > 0.0
@@ -117,8 +135,19 @@ class ControlNode(Node):
         self.apply_actuation(self.steering, self.throttle)
 
     def apply_actuation(self, steering, throttle):
-        self.d3_racer.set_steering_percent(float(steering))
-        self.d3_racer.set_throttle_percent(float(throttle))
+        # 주행 중 진동/전압 강하로 인한 순간 I2C 오류(OSError 등)가 timer_callback 을 통해
+        # 노드 전체를 죽이지 않도록 방어한다. 예외 시 로그만 남기고 계속 구동한다.
+        try:
+            self.d3_racer.set_steering_percent(float(steering))
+            self.d3_racer.set_throttle_percent(float(throttle))
+            self._io_err_streak = 0
+        except Exception as exc:
+            self._io_err_streak += 1
+            # 연속 실패 시 10Hz 로 스팸나지 않게 첫 실패 + 50회마다만 로그.
+            if self._io_err_streak == 1 or self._io_err_streak % 50 == 0:
+                self.get_logger().warning(
+                    f'I2C actuation write failed ({self._io_err_streak}회 연속): {exc}'
+                )
 
     def joystick_callback(self, msg: Joystick):
         if bool(msg.e_stop_en):
