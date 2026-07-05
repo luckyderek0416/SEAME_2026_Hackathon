@@ -8,9 +8,22 @@ control_node runs in AUTO mode (use_joystick_control:=False -> listens /control)
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+
+def _lane_node(context, *args, **kwargs):
+    """course 값에 따라 lane_node 를 만든다. Out 코스는 노란 차선이 없으므로(회전교차로
+    없음) use_yellow=False 로 흰색만 검출해, 바닥/조명의 노란기 픽셀이 차선 마스크를
+    오염시키는 걸 원천 차단한다. In 코스는 노란 링 추종을 위해 노란색을 유지한다.
+    (Out 갈림길 방향은 표지판 기반이라 노란색을 꺼도 분기 선택은 그대로 동작.)"""
+    course_val = LaunchConfiguration('course').perform(context).strip().lower()
+    race_dir_val = LaunchConfiguration('race_dir').perform(context)
+    use_yellow = course_val != 'out'
+    return [Node(package='perception', executable='lane_node', name='lane_node',
+                 output='screen',
+                 parameters=[{'race_dir': race_dir_val, 'use_yellow': use_yellow}])]
 
 
 def generate_launch_description():
@@ -53,8 +66,8 @@ def generate_launch_description():
              parameters=[{'vehicle_config_file': vehicle_config}]),
 
         # --- new: perception (OpenCV) ---
-        Node(package='perception', executable='lane_node', name='lane_node', output='screen',
-             parameters=[{'race_dir': race_dir}]),
+        # lane_node 는 course 에 따라 use_yellow 를 바꾸므로 OpaqueFunction 으로 생성.
+        OpaqueFunction(function=_lane_node),
         Node(package='perception', executable='aruco_node', name='aruco_node', output='screen',
              parameters=[{'dictionary': aruco_dict, 'inverted': aruco_inverted}]),
 
@@ -74,7 +87,10 @@ def generate_launch_description():
              parameters=[{'use_joystick_control': False, 'control_topic': '/control'}]),
 
         # --- kit: joystick kept alive for E-STOP safety ---
-        Node(package='joystick', executable='joystick_node', name='joystick_node', output='screen'),
+        # 자율주행에선 조향/스로틀은 안 쓰고 X버튼 E-STOP만 쓰므로, 5Hz 디버그 로그
+        # (SSH I/O 부하)는 끈다. 비상정지 기능은 그대로 살아있다.
+        Node(package='joystick', executable='joystick_node', name='joystick_node', output='screen',
+             parameters=[{'debug_log_enable': False}]),
 
         # --- kit: battery (publishes battery_status for the monitor) ---
         Node(package='battery', executable='battery_node', name='battery_node', output='screen',

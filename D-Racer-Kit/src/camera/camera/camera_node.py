@@ -30,7 +30,9 @@ class CameraNode(Node):
         self.declare_parameter('mipi_camera_device', '/dev/video0')
         self.declare_parameter('flip_method', 'rotate-180')
         self.declare_parameter('jpeg_quality', 90)
-        self.declare_parameter('debug_log', True)
+        # debug_log: 프레임마다 'Published frame' 로그를 찍는다. 30Hz로 SSH에 텍스트를
+        # 쏟아내는 I/O 부하가 커서 기본 OFF. 진단 시에만 -p debug_log:=true 로 켠다.
+        self.declare_parameter('debug_log', False)
 
         self.vehicle_config_file = os.path.expanduser(
             str(self.get_parameter('vehicle_config_file').value)

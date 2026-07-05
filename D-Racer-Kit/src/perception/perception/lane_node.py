@@ -28,6 +28,11 @@ class LaneNode(Node):
         self.declare_parameter('publish_debug', True)
         self.declare_parameter('debug_topic', '/perception/lane/debug')
         self.declare_parameter('jpeg_quality', 80)
+        # debug_hz: 디버그 이미지 그리기+JPEG 인코딩을 이 주기로 제한한다. 주행 로직은
+        # 카메라 풀레이트(30Hz) 그대로 돌지만, 대시보드는 ~7Hz로만 프레임을 가져가므로
+        # 30Hz 인코딩은 3/4가 버려진다. 10Hz면 보드 CPU를 아끼면서 대시보드 체감은 동일.
+        # (0 이하 = 매 프레임; 라이브로 ros2 param set /lane_node debug_hz 5.0 조절 가능)
+        self.declare_parameter('debug_hz', 10.0)
         self.declare_parameter('roi_top_ratio', 0.55)
         self.declare_parameter('bright_thresh', 160)
         self.declare_parameter('min_pixels', 40)
@@ -90,6 +95,11 @@ class LaneNode(Node):
         self.publish_debug = bool(self.get_parameter('publish_debug').value)
         self.debug_topic = str(self.get_parameter('debug_topic').value)
         self.jpeg_quality = int(self.get_parameter('jpeg_quality').value)
+        self.debug_period = 0.0
+        dbg_hz = float(self.get_parameter('debug_hz').value)
+        if dbg_hz > 0.0:
+            self.debug_period = 1.0 / dbg_hz
+        self._last_debug_t = None   # 마지막 디버그 발행 시각(초); rate-limit용
 
         gp = self.get_parameter
         # race_dir master: derive which side the dashed junction shows on.
@@ -166,6 +176,10 @@ class LaneNode(Node):
         hsv_keys = {'white_hsv_lo', 'white_hsv_hi', 'yellow_hsv_lo', 'yellow_hsv_hi'}
         for p in params:
             n, v = p.name, p.value
+            if n == 'debug_hz':
+                self.debug_period = (1.0 / float(v)) if float(v) > 0.0 else 0.0
+                self.get_logger().info(f'param live-updated: debug_hz = {v}')
+                continue
             if n in hsv_keys:
                 setattr(self.detector, n, tuple(int(x) for x in v))
             elif n in ('birdeye_src_ratio', 'birdeye_dst_ratio'):
@@ -189,9 +203,19 @@ class LaneNode(Node):
         if frame is None:
             return
 
+        # 디버그 이미지를 이번 프레임에 만들지 결정(rate-limit). 만들지 않으면 detector가
+        # 그리기 자체를 건너뛰어 인코딩+그리기 부하를 모두 던다.
+        want_debug = False
+        if self.debug_pub is not None:
+            now = self.get_clock().now().nanoseconds / 1e9
+            if (self._last_debug_t is None
+                    or (now - self._last_debug_t) >= self.debug_period):
+                want_debug = True
+                self._last_debug_t = now
+
         (lane_found, offset, num_lanes, junction,
          yellow_ratio, yellow_offset, curvature,
-         yellow_crossline, fork, debug) = self.detector.process(frame)
+         yellow_crossline, fork, debug) = self.detector.process(frame, draw_debug=want_debug)
 
         out = LaneState()
         out.header = msg.header
@@ -206,7 +230,7 @@ class LaneNode(Node):
         out.fork = bool(fork)
         self.pub.publish(out)
 
-        if self.debug_pub is not None:
+        if want_debug and debug is not None:
             ok, enc = cv2.imencode('.jpg', debug, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
             if ok:
                 dbg = CompressedImage()

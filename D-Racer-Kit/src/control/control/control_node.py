@@ -32,7 +32,12 @@ class ControlNode(Node):
         self.declare_parameter('use_joystick_control', False)
         self.declare_parameter('joystick_topic', 'joystick')
         self.declare_parameter('control_topic', '/control')
-        self.declare_parameter('command_hz', 10.0)
+        # command_hz: PCA9685(서보·ESC)에 실제로 값을 쓰는 액추에이션 주기.
+        # decision_node 는 30Hz로 /control 을 발행하는데 이게 10Hz면 최대 100ms 다운샘플
+        # 지연이 생겨 고속에서 조향 보정이 늦는다. 20Hz로 올려 지연을 절반으로 줄인다.
+        # (I2C 쓰기 빈도 2배지만 apply_actuation 이 오류를 방어처리하므로 안전.
+        #  decision 과 완전히 맞추려면 30.0 으로. 오버슈트의 주원인은 아니고 지연 개선용.)
+        self.declare_parameter('command_hz', 20.0)
         # ESC needs a neutral throttle signal held for a few seconds at startup to arm.
         # Until then, incoming throttle is ignored (kept at neutral) or the ESC never arms.
         self.declare_parameter('esc_arm_sec', 3.0)

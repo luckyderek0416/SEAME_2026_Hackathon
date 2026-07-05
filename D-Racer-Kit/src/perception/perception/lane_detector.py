@@ -177,7 +177,7 @@ class LaneDetector:
         rows_hit = row_counts > int(w_m * self.crossline_min_width_ratio)
         return bool(np.count_nonzero(rows_hit) >= int(self.crossline_min_rows))
 
-    def process(self, bgr):
+    def process(self, bgr, draw_debug=True):
         h, w = bgr.shape[:2]
         roi_top = int(h * self.roi_top_ratio)
         roi = bgr[roi_top:h, 0:w]
@@ -253,8 +253,11 @@ class LaneDetector:
         junction = self._detect_junction(clean, w)
         fork = self._detect_fork(clean, w)
 
-        debug = self._draw_debug(roi, clean, lane_center, offset, yellow_ratio,
-                                 curvature, band_windows, roi_raw, near_cx, la_cx)
+        # 디버그 이미지는 웹 대시보드용일 뿐 주행에 안 쓰인다. 프레임을 띄엄띄엄
+        # (lane_node 의 debug_hz) 보낼 때 그리기+인코딩을 통째로 건너뛰어 보드 부하를 던다.
+        debug = (self._draw_debug(roi, clean, lane_center, offset, yellow_ratio,
+                                  curvature, band_windows, roi_raw, near_cx, la_cx)
+                 if draw_debug else None)
         return (lane_found, offset, num_lanes, junction, yellow_ratio, yellow_offset,
                 curvature, yellow_crossline, fork, debug)
 
