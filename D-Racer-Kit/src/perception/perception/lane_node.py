@@ -11,6 +11,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage
+from std_msgs.msg import String
 
 from rcl_interfaces.msg import SetParametersResult
 
@@ -48,10 +49,12 @@ class LaneNode(Node):
         self.declare_parameter('white_hsv_hi', [179, 60, 255])
         self.declare_parameter('yellow_hsv_lo', [18, 45, 110])   # S floor lowered for pale/faded yellow lines
         self.declare_parameter('yellow_hsv_hi', [40, 255, 255])
-        # --- bird-eye view (default ON; src/dst below are GENERIC guesses -> tune on track) ---
+        # --- bird-eye view (default ON) ---
         # flat ratio lists [x1,y1, x2,y2, x3,y3, x4,y4] (TL,TR,BR,BL), 0..1 of ROI size
+        # src: 2026-07-05 실측 캘리브레이션 (직선 구간, 차선 픽셀 추적 fit + 워프 드리프트
+        # 최소화; 잔차 L+1.5px/R-0.3px). 카메라 높이/각도를 다시 바꾸면 재캘리브레이션 필요.
         self.declare_parameter('use_birdeye', True)
-        self.declare_parameter('birdeye_src_ratio', [0.25, 0.05, 0.75, 0.05, 0.95, 0.95, 0.05, 0.95])
+        self.declare_parameter('birdeye_src_ratio', [0.262, 0.05, 0.811, 0.05, 1.017, 0.95, 0.034, 0.95])
         self.declare_parameter('birdeye_dst_ratio', [0.20, 0.00, 0.80, 0.00, 0.80, 1.00, 0.20, 1.00])
         # --- guided band search (default ON) ---
         self.declare_parameter('use_guided_band', True)
@@ -68,6 +71,19 @@ class LaneNode(Node):
         self.declare_parameter('adaptive_lookahead', False)   # boost lookahead on sharp curves
         self.declare_parameter('curve_lookahead_weight', 0.4)
         self.declare_parameter('curve_lookahead_thresh', 0.25)
+        # --- yellow crossline (노란 가로선; 회전교차로 진입/탈출 위치 신호) ---
+        self.declare_parameter('crossline_roi_top_ratio', 0.55)     # 스캔 창 상단 (ROI h 비율)
+        self.declare_parameter('crossline_roi_bottom_ratio', 0.90)  # 스캔 창 하단
+        self.declare_parameter('crossline_min_width_ratio', 0.30)   # row가 "넓다" 판정 폭 비율
+        self.declare_parameter('crossline_min_rows', 4)             # 넓은 row 최소 줄 수
+        # --- 좌/우 갈림길 (fork) 감지 + 브랜치 선택 ---
+        self.declare_parameter('fork_topic', '/decision/fork_dir')  # decision 이 확정 방향 publish
+        self.declare_parameter('fork_scan_top_ratio', 0.0)          # 분기 스캔밴드 상단(BEV far)
+        self.declare_parameter('fork_scan_bottom_ratio', 0.5)       # 분기 스캔밴드 하단
+        self.declare_parameter('fork_col_min_ratio', 0.15)          # 컬럼=라인 판정 세로픽셀 비율
+        self.declare_parameter('fork_min_groups', 3)                # 라인 군집 개수 이상 => 분기
+        self.declare_parameter('fork_span_ratio', 0.65)             # 바깥라인 간격 폭 이상 => 분기
+        self.declare_parameter('fork_seed_px', 90)                  # 브랜치 선택 시드 이동량(px)
 
         sub_topic = str(self.get_parameter('subscribe_topic').value)
         self.lane_topic = str(self.get_parameter('lane_topic').value)
@@ -120,6 +136,16 @@ class LaneNode(Node):
             adaptive_lookahead=bool(gp('adaptive_lookahead').value),
             curve_lookahead_weight=float(gp('curve_lookahead_weight').value),
             curve_lookahead_thresh=float(gp('curve_lookahead_thresh').value),
+            crossline_roi_top_ratio=float(gp('crossline_roi_top_ratio').value),
+            crossline_roi_bottom_ratio=float(gp('crossline_roi_bottom_ratio').value),
+            crossline_min_width_ratio=float(gp('crossline_min_width_ratio').value),
+            crossline_min_rows=int(gp('crossline_min_rows').value),
+            fork_scan_top_ratio=float(gp('fork_scan_top_ratio').value),
+            fork_scan_bottom_ratio=float(gp('fork_scan_bottom_ratio').value),
+            fork_col_min_ratio=float(gp('fork_col_min_ratio').value),
+            fork_min_groups=int(gp('fork_min_groups').value),
+            fork_span_ratio=float(gp('fork_span_ratio').value),
+            fork_seed_px=int(gp('fork_seed_px').value),
         )
 
         self.pub = self.create_publisher(LaneState, self.lane_topic, 10)
@@ -128,6 +154,8 @@ class LaneNode(Node):
             self.debug_pub = self.create_publisher(CompressedImage, self.debug_topic, 10)
 
         self.create_subscription(CompressedImage, sub_topic, self.on_image, 10)
+        # decision 이 표결로 확정한 갈림길 방향('left'/'right'/'')을 받아 브랜치 선택에 쓴다.
+        self.create_subscription(String, str(gp('fork_topic').value), self.on_fork_dir, 10)
         # LIVE tuning: `ros2 param set /lane_node yellow_hsv_lo "[18,45,110]"` etc. applies
         # immediately by updating the detector (no restart), so you can watch the HSV mask
         # on the dashboard while tuning.
@@ -152,13 +180,18 @@ class LaneNode(Node):
             self.get_logger().info(f'param live-updated: {n} = {v}')
         return SetParametersResult(successful=True)
 
+    def on_fork_dir(self, msg: String):
+        d = msg.data.strip().lower()
+        self.detector.fork_dir = d if d in ('left', 'right') else None
+
     def on_image(self, msg: CompressedImage):
         frame = cv2.imdecode(np.frombuffer(msg.data, dtype=np.uint8), cv2.IMREAD_COLOR)
         if frame is None:
             return
 
         (lane_found, offset, num_lanes, junction,
-         yellow_ratio, yellow_offset, curvature, debug) = self.detector.process(frame)
+         yellow_ratio, yellow_offset, curvature,
+         yellow_crossline, fork, debug) = self.detector.process(frame)
 
         out = LaneState()
         out.header = msg.header
@@ -169,6 +202,8 @@ class LaneNode(Node):
         out.junction = bool(junction)
         out.yellow_ratio = float(yellow_ratio)
         out.yellow_offset = float(yellow_offset)
+        out.yellow_crossline = bool(yellow_crossline)
+        out.fork = bool(fork)
         self.pub.publish(out)
 
         if self.debug_pub is not None:

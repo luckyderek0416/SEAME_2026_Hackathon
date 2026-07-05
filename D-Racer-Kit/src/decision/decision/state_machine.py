@@ -49,8 +49,11 @@ class RaceStateMachine:
         # skip_missions: pure lane-following test mode (no lights/roundabout/obstacle).
         self.state = State.DRIVE if cfg.get('skip_missions') else State.WAIT_GREEN
 
-        self.turn_latch = None        # 'left' / 'right' once a turn sign is seen
-        self.turn_latch_age = 0.0     # seconds since the sign was last seen
+        self.turn_latch = None        # 'left' / 'right' once a turn sign is confirmed
+        self.turn_latch_age = 0.0     # seconds the latch has been held (failsafe timer)
+        self._fork_seen = False       # perception flagged the fork geometry during this latch
+        # decision_node 가 표결(deque)로 확정해 매 틱 넣어주는 갈림길 방향. None = 미확정.
+        self.confirmed_fork_direction = None
         self.green_count = 0
         self.red_count = 0
         self.marker_gone = 0
@@ -64,6 +67,13 @@ class RaceStateMachine:
         self.loops = 0
         self.side_present = False     # outer ring line currently visible (not a gap)
         self.yaw_proxy = 0.0          # IMU-free heading estimate (integral of steering)
+        self._entry_votes = 0         # last roundabout-entry vote count (debug/log)
+        self._exit_votes = 0          # last roundabout-exit vote count (debug/log)
+        # gate-passage counter for the branch-lock-on exit (노란 가로선 or 점선 개구부의
+        # 상승엣지 = 게이트 1회 통과). roundabout_exit_gates 회 도달 시 출구 브랜치로 락온.
+        self._gate_prev = False       # previous-frame gate signal (edge detect)
+        self._gate_count = 0          # gate passages counted this circle
+        self._gate_cd = 0.0           # debounce cooldown between counts
 
     # ---------- detection helper ----------
     def _seen(self, dets, label):
@@ -126,6 +136,9 @@ class RaceStateMachine:
         self.cooldown = self.cfg['junction_cooldown_s']  # ignore the entry junction
         self.side_present = False
         self.yaw_proxy = 0.0
+        self._gate_prev = False
+        self._gate_count = 0
+        self._gate_cd = self.cfg['junction_cooldown_s']  # ignore the entry-side gate
 
     # ---------- main tick ----------
     def step(self, lane, aruco, dets, dt):
@@ -149,20 +162,27 @@ class RaceStateMachine:
         if self.cooldown > 0.0:
             self.cooldown = max(0.0, self.cooldown - dt)
 
-        # latch a turn sign whenever one is clearly seen (Out course fork).
-        # The latch EXPIRES fork_hold_s after the sign was last seen: the fork is
-        # right after the sign, and holding the bias forever would keep pulling the
-        # car sideways for the rest of the race (lane-departure risk).
-        if self._seen(dets, 'left_sign'):
-            self.turn_latch = 'left'
+        # Fork direction comes from decision_node's MULTI-FRAME VOTE (not a single
+        # detection), passed in as confirmed_fork_direction. The sign sits BETWEEN the
+        # two branches, so "sign confirmed" == "at the fork": latch the direction, then
+        # RELEASE on GEOMETRY — when perception's fork flag turns off again (the two
+        # branches have re-merged / the road re-narrowed) after having been seen. This
+        # replaces the old timer-only hold (which stacked with decision_node's vote hold
+        # to ≈2×fork_hold_s). fork_hold_s is kept only as a FAILSAFE ceiling.
+        fork_now = bool(getattr(lane, 'fork', False))
+        if self.confirmed_fork_direction is not None:
+            self.turn_latch = self.confirmed_fork_direction
             self.turn_latch_age = 0.0
-        elif self._seen(dets, 'right_sign'):
-            self.turn_latch = 'right'
-            self.turn_latch_age = 0.0
+            if fork_now:
+                self._fork_seen = True
         elif self.turn_latch is not None:
             self.turn_latch_age += dt
-            if self.turn_latch_age >= self.cfg.get('fork_hold_s', 6.0):
+            if fork_now:
+                self._fork_seen = True
+            reconverged = self._fork_seen and not fork_now
+            if reconverged or self.turn_latch_age >= self.cfg.get('fork_hold_s', 8.0):
                 self.turn_latch = None
+                self._fork_seen = False
 
         # ----- WAIT_GREEN -----
         if self.state == State.WAIT_GREEN:
@@ -188,16 +208,25 @@ class RaceStateMachine:
         # ----- DRIVE -----
         if self.state == State.DRIVE:
             # roundabout entry (In course, only until we've done it once).
-            # The white outer loop also has curved corners, so curvature ALONE is
-            # ambiguous. The roundabout is YELLOW -> gate entry on yellow so an
-            # outer-loop corner can't trigger it.
+            # 2-of-3 VOTE: yellow_crossline (the yellow horizontal bar at the fork),
+            # junction (dashed opening), sharp curvature. No single signal can enter
+            # on its own, and the yellow_ratio gate keeps a white outer-loop corner
+            # from ever triggering it. The old enter_acc/enter_sustain_s debounce
+            # is kept: the vote must HOLD for enter_sustain_s before entering.
             if self.cfg['course'] == 'in' and not self.roundabout_done:
-                strong_curve = lane.lane_found and abs(lane.offset) >= self.cfg['enter_curvature']
+                entry_votes = 0
+                if lane.yellow_crossline:
+                    entry_votes += 1
+                if lane.junction:
+                    entry_votes += 1
+                # ⚠️ enter_curvature(기본 0.45)는 원래 |offset| 기준값이었다.
+                # curvature 는 스케일이 더 작으므로(대략 0.1~0.3) 트랙에서 재튜닝 필요.
+                if lane.lane_found and abs(lane.curvature) >= self.cfg['enter_curvature']:
+                    entry_votes += 1
+                self._entry_votes = entry_votes
                 on_yellow = lane.yellow_ratio >= self.cfg['yellow_enter_ratio']
-                if self.cfg['use_yellow_entry']:
-                    trigger = strong_curve and on_yellow   # yellow circle, not a white corner
-                else:
-                    trigger = strong_curve
+                gate = on_yellow if self.cfg['use_yellow_entry'] else True
+                trigger = gate and entry_votes >= 2
                 self.enter_acc = self.enter_acc + dt if trigger else 0.0
                 if self.enter_acc >= self.cfg['enter_sustain_s']:
                     self._start_roundabout()
@@ -238,15 +267,47 @@ class RaceStateMachine:
                 self.cooldown = self.cfg['junction_cooldown_s']
                 self.side_present = False
 
+            # (2b) GATE passage counter for the branch-lock-on exit. Count the RISING
+            # EDGE of a gate signal (yellow crossline OR dashed junction opening) with a
+            # cooldown so one physical crossing = one count (not one per frame). This is
+            # the explicit-exit trigger the fork uses in spirit: pass the exit gate
+            # roundabout_exit_gates times, then lock onto the exit branch and leave.
+            if self._gate_cd > 0.0:
+                self._gate_cd = max(0.0, self._gate_cd - dt)
+            gate_now = bool(lane.yellow_crossline or lane.junction)
+            if gate_now and not self._gate_prev and self._gate_cd <= 0.0:
+                self._gate_count += 1
+                self._gate_cd = self.cfg['junction_cooldown_s']
+            self._gate_prev = gate_now
+
             # ----- lap decision -----
             # HARD floor: never exit before min_loop_time (an under-shoot fails the
-            # mission). After that, exit when >= lap_votes_needed of the three
-            # independent estimates agree. Bias is to exit LATE, never early.
+            # mission; it also stops the entry-side yellow crossline from being
+            # mistaken for the exit). After that, exit when >= lap_votes_needed of
+            # the FOUR independent estimates agree (junction lap count, yaw proxy,
+            # time, yellow crossline back in view). Bias is to exit LATE, never early.
             if self.circle_t >= self.cfg['min_loop_time_s']:
+                # PRIMARY exit: passed the exit gate enough times -> lock onto the exit
+                # branch (same mechanism as the sign fork) so lane following steers OUT
+                # the opening instead of re-hugging the ring. turn_latch is published to
+                # perception as fork_dir and released by the fork-reconverge logic above.
+                if self._gate_count >= self.cfg['roundabout_exit_gates']:
+                    self.turn_latch = self.cfg['roundabout_exit_side']
+                    self.turn_latch_age = 0.0
+                    self._fork_seen = False
+                    self.roundabout_done = True
+                    self._enter(State.DRIVE)
+                    return steer, self.cfg['slow_throttle'], self.state.value
+
+                # FAILSAFE: gate detection may miss a pass (a no-give-up mission must
+                # still exit). Keep the 2-of-4 estimate vote as a backup (no branch
+                # lock-on; just release the ring hold).
                 junction_done = self.loops >= self.cfg['target_loops']
                 yaw_done = self.yaw_proxy >= self.cfg['yaw_lap_threshold']
                 time_done = self.circle_t >= self.cfg['nominal_loop_time_s']
-                votes = int(junction_done) + int(yaw_done) + int(time_done)
+                cross_done = bool(lane.yellow_crossline)   # exit fork's yellow bar in view
+                votes = int(junction_done) + int(yaw_done) + int(time_done) + int(cross_done)
+                self._exit_votes = votes
                 if votes >= self.cfg['lap_votes_needed']:
                     self.roundabout_done = True
                     self._enter(State.DRIVE)

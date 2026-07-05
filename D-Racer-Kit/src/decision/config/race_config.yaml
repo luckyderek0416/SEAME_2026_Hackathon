@@ -31,7 +31,7 @@ yolo_node:
     model_param: /home/topst/D-Racer/models/model.ncnn.param
     model_bin: /home/topst/D-Racer/models/model.ncnn.bin
     conf_threshold: 0.5
-    infer_hz: 10.0             # YOLO 는 차선추종보다 느리게 돌린다 (의도적)
+    infer_hz: 6.0             # YOLO 는 차선추종보다 느리게 돌린다 (의도적)
     imgsz: 320
 
 decision_node:

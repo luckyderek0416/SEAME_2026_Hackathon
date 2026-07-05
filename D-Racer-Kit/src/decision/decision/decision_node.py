@@ -4,10 +4,12 @@ and publishes Control to /control (which the kit's control_node actuates).
 Run control_node with use_joystick_control:=False so it listens to /control.
 """
 
+from collections import deque
+
 import rclpy
 from rclpy.node import Node
 from rcl_interfaces.msg import SetParametersResult
-from std_msgs.msg import Header
+from std_msgs.msg import Header, String
 
 from perception_msgs.msg import LaneState, ArucoState
 from inference_msgs.msg import Detections
@@ -25,10 +27,11 @@ class DecisionNode(Node):
         self.declare_parameter('aruco_topic', '/perception/aruco')
         self.declare_parameter('detections_topic', '/inference/detections')
         self.declare_parameter('control_topic', '/control')
+        self.declare_parameter('fork_dir_topic', '/decision/fork_dir')  # 확정 방향을 perception 에 전달
         self.declare_parameter('control_hz', 30.0)
 
         # ----- strategy -----
-        self.declare_parameter('course', 'out')     # 'out' = S-curve+fork, 'in' = roundabout
+        self.declare_parameter('course', 'in')     # 'out' = S-curve+fork, 'in' = roundabout
         self.declare_parameter('skip_missions', False)  # True = pure lane-following test (no missions)
 
         # ----- lane PID + steering mapping -----
@@ -53,8 +56,13 @@ class DecisionNode(Node):
         self.declare_parameter('red_frames', 3)
         self.declare_parameter('marker_area_trigger', 0.02)
         self.declare_parameter('marker_clear_frames', 5)
-        self.declare_parameter('fork_bias', 0.4)
-        self.declare_parameter('fork_hold_s', 6.0)  # 표지판 마지막 인식 후 fork_bias 유지 시간(초)
+        self.declare_parameter('fork_bias', 0.2)    # 브랜치 선택(perception)이 주역이라 진입 보조용으로 축소
+        self.declare_parameter('fork_hold_s', 8.0)  # latch failsafe: fork 신호가 계속 켜져 있어도 이 시간 지나면 해제(초)
+        # ----- 갈림길 표지판 방향 표결 (decision_node 로컬; on_dets 에서 사용) -----
+        self.declare_parameter('fork_sign_min_conf', 0.50)  # 이 confidence 미만 표지판은 무시
+        self.declare_parameter('fork_sign_vote_window', 5)  # 최근 detection 메시지 표결 창(int)
+        self.declare_parameter('fork_sign_vote_min', 2)     # 같은 방향 이 개수 이상이면 확정(int)
+        self.declare_parameter('fork_vote_clear_s', 1.0)    # 표지판 끊긴 뒤 표결 초기화까지(떨림방지창; 홀드 아님)
 
         # ----- roundabout (junction-count, no IMU) -----
         self.declare_parameter('enter_curvature', 0.45)   # |lane offset| above this ...
@@ -82,6 +90,11 @@ class DecisionNode(Node):
         # yellow gates roundabout entry (the roundabout is yellow; the outer loop is white)
         self.declare_parameter('use_yellow_entry', True)
         self.declare_parameter('yellow_enter_ratio', 0.06)  # ROI yellow fraction => in roundabout
+        # --- 회전교차로 탈출 = 갈림길과 동일한 브랜치 락온 ---
+        # 링을 돌며 게이트(노란 가로선 or 점선 개구부)의 상승엣지를 세고, 이 횟수에
+        # 도달하면 출구 브랜치로 락온해 명시적으로 빠져나간다(암묵적 바이어스 해제 대신).
+        self.declare_parameter('roundabout_exit_gates', 2)   # 게이트 통과 이 횟수면 탈출(엣지 카운트)
+        self.declare_parameter('roundabout_exit_side', '')   # 출구 브랜치 side; '' 이면 race_dir 파생
 
         g = self.get_parameter
         race_dir = str(g('race_dir').value).lower()
@@ -91,6 +104,11 @@ class DecisionNode(Node):
             turn_direction = -1.0
         else:
             turn_direction = float(g('turn_direction').value)
+        # 회전교차로 출구 브랜치 side: 명시값 없으면 race_dir 에서 파생(junction_side 와 동일
+        # 원리). 정방향(race_dir=left/CCW)=출구 오른쪽, 역방향(right/CW)=출구 왼쪽.
+        exit_side = str(g('roundabout_exit_side').value).lower()
+        if exit_side not in ('left', 'right'):
+            exit_side = 'right' if race_dir == 'left' else 'left'
         cfg = {
             'course': str(g('course').value),
             'skip_missions': bool(g('skip_missions').value),
@@ -126,6 +144,8 @@ class DecisionNode(Node):
             'lap_votes_needed': int(g('lap_votes_needed').value),
             'use_yellow_entry': bool(g('use_yellow_entry').value),
             'yellow_enter_ratio': float(g('yellow_enter_ratio').value),
+            'roundabout_exit_gates': int(g('roundabout_exit_gates').value),
+            'roundabout_exit_side': exit_side,
         }
         self.sm = RaceStateMachine(cfg)
 
@@ -139,8 +159,19 @@ class DecisionNode(Node):
             'kp', 'ki', 'kd',   # PID 게인 (조향 세기) 트랙에서 라이브 튜닝
             'max_steering_delta', 'steer_slow',   # look-ahead 보조 (rate limit / 조향 감속)
             'fork_bias', 'fork_hold_s',           # 갈림길 편향 세기 / 유지 시간
+            'roundabout_exit_gates',              # 회전교차로 탈출 게이트 카운트 (트랙 실측)
         }
         self._prev_steer = None   # rate limit 용 직전 조향값
+        # 갈림길 표지판 표결 상태 (decision_node 로컬)
+        self.fork_sign_min_conf = float(g('fork_sign_min_conf').value)
+        self.fork_sign_vote_window = int(g('fork_sign_vote_window').value)
+        self.fork_sign_vote_min = int(g('fork_sign_vote_min').value)
+        self.fork_vote_clear_s = float(g('fork_vote_clear_s').value)
+        self._fork_votes = deque(maxlen=self.fork_sign_vote_window)
+        self.last_fork_sign_time = None
+        self.fork_sign_confidence = 0.0
+        self._last_fork_dir = None            # 이번 프레임 감지된 방향(디버그)
+        self.confirmed_fork_direction = None  # 표결로 확정된 방향
         self.add_on_set_parameters_callback(self._on_set_parameters)
 
         # latest inputs (safe defaults)
@@ -153,6 +184,8 @@ class DecisionNode(Node):
         self.create_subscription(ArucoState, str(g('aruco_topic').value), self.on_aruco, 10)
         self.create_subscription(Detections, str(g('detections_topic').value), self.on_dets, 10)
         self.pub = self.create_publisher(Control, str(g('control_topic').value), 10)
+        # 확정된 갈림길 방향을 perception(lane_node)에 전달 -> 브랜치 선택(guide 시드).
+        self.fork_dir_pub = self.create_publisher(String, str(g('fork_dir_topic').value), 10)
 
         self.dt = 1.0 / float(g('control_hz').value)
         self.timer = self.create_timer(self.dt, self.on_timer)
@@ -161,6 +194,24 @@ class DecisionNode(Node):
     def _on_set_parameters(self, params):
         """ros2 param set 요청을 받아 state_machine 설정을 라이브로 갱신."""
         for p in params:
+            # 갈림길 표결 파라미터는 sm.cfg 가 아니라 decision_node 로컬이라 별도 처리.
+            if p.name == 'fork_sign_min_conf':
+                self.fork_sign_min_conf = float(p.value)
+                self.get_logger().info(f'[live] fork_sign_min_conf -> {self.fork_sign_min_conf:g}')
+                continue
+            if p.name == 'fork_sign_vote_min':
+                self.fork_sign_vote_min = int(p.value)
+                self.get_logger().info(f'[live] fork_sign_vote_min -> {self.fork_sign_vote_min}')
+                continue
+            if p.name == 'fork_vote_clear_s':
+                self.fork_vote_clear_s = float(p.value)
+                self.get_logger().info(f'[live] fork_vote_clear_s -> {self.fork_vote_clear_s:g}')
+                continue
+            if p.name == 'fork_sign_vote_window':
+                self.fork_sign_vote_window = int(p.value)
+                self._fork_votes = deque(self._fork_votes, maxlen=self.fork_sign_vote_window)
+                self.get_logger().info(f'[live] fork_sign_vote_window -> {self.fork_sign_vote_window}')
+                continue
             if p.name in self.live_tunable and p.name in self.sm.cfg:
                 try:
                     value = float(p.value)
@@ -184,9 +235,54 @@ class DecisionNode(Node):
 
     def on_dets(self, msg):
         self.dets = list(msg.detections)
+        self._vote_fork_sign(msg)
+
+    def _vote_fork_sign(self, msg):
+        """갈림길 표지판 방향 표결 (메시지당 1표). 한 프레임 오검출로 방향을 확정하지
+        않도록, 최근 fork_sign_vote_window 개 detection 메시지에서 left/right 를 누적해
+        fork_sign_vote_min 이상인 방향만 confirmed_fork_direction 으로 확정한다.
+        step() 이 30Hz 로 도는 것과 무관하게, 표는 detection 메시지가 올 때만 쌓인다."""
+        best = None  # (direction, confidence)
+        for d in msg.detections:
+            if d.label in ('left_sign', 'right_sign') and d.confidence >= self.fork_sign_min_conf:
+                direction = 'left' if d.label == 'left_sign' else 'right'
+                if best is None or d.confidence > best[1]:
+                    best = (direction, d.confidence)
+        self._last_fork_dir = best[0] if best else None
+        if best is not None:
+            self._fork_votes.append(best[0])
+            self.last_fork_sign_time = self.get_clock().now()
+            self.fork_sign_confidence = best[1]
+
+        # 표지판이 fork_vote_clear_s 이상 안 들어오면 표결 초기화(오래된 표는 버린다).
+        # 이건 '떨림 방지창'일 뿐, 갈림길 통과까지의 홀드는 state_machine 이 lane.fork
+        # (도로 재수렴) 기준으로 단독 담당한다 => 예전 홀드 이중적용(≈2×) 제거.
+        if self.last_fork_sign_time is not None:
+            age = (self.get_clock().now() - self.last_fork_sign_time).nanoseconds / 1e9
+            if age >= self.fork_vote_clear_s:
+                self._fork_votes.clear()
+                self.confirmed_fork_direction = None
+                self.fork_sign_confidence = 0.0
+                return
+
+        left = self._fork_votes.count('left')
+        right = self._fork_votes.count('right')
+        if max(left, right) >= self.fork_sign_vote_min:
+            if left > right:
+                self.confirmed_fork_direction = 'left'
+            elif right > left:
+                self.confirmed_fork_direction = 'right'
+            else:                                   # 동수 -> 최근 표
+                self.confirmed_fork_direction = self._fork_votes[-1]
 
     def on_timer(self):
+        # 표결로 확정된 갈림길 방향을 상태머신에 전달(step 전). None 이면 무편향.
+        self.sm.confirmed_fork_direction = self.confirmed_fork_direction
         steer, throttle, state = self.sm.step(self.lane, self.aruco, self.dets, self.dt)
+        # 래치된 방향을 perception 에 publish -> lane_node 가 브랜치 선택(guide 시드)에 사용.
+        # 표지판이 시야에서 사라진 뒤에도 latch 가 유지되는 동안(갈림길 통과 전) 계속
+        # 그 브랜치를 좇게 하려고, confirmed 가 아니라 sm.turn_latch 를 보낸다.
+        self.fork_dir_pub.publish(String(data=self.sm.turn_latch or ''))
         cfg = self.sm.cfg
         # 조향 rate limit: 틱당 변화량 제한으로 프레임 간 조향 급변(튐)을 막는다.
         # 0 이면 완전 비활성(기존 동작). roundabout 의 yaw 적분은 제한 전 값을 쓰지만
@@ -209,7 +305,13 @@ class DecisionNode(Node):
         self.pub.publish(out)
         self.get_logger().debug(
             f'[{state}] steer={steer:.3f} thr={throttle:.3f} '
-            f'off={self.lane.offset:+.3f} curv={self.lane.curvature:+.3f}'
+            f'off={self.lane.offset:+.3f} curv={self.lane.curvature:+.3f} '
+            f'xline={int(self.lane.yellow_crossline)} junc={int(self.lane.junction)} '
+            f'fork={int(self.lane.fork)} '
+            f'yr={self.lane.yellow_ratio:.2f} '
+            f'entryV={self.sm._entry_votes} exitV={self.sm._exit_votes} gate={self.sm._gate_count} '
+            f'forkDet={self._last_fork_dir} forkFix={self.confirmed_fork_direction} '
+            f'forkConf={self.fork_sign_confidence:.2f} latch={self.sm.turn_latch}'
         )
 
 

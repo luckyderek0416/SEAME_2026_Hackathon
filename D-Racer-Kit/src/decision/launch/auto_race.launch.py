@@ -1,6 +1,6 @@
 """Bring up the full autonomous-racing stack.
 
-  ros2 launch decision auto_race.launch.py course:=out
+  ros2 launch decision auto_race.launch.py course:=in
   ros2 launch decision auto_race.launch.py course:=in model_path:=/path/best.pt
 
 Reuses the kit's camera_node and control_node; adds lane/aruco/yolo/decision.
@@ -24,7 +24,7 @@ def generate_launch_description():
     vehicle_config = LaunchConfiguration('vehicle_config')
 
     return LaunchDescription([
-        DeclareLaunchArgument('course', default_value='out',
+        DeclareLaunchArgument('course', default_value='in',
                               description="'out' (S-curve+fork) or 'in' (roundabout)"),
         DeclareLaunchArgument('race_dir', default_value='left',
                               description="START direction set on race day: 'left' (CCW) or 'right' (CW). "

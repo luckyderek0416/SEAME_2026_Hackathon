@@ -32,7 +32,12 @@ class LaneDetector:
                  guide_min_pixels=20, guide_use_previous_frame=True, guide_max_jump_px=80,
                  use_lookahead_control=False, near_weight=0.7, lookahead_weight=0.3,
                  lookahead_band_index=-1, adaptive_lookahead=False,
-                 curve_lookahead_weight=0.4, curve_lookahead_thresh=0.25):
+                 curve_lookahead_weight=0.4, curve_lookahead_thresh=0.25,
+                 crossline_roi_top_ratio=0.55, crossline_roi_bottom_ratio=0.90,
+                 crossline_min_width_ratio=0.30, crossline_min_rows=4,
+                 fork_scan_top_ratio=0.0, fork_scan_bottom_ratio=0.5,
+                 fork_col_min_ratio=0.15, fork_min_groups=3, fork_span_ratio=0.65,
+                 fork_seed_px=90):
         self.roi_top_ratio = roi_top_ratio        # use only the bottom (1 - ratio) of the frame
         self.bright_thresh = bright_thresh         # gray-mode white-line brightness threshold (0-255)
         self.min_pixels = min_pixels               # min lane pixels per side to trust it
@@ -93,9 +98,33 @@ class LaneDetector:
         self.adaptive_lookahead = adaptive_lookahead
         self.curve_lookahead_weight = curve_lookahead_weight  # lookahead weight on sharp curves
         self.curve_lookahead_thresh = curve_lookahead_thresh  # |curvature| that counts as sharp
+        # --- yellow crossline (노란 가로선) detection ---
+        # A wide horizontal yellow band only appears near the roundabout entry/exit
+        # fork, so it is a POSITION signal. Detected on the yellow-only mask (never
+        # the combined lane mask) and used purely as one extra vote in decision's
+        # roundabout entry/exit logic — it does NOT touch lane-centre computation.
+        self.crossline_roi_top_ratio = crossline_roi_top_ratio       # scan window top (0..1 of ROI h)
+        self.crossline_roi_bottom_ratio = crossline_roi_bottom_ratio # scan window bottom
+        self.crossline_min_width_ratio = crossline_min_width_ratio   # row is "wide" above this fraction of w
+        self.crossline_min_rows = crossline_min_rows                 # need this many wide rows
+        # --- 좌/우 갈림길 (fork) 감지 + 브랜치 선택 ---
+        # 분기 구간은 도로가 두 브랜치로 갈라져, BEV 상단 스캔밴드에서 세로 라인 군집이
+        # 3개 이상(각 브랜치 안/바깥선)이거나 바깥 라인 간격이 한 차선보다 훨씬 넓어진다.
+        # 이 fork 플래그는 decision 의 turn_latch 해제(도로 재수렴) 기준으로만 쓰이고,
+        # 차선 중심 계산은 건드리지 않는다.
+        self.fork_scan_top_ratio = fork_scan_top_ratio        # 스캔밴드 상단 (BEV far)
+        self.fork_scan_bottom_ratio = fork_scan_bottom_ratio  # 스캔밴드 하단
+        self.fork_col_min_ratio = fork_col_min_ratio          # 컬럼이 '라인'으로 세는 세로픽셀 비율
+        self.fork_min_groups = fork_min_groups                # 라인 군집 이 개수 이상 => 분기
+        self.fork_span_ratio = fork_span_ratio                # 바깥라인 간격 이 폭 이상 => 분기(폴백)
+        # fork_dir: decision 이 표결 확정한 방향('left'/'right'/None). lane_node 가
+        # /decision/fork_dir 구독으로 매 프레임 갱신한다. 설정되면 guided-band 시드를
+        # 그 브랜치 쪽으로 밀어(fork_seed_px) 한쪽 브랜치만 추종 => median(표지판 섬) 배제.
+        self.fork_dir = None
+        self.fork_seed_px = fork_seed_px
 
     def _build_mask(self, roi):
-        """Return (lane_mask, yellow_ratio, yellow_offset).
+        """Return (lane_mask, yellow_ratio, yellow_offset, yellow_crossline).
 
         HSV mode = white|yellow lane mask; gray mode = brightness threshold.
         yellow_ratio  = fraction of ROI that is yellow (tells the yellow roundabout
@@ -103,17 +132,21 @@ class LaneDetector:
         yellow_offset = normalised x of the yellow centroid, [-1..1] (+ = yellow is
                         to the right). Lets decision steer toward the yellow branch
                         regardless of which side it is on (direction-agnostic).
+        yellow_crossline = a wide horizontal yellow band is in view (roundabout
+                        entry/exit fork position marker). Computed on the
+                        yellow-only mask; never affects the lane centre.
         """
         if self.mask_mode == 'gray':
             gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
             _, mask = cv2.threshold(gray, self.bright_thresh, 255, cv2.THRESH_BINARY)
-            return mask, 0.0, 0.0
+            return mask, 0.0, 0.0, False
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         w = hsv.shape[1]
         mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
         if self.use_white:
             mask = cv2.bitwise_or(mask, cv2.inRange(hsv, self.white_hsv_lo, self.white_hsv_hi))
         yellow_ratio, yellow_offset = 0.0, 0.0
+        yellow_crossline = False
         if self.use_yellow:
             ymask = cv2.inRange(hsv, self.yellow_hsv_lo, self.yellow_hsv_hi)
             mask = cv2.bitwise_or(mask, ymask)
@@ -121,7 +154,28 @@ class LaneDetector:
             xs = np.nonzero(ymask)[1]
             if xs.size >= self.min_pixels:
                 yellow_offset = float((xs.mean() - w / 2.0) / (w / 2.0))
-        return mask, yellow_ratio, yellow_offset
+            yellow_crossline = self._detect_crossline(ymask)
+        return mask, yellow_ratio, yellow_offset, yellow_crossline
+
+    def _detect_crossline(self, ymask):
+        """Yellow HORIZONTAL line detector (cheap row-count scan, no contours/Hough).
+
+        Scans the lower-middle window of the yellow-only mask: a row counts as
+        "wide" when its yellow pixels span more than crossline_min_width_ratio of
+        the image width (a normal lane line is a thin, near-vertical stripe and
+        never gets that wide), and we need crossline_min_rows such rows.
+        Runs on the BEV-warped mask when use_birdeye is on (roi is already warped
+        before _build_mask), which makes the line's width perspective-stable.
+        """
+        h_m, w_m = ymask.shape[:2]
+        y1 = int(h_m * self.crossline_roi_top_ratio)
+        y2 = int(h_m * self.crossline_roi_bottom_ratio)
+        if y2 <= y1:
+            return False
+        cross_roi = ymask[y1:y2, :]
+        row_counts = np.count_nonzero(cross_roi, axis=1)
+        rows_hit = row_counts > int(w_m * self.crossline_min_width_ratio)
+        return bool(np.count_nonzero(rows_hit) >= int(self.crossline_min_rows))
 
     def process(self, bgr):
         h, w = bgr.shape[:2]
@@ -132,7 +186,7 @@ class LaneDetector:
         if self.use_birdeye:
             roi = self._apply_birdeye(roi)   # falls back to raw ROI on failure
 
-        mask, yellow_ratio, yellow_offset = self._build_mask(roi)
+        mask, yellow_ratio, yellow_offset, yellow_crossline = self._build_mask(roi)
 
         # (4) noise cleanup: MORPH_OPEN removes marble-floor glare specks and the small
         # gaps of a dashed line, so the lane centre is not pulled by stray pixels.
@@ -197,10 +251,12 @@ class LaneDetector:
         offset = float(self._offset_ema)
 
         junction = self._detect_junction(clean, w)
+        fork = self._detect_fork(clean, w)
 
         debug = self._draw_debug(roi, clean, lane_center, offset, yellow_ratio,
                                  curvature, band_windows, roi_raw, near_cx, la_cx)
-        return lane_found, offset, num_lanes, junction, yellow_ratio, yellow_offset, curvature, debug
+        return (lane_found, offset, num_lanes, junction, yellow_ratio, yellow_offset,
+                curvature, yellow_crossline, fork, debug)
 
     def _band_center(self, band, w):
         """Lane centre for one horizontal band, searching the FULL width and
@@ -242,6 +298,13 @@ class LaneDetector:
         band_windows = []
         near_lanes = 0
         guide = None
+        # 브랜치 선택: 방향이 확정됐으면(=분기 도착) 시드를 그 브랜치 쪽으로 밀어
+        # band 0 부터 windowed search 로 한쪽 브랜치만 좇게 한다. guide_max_jump_px 클램프가
+        # 다음 밴드에서 반대 브랜치로 튀는 것을 막아 락온을 유지한다.
+        if self.fork_dir == 'left':
+            guide = w / 2.0 - self.fork_seed_px
+        elif self.fork_dir == 'right':
+            guide = w / 2.0 + self.fork_seed_px
         for i in range(self.num_bands):
             y1 = roi_h - i * band_h
             y0 = max(0, roi_h - (i + 1) * band_h)
@@ -356,6 +419,32 @@ class LaneDetector:
         dashed = transitions >= self.junction_dash_transitions
         full_gap = present_rows <= self.junction_gap_rows
         return bool(dashed or full_gap)
+
+    def _detect_fork(self, mask, w):
+        """좌/우 갈림길(fork) 구간 감지.
+
+        분기에서는 도로가 두 브랜치로 갈라져, BEV 상단 스캔밴드의 세로 라인 군집이
+        늘어난다(한 차선=좌·우 2군집 -> 분기=각 브랜치의 안/바깥선으로 3~4군집). 또는
+        가장 바깥 두 라인 간격(span)이 한 차선보다 훨씬 넓어진다. 둘 중 하나면 분기로 본다.
+        컬럼별 세로픽셀 수를 세어, '라인' 컬럼의 연속 런(run) 개수와 바깥 span 으로 판정한다.
+        decision 의 turn_latch 해제(도로 재수렴 = fork False) 기준으로만 쓰인다."""
+        h_m = mask.shape[0]
+        y1 = int(h_m * self.fork_scan_top_ratio)
+        y2 = int(h_m * self.fork_scan_bottom_ratio)
+        if y2 <= y1:
+            return False
+        band = mask[y1:y2, :]
+        band_h = y2 - y1
+        col_on = np.count_nonzero(band, axis=0) >= max(1, int(band_h * self.fork_col_min_ratio))
+        if not bool(col_on.any()):
+            return False
+        # 연속 'on' 컬럼 런(=라인 군집) 개수
+        groups = int(np.count_nonzero(np.diff(col_on.astype(np.int8)) == 1))
+        if col_on[0]:
+            groups += 1
+        on_idx = np.nonzero(col_on)[0]
+        span = float(on_idx[-1] - on_idx[0])
+        return bool(groups >= self.fork_min_groups or span >= self.fork_span_ratio * w)
 
     def _mean_x(self, half_mask, x_offset, min_pixels=None):
         # min_pixels=None keeps the legacy threshold; guided windows are narrow so

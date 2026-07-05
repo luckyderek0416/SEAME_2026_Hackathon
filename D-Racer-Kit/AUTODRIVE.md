@@ -2,7 +2,7 @@
 
 TOPST D-Racer-Kit 기본 노드(`camera`, `control`, `joystick`, `monitor`, `battery`)
 위에 자율주행 노드(`perception`, `inference`, `decision` + msgs)를 얹은 구조.
-**2026-07-03 코드 기준.** 미구현/리스크는 루트의 `MISSING_FEATURES.md` 참고.
+**2026-07-05 코드 기준.** 미구현/리스크는 루트의 `MISSING_FEATURES.md` 참고.
 
 ## 데이터 흐름
 
@@ -37,7 +37,7 @@ joystick_node ─/joystick(E-stop)──> control_node ──PWM(I2C/PCA9685)─
 
 ```
 프레임 → ROI 자르기(아래 45%, roi_top_ratio=0.55)
-       → [BEV ON] perspective warp (birdeye_src_ratio → dst_ratio)   ← 기본 ON, src 튜닝 필요
+       → [BEV ON] perspective warp (birdeye_src_ratio → dst_ratio)   ← 기본 ON, src 캘리브레이션 완료(2026-07-05)
        → HSV 마스크: 흰색 ∪ 노란색 (mask_mode=hsv)
        → morphology 노이즈 제거 (morph_kernel=3)
        → 멀티밴드 분석 (num_bands=4, 아래→위 = 가까운곳→먼곳):
@@ -51,12 +51,19 @@ joystick_node ─/joystick(E-stop)──> control_node ──PWM(I2C/PCA9685)─
        → curvature = 밴드 중심의 아래→위 drift (커브 세기)
        → junction = 바깥 차선의 점선/개방 감지 (갈림길·회전교차로 입구)
        → yellow_ratio / yellow_offset = 노란 픽셀 비율·위치 (In/Out 분기, 회전교차로 진입 게이트)
+       → yellow_crossline = 노란 "가로선" 감지 (yellow-only 마스크 하단창 행-폭 스캔;
+                            회전교차로 진입/탈출 위치 신호. 차선 중심엔 영향 없음)
        → offset EMA 스무딩 (smooth_alpha=0.5) → LaneState 발행
 ```
 
 - **BEV / GUIDED / LA 셋 다 기본 ON** (`use_birdeye`, `use_guided_band`,
   `use_lookahead_control`). 끄면 원래 파이프라인과 동일. 상세: `docs/lane_bev_guided.md`,
   `docs/lookahead_control.md`.
+- **BEV src는 2026-07-05 실측 캘리브레이션됨** (`birdeye_src_ratio`
+  = `[0.262,0.05, 0.811,0.05, 1.017,0.95, 0.034,0.95]`, 직선구간 차선 픽셀 추적 fit,
+  워프 후 잔차 ≤1.5px). **카메라 마운트를 다시 만지면 재캘리브레이션 필요.**
+- `LaneState` 필드: `lane_found, offset, curvature, num_lanes, junction,
+  yellow_ratio, yellow_offset, yellow_crossline`.
 - lane lost 시: `lane_found=false` + 마지막 offset EMA 유지 → decision이 직진 유지.
 - 디버그 이미지(`/perception/lane/debug`): BEV ON이면 위 SRC 뷰(원본+노란 소스 사각형)
   + 아래 분석 뷰. 밴드 창(마젠타), 밴드 중심(주황), lane center(빨강), 상태 텍스트.
@@ -99,25 +106,37 @@ ROUNDABOUT: slow_throttle 고정
 ```
 WAIT_GREEN ──(green_light 3프레임 연속)──▶ DRIVE
 DRIVE:
-  · 좌/우 표지판 보이면 latch → fork_bias(0.4) 편향, 마지막 인식 후 fork_hold_s(6s) 지나면 해제
+  · 갈림길 표지판: on_dets 표결(최근 5개 중 같은 방향 ≥2 → confirmed_fork_direction 확정)
+      → turn_latch = 확정방향, fork_bias(0.4) 편향(offset 타깃에 left −/right +),
+        표결 사라지고 fork_hold_s(6s) 지나면 해제. DRIVE에서만 적용(ROUNDABOUT 자동 억제)
   · 갈림길에서 노란색 보이면 branch_bias: In코스=노란쪽으로 / Out코스=반대쪽으로 (방향 자동)
-  · [In코스] |offset|≥0.45 가 0.6s 지속 + 노란 비율 ≥0.06 ──▶ ROUNDABOUT
+  · [In코스] 진입 = 2-of-3 표결(yellow_crossline / junction / |curvature|≥enter_curvature)
+        + 노란 비율 ≥0.06 게이트, 이 조건이 enter_sustain_s(0.6s) 지속 ──▶ ROUNDABOUT
   · red_light 3프레임 연속 ──▶ FINISH
 어느 상태든: 아루코 면적비 ≥0.02 ──▶ OBSTACLE_STOP (정지)
 OBSTACLE_STOP ──(마커 5프레임 연속 소실)──▶ 직전 상태 복귀 (랩 카운트 유지)
 ROUNDABOUT:
   · 조향에 turn_direction × circle_steer_bias(0.15) 더해 링 유지 (조기 이탈 방지)
-  · 랩 판정 = 3-표결 (2표 이상): ①junction 재등장 ②조향 적분(yaw proxy)
-    ≥ yaw_lap_threshold ③경과시간 ≥ nominal_loop_time_s
-  · 단, min_loop_time_s(3s) 전엔 절대 탈출 안 함 / max_loop_time_s(20s)면 강제 탈출
+  · 랩 판정 = 4-표결 (lap_votes_needed=2표 이상): ①junction 랩 카운트(loops≥target)
+    ②조향 적분(yaw proxy) ≥ yaw_lap_threshold ③경과시간 ≥ nominal_loop_time_s
+    ④yellow_crossline(탈출 갈림길 노란 가로선 재등장)
+  · 단, min_loop_time_s(3s) 전엔 절대 탈출 안 함(진입측 가로선을 출구로 오인 방지)
+    / max_loop_time_s(20s)면 강제 탈출
   · 탈출 ──▶ DRIVE (roundabout_done, 재진입 안 함)
 FINISH ──(red_light 재확인)──▶ DONE (완전 정지)
 ```
 
+- **갈림길 방향은 한 프레임 오검출이 아니라 표결로 확정** (`decision_node.on_dets`의
+  `deque(maxlen=fork_sign_vote_window=5)`, `fork_sign_vote_min=2`,
+  `fork_sign_min_conf=0.5`). 확정 방향을 매 틱 state_machine에 넘겨 `turn_latch`로 사용.
+- **회전교차로 진입은 `|offset|`이 아니라 `|curvature|`** 기준으로 바뀜(enter_curvature).
+  ⚠️ 기본값 0.45는 옛 offset용이라 curvature 스케일엔 과함 → 트랙 재튜닝 필요(MISSING #2).
 - `skip_missions:=true` = 순수 차선추종 모드 (신호등/미션 전부 무시, 즉시 주행).
   차선/PID 튜닝은 항상 이 모드로.
 - `race_dir` (left=반시계/right=시계) **하나만** 당일 설정하면 회전교차로 방향,
   junction 탐색 방향이 함께 뒤집힌다.
+- decision debug 로그(`--log-level decision_node:=debug`): `xline/junc/yr/entryV/exitV/
+  forkDet/forkFix/forkConf/latch` 로 인지 신호와 표결 상태를 실시간 확인.
 
 ## ③ 구동 — control_node (킷 + 안정화 패치)
 
@@ -145,19 +164,24 @@ ros2 launch decision auto_race.launch.py course:=in
 ```
 
 - launch는 `race_config.yaml`을 **로드하지 않는다.** 시작값 = 소스 기본값.
-- 주행 중 라이브 튜닝: `ros2 param set /decision_node drive_throttle 0.16`
-  (drive/slow/stop_throttle, curve_slow, kp/ki/kd, steer_center/scale,
-  max_steering_delta, steer_slow, fork_bias, fork_hold_s 모두 가능)
+- 주행 중 라이브 튜닝:
+  - decision_node: `drive/slow/stop_throttle, curve_slow, kp/ki/kd, steer_center/scale,
+    max_steering_delta, steer_slow, fork_bias, fork_hold_s, fork_sign_min_conf,
+    fork_sign_vote_window(int), fork_sign_vote_min(int)`
+  - lane_node: `birdeye_src_ratio, use_birdeye, HSV 범위, crossline_* ` 등 즉시 반영
+    (예: `ros2 param set /lane_node crossline_min_rows 5`)
 - 확정값은 소스 기본값에 반영 후 **반드시 리빌드** (symlink-install 아님):
   `colcon build --packages-select decision perception`
+  (LaneState.msg 를 바꾸면 `perception_msgs` 부터: `--packages-select perception_msgs perception decision`)
 
 ## 튜닝 순서 (트랙에서)
 
-1. **BEV src 캘리브레이션** — 모니터 SRC 뷰 노란 사각형을 트랙 사다리꼴에 맞추기.
-   이상하면 `use_birdeye false`로 끄고 진행.
+1. ~~BEV src 캘리브레이션~~ **완료(2026-07-05)** — 카메라 마운트 바꿨을 때만 재캘리브레이션.
+   ("src 튜닝해줘" 요청 시 직선구간 차 중앙 정렬 후 자동 재계산.)
 2. **차선 인식** — HSV 범위·roi_top_ratio로 빨간 중심선 안정화.
 3. **PID** — `skip_missions:=true`로 kp↑(따라가게) → 떨리면 kd↑. 필요 시
    `max_steering_delta 0.1`, `steer_slow 0.4`.
 4. **스로틀** — drive_throttle 낮게 시작, 이탈 않는 선까지.
-5. **미션 하나씩** — green → red → 표지판(fork_hold_s 실측) → 아루코 →
-   (In 코스면) 회전교차로 랩 캘리브레이션.
+5. **갈림길** — 표지판 실거리 인식 확인, `fork_bias`(0.4는 큼 → 0.2~0.3), `fork_hold_s` 실측.
+6. **미션 하나씩** — green → red → 표지판 → 아루코 → (In 코스면) `enter_curvature`
+   재튜닝 + 회전교차로 랩 캘리브레이션(`yaw_lap_threshold`, `nominal_loop_time_s`).
