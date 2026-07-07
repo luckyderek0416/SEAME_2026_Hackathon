@@ -1,8 +1,8 @@
-"""lane_node: OpenCV lane following.
+"""lane_node: OpenCV 기반 차선 추종.
 
-Subscribes to the camera image, runs LaneDetector, and publishes a
-LaneState (normalised offset). Optionally republishes a debug image so
-you can watch the detection in the kit's monitor dashboard.
+카메라 이미지를 구독해 LaneDetector 를 돌리고, LaneState(정규화된 offset)를
+publish 한다. 옵션으로 디버그 이미지를 다시 publish 해서 키트의 모니터
+대시보드에서 검출 과정을 지켜볼 수 있다.
 """
 
 import cv2
@@ -36,44 +36,44 @@ class LaneNode(Node):
         self.declare_parameter('roi_top_ratio', 0.55)
         self.declare_parameter('bright_thresh', 160)
         self.declare_parameter('min_pixels', 40)
-        # --- robust lane following (multi-band look-ahead, curvature, smoothing) ---
-        self.declare_parameter('num_bands', 4)        # look-ahead bands for curves
-        self.declare_parameter('morph_kernel', 3)     # noise cleanup (glare/dashes); 0=off
-        self.declare_parameter('width_ema', 0.1)      # lane-width memory adapt rate
-        self.declare_parameter('smooth_alpha', 0.5)   # offset smoothing (lower=smoother)
-        self.declare_parameter('race_dir', 'left')                 # 'left'/'right' master; derives junction_side
-        self.declare_parameter('junction_side', 'right')           # used only if race_dir is not left/right
-        self.declare_parameter('junction_dash_transitions', 3)     # vertical on/off changes => dashed
-        self.declare_parameter('junction_min_row_pixels', 2)       # row counts as 'line' above this
-        self.declare_parameter('junction_gap_rows', 2)             # full-opening fallback
-        # --- colour masking (white + yellow lanes) ---
-        self.declare_parameter('mask_mode', 'hsv')            # 'hsv' (white|yellow) or 'gray'
+        # --- 강건한 차선 추종 (멀티밴드 look-ahead, 곡률, 스무딩) ---
+        self.declare_parameter('num_bands', 4)        # 커브용 look-ahead 밴드 개수
+        self.declare_parameter('morph_kernel', 3)     # 노이즈 정리(반사광/점선); 0=끔
+        self.declare_parameter('width_ema', 0.1)      # 차선 폭 기억값 적응 속도
+        self.declare_parameter('smooth_alpha', 0.5)   # offset 스무딩 (낮을수록 부드러움)
+        self.declare_parameter('race_dir', 'left')                 # 'left'/'right' 마스터; junction_side 를 여기서 도출
+        self.declare_parameter('junction_side', 'right')           # race_dir 이 left/right 가 아닐 때만 사용
+        self.declare_parameter('junction_dash_transitions', 3)     # 세로 방향 on/off 변화 횟수 이상 => 점선 판정
+        self.declare_parameter('junction_min_row_pixels', 2)       # 이 값 초과 픽셀이면 해당 row 를 '라인'으로 간주
+        self.declare_parameter('junction_gap_rows', 2)             # 완전 개방(빈 구간) 폴백
+        # --- 색상 마스킹 (흰색 + 노란색 차선) ---
+        self.declare_parameter('mask_mode', 'hsv')            # 'hsv' (white|yellow) 또는 'gray'
         self.declare_parameter('use_white', True)
-        self.declare_parameter('use_yellow', True)            # yellow roundabout lane
-        self.declare_parameter('white_hsv_lo', [0, 0, 180])   # H,S,V lower (OpenCV H 0-179)
+        self.declare_parameter('use_yellow', True)            # 노란색 회전교차로 차선
+        self.declare_parameter('white_hsv_lo', [0, 0, 180])   # H,S,V 하한 (OpenCV H 0-179)
         self.declare_parameter('white_hsv_hi', [179, 60, 255])
-        self.declare_parameter('yellow_hsv_lo', [18, 45, 110])   # S floor lowered for pale/faded yellow lines
+        self.declare_parameter('yellow_hsv_lo', [18, 45, 110])   # 옅은/바랜 노란 선을 위해 S 하한을 낮춤
         self.declare_parameter('yellow_hsv_hi', [40, 255, 255])
-        # --- bird-eye view (default ON) ---
-        # flat ratio lists [x1,y1, x2,y2, x3,y3, x4,y4] (TL,TR,BR,BL), 0..1 of ROI size
+        # --- bird-eye view (기본 ON) ---
+        # 평탄화한 비율 리스트 [x1,y1, x2,y2, x3,y3, x4,y4] (TL,TR,BR,BL), ROI 크기 대비 0..1
         # src: 2026-07-05 실측 캘리브레이션 (직선 구간, 차선 픽셀 추적 fit + 워프 드리프트
         # 최소화; 잔차 L+1.5px/R-0.3px). 카메라 높이/각도를 다시 바꾸면 재캘리브레이션 필요.
         self.declare_parameter('use_birdeye', True)
         self.declare_parameter('birdeye_src_ratio', [0.262, 0.05, 0.811, 0.05, 1.017, 0.95, 0.034, 0.95])
         self.declare_parameter('birdeye_dst_ratio', [0.20, 0.00, 0.80, 0.00, 0.80, 1.00, 0.20, 1.00])
-        # --- guided band search (default ON) ---
+        # --- 가이드 밴드 탐색 (기본 ON) ---
         self.declare_parameter('use_guided_band', True)
-        self.declare_parameter('guide_margin_px', 60)         # search ± px around previous band centre
-        self.declare_parameter('guide_margin_growth_px', 10)  # margin += i*growth toward far bands
-        self.declare_parameter('guide_min_pixels', 20)        # narrow window -> lower than min_pixels
+        self.declare_parameter('guide_margin_px', 60)         # 이전 밴드 중심 주변 ± px 범위만 탐색
+        self.declare_parameter('guide_margin_growth_px', 10)  # 먼 밴드로 갈수록 margin += i*growth
+        self.declare_parameter('guide_min_pixels', 20)        # 좁은 창이므로 min_pixels 보다 낮게
         self.declare_parameter('guide_use_previous_frame', True)
-        self.declare_parameter('guide_max_jump_px', 80)       # clamp band-to-band centre jumps
-        # --- look-ahead steering blend (partial pure-pursuit; default ON) ---
+        self.declare_parameter('guide_max_jump_px', 80)       # 밴드 간 중심 점프를 이 값으로 제한
+        # --- look-ahead 조향 블렌딩 (부분적 pure-pursuit; 기본 ON) ---
         self.declare_parameter('use_lookahead_control', True)
-        self.declare_parameter('near_weight', 0.7)            # nearest-band weight
-        self.declare_parameter('lookahead_weight', 0.3)       # far-band weight
-        self.declare_parameter('lookahead_band_index', -1)    # -1 = farthest detected band
-        self.declare_parameter('adaptive_lookahead', False)   # boost lookahead on sharp curves
+        self.declare_parameter('near_weight', 0.7)            # 가장 가까운 밴드 가중치
+        self.declare_parameter('lookahead_weight', 0.3)       # 먼 밴드 가중치
+        self.declare_parameter('lookahead_band_index', -1)    # -1 = 검출된 가장 먼 밴드
+        self.declare_parameter('adaptive_lookahead', False)   # 급커브에서 lookahead 가중치 강화
         self.declare_parameter('curve_lookahead_weight', 0.4)
         self.declare_parameter('curve_lookahead_thresh', 0.25)
         # --- yellow crossline (노란 가로선; 회전교차로 진입/탈출 위치 신호) ---
@@ -102,8 +102,8 @@ class LaneNode(Node):
         self._last_debug_t = None   # 마지막 디버그 발행 시각(초); rate-limit용
 
         gp = self.get_parameter
-        # race_dir master: derive which side the dashed junction shows on.
-        # 'left' (CCW) -> junction on the right; 'right' (CW) -> junction on the left.
+        # race_dir 마스터: 점선 junction 이 어느 쪽에 나타나는지를 여기서 도출한다.
+        # 'left'(반시계) -> junction 은 오른쪽; 'right'(시계) -> junction 은 왼쪽.
         race_dir = str(gp('race_dir').value).lower()
         if race_dir == 'right':
             junction_side = 'left'
@@ -166,9 +166,9 @@ class LaneNode(Node):
         self.create_subscription(CompressedImage, sub_topic, self.on_image, 10)
         # decision 이 표결로 확정한 갈림길 방향('left'/'right'/'')을 받아 브랜치 선택에 쓴다.
         self.create_subscription(String, str(gp('fork_topic').value), self.on_fork_dir, 10)
-        # LIVE tuning: `ros2 param set /lane_node yellow_hsv_lo "[18,45,110]"` etc. applies
-        # immediately by updating the detector (no restart), so you can watch the HSV mask
-        # on the dashboard while tuning.
+        # 라이브 튜닝: `ros2 param set /lane_node yellow_hsv_lo "[18,45,110]"` 등을 실행하면
+        # detector 가 즉시 갱신되어 재시작 없이 반영된다. 튜닝하면서 대시보드로
+        # HSV 마스크를 바로 확인할 수 있다.
         self.add_on_set_parameters_callback(self._on_set_params)
         self.get_logger().info(f'lane_node up. in={sub_topic} out={self.lane_topic}')
 
@@ -184,7 +184,7 @@ class LaneNode(Node):
                 setattr(self.detector, n, tuple(int(x) for x in v))
             elif n in ('birdeye_src_ratio', 'birdeye_dst_ratio'):
                 setattr(self.detector, n, [float(x) for x in v])
-                self.detector.invalidate_birdeye_cache()   # matrix must be rebuilt
+                self.detector.invalidate_birdeye_cache()   # 변환 행렬을 다시 만들어야 함
             elif n in ('use_white', 'use_yellow', 'use_birdeye', 'use_guided_band',
                        'guide_use_previous_frame', 'use_lookahead_control',
                        'adaptive_lookahead'):

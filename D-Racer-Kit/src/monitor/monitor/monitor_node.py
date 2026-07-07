@@ -86,7 +86,7 @@ class MonitorNode(Node):
         self.lane_debug_topic = self.get_yaml_or_param_str(yaml_config, 'LANE_DEBUG_TOPIC', 'lane_debug_topic')
         self.joystick_topic = self.get_yaml_or_param_str(yaml_config, 'JOYSTICK_TOPIC', 'joystick_topic')
         if not self.control_topic:
-            # Backward compatibility for legacy typo key.
+            # 과거 오타 키(CONTORL_TOPIC)와의 하위 호환성 유지.
             self.control_topic = str(yaml_config.get('CONTORL_TOPIC', '')).strip()
         if not self.control_topic:
             self.control_topic = str(self.get_parameter('control_topic').value)

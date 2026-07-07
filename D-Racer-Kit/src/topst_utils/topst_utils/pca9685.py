@@ -34,8 +34,8 @@ class PCA9685:
         self.i2c = SMBus(bus)
 
         # 초기화: MODE1, MODE2 설정
-        self.write8(MODE1, ALLCALL)      # ALLCALL on
-        self.write8(MODE2, OUTDRV)       # totem-pole
+        self.write8(MODE1, ALLCALL)      # ALLCALL 활성화
+        self.write8(MODE2, OUTDRV)       # totem-pole 출력
         time.sleep(0.01)
 
         self.set_pwm_freq(freq_hz)
@@ -56,12 +56,12 @@ class PCA9685:
         prescale = int(round(prescaleval))
 
         oldmode = self.read8(MODE1)
-        newmode = (oldmode & 0x7F) | SLEEP     # sleep
+        newmode = (oldmode & 0x7F) | SLEEP     # sleep 모드 진입
         self.write8(MODE1, newmode)
         self.write8(PRESCALE, prescale)
         self.write8(MODE1, oldmode)
         time.sleep(0.005)
-        self.write8(MODE1, oldmode | RESTART)  # restart
+        self.write8(MODE1, oldmode | RESTART)  # 재시작
 
         self.freq_hz = freq_hz
 

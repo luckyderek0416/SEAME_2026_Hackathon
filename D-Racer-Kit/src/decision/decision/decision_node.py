@@ -1,7 +1,7 @@
-"""decision_node: subscribes to lane + aruco + YOLO, runs the state machine,
-and publishes Control to /control (which the kit's control_node actuates).
+"""decision_node: lane + aruco + YOLO 를 구독하고 상태머신을 돌려서
+Control 을 /control 로 publish 한다 (키트의 control_node 가 이를 구동).
 
-Run control_node with use_joystick_control:=False so it listens to /control.
+control_node 는 use_joystick_control:=False 로 실행해야 /control 을 구독한다.
 """
 
 from collections import deque
@@ -22,7 +22,7 @@ class DecisionNode(Node):
     def __init__(self):
         super().__init__('decision_node')
 
-        # ----- topics / loop rate -----
+        # ----- 토픽 / 루프 주기 -----
         self.declare_parameter('lane_topic', '/perception/lane')
         self.declare_parameter('aruco_topic', '/perception/aruco')
         self.declare_parameter('detections_topic', '/inference/detections')
@@ -30,27 +30,27 @@ class DecisionNode(Node):
         self.declare_parameter('fork_dir_topic', '/decision/fork_dir')  # 확정 방향을 perception 에 전달
         self.declare_parameter('control_hz', 30.0)
 
-        # ----- strategy -----
-        self.declare_parameter('course', 'in')     # 'out' = S-curve+fork, 'in' = roundabout
-        self.declare_parameter('skip_missions', False)  # True = pure lane-following test (no missions)
+        # ----- 전략 -----
+        self.declare_parameter('course', 'in')     # 'out' = S커브+갈림길, 'in' = 회전교차로
+        self.declare_parameter('skip_missions', False)  # True = 순수 차선 추종 테스트 (미션 없음)
 
-        # ----- lane PID + steering mapping -----
+        # ----- 차선 PID + 조향 매핑 -----
         self.declare_parameter('kp', 0.6)
         self.declare_parameter('ki', 0.0)
         self.declare_parameter('kd', 0.15)
-        self.declare_parameter('steer_center', 0.2)  # steering bias to correct drift
+        self.declare_parameter('steer_center', 0.2)  # 쏠림(drift) 보정용 조향 bias
         self.declare_parameter('steer_scale', -1.0)   # NEGATIVE: 트랙 검증 결과 조향 부호가 반대였음(오른쪽 치우침 offset<0 -> 더 왼쪽 조향해야 교정)
 
-        # ----- throttle levels (kit's set_throttle_percent convention) -----
+        # ----- throttle 단계 (키트의 set_throttle_percent 규약) -----
         self.declare_parameter('drive_throttle', 0.20)
         self.declare_parameter('slow_throttle', 0.12)
         self.declare_parameter('stop_throttle', 0.0)
-        self.declare_parameter('curve_slow', 0.5)     # DRIVE: slow on curves (per |curvature|)
+        self.declare_parameter('curve_slow', 0.5)     # DRIVE: 커브에서 감속 (|curvature| 비례)
         # ----- look-ahead 보조 (기본 0 = 기존 동작 그대로) -----
         self.declare_parameter('max_steering_delta', 0.0)  # 틱당 조향 변화 상한; 0=off
         self.declare_parameter('steer_slow', 0.0)          # |조향|에 비례한 감속 게인; 0=off
 
-        # ----- mission tuning -----
+        # ----- 미션 튜닝 -----
         self.declare_parameter('conf_threshold', 0.5)
         self.declare_parameter('green_frames', 3)
         self.declare_parameter('red_frames', 3)
@@ -64,32 +64,32 @@ class DecisionNode(Node):
         self.declare_parameter('fork_sign_vote_min', 2)     # 같은 방향 이 개수 이상이면 확정(int)
         self.declare_parameter('fork_vote_clear_s', 1.0)    # 표지판 끊긴 뒤 표결 초기화까지(떨림방지창; 홀드 아님)
 
-        # ----- roundabout (junction-count, no IMU) -----
-        self.declare_parameter('enter_curvature', 0.45)   # |lane offset| above this ...
-        self.declare_parameter('enter_sustain_s', 0.6)    # ... for this long -> enter circle
-        # race_dir MASTER (set on the day): 'left' (CCW) or 'right' (CW). Derives the
-        # roundabout turn_direction here AND lane_node's junction_side. One value flips
-        # everything direction-dependent. turn_direction below is used only if race_dir
-        # is not left/right.
+        # ----- 회전교차로 (junction 카운트, IMU 없음) -----
+        self.declare_parameter('enter_curvature', 0.45)   # |lane offset| 이 이 값을 넘는 상태가 ...
+        self.declare_parameter('enter_sustain_s', 0.6)    # ... 이 시간 지속되면 -> 회전 진입
+        # race_dir 마스터 (당일 설정): 'left' (CCW) 또는 'right' (CW). 여기서 회전교차로
+        # turn_direction 을, 그리고 lane_node 의 junction_side 를 파생한다. 값 하나로
+        # 방향 의존적인 모든 것이 뒤집힌다. 아래 turn_direction 은 race_dir 이
+        # left/right 가 아닐 때만 쓰인다.
         self.declare_parameter('race_dir', 'left')
-        self.declare_parameter('turn_direction', -1.0)    # +1 CW (steer right), -1 CCW
-        # In/Out branch (AUTO, direction-agnostic): at the fork, steer toward the yellow
-        # path for the In course / away from it for Out. Uses where the yellow is, so it
-        # works whichever side it appears -> no day setup needed.
-        self.declare_parameter('branch_bias', 0.35)        # steer bias at the fork
-        self.declare_parameter('branch_yellow_min', 0.03)  # yellow_ratio above this => fork in view
-        self.declare_parameter('circle_steer_bias', 0.15) # hold the ring, don't exit early
+        self.declare_parameter('turn_direction', -1.0)    # +1 CW (우조향), -1 CCW
+        # In/Out 브랜치 (자동, 방향 무관): 갈림길에서 In 코스는 노란 경로 쪽으로,
+        # Out 은 반대쪽으로 조향. 노란색의 위치를 이용하므로 어느 쪽에 나타나든
+        # 동작한다 -> 당일 설정 불필요.
+        self.declare_parameter('branch_bias', 0.35)        # 갈림길에서의 조향 bias
+        self.declare_parameter('branch_yellow_min', 0.03)  # yellow_ratio 가 이 값 이상 => 갈림길이 보임
+        self.declare_parameter('circle_steer_bias', 0.15) # 링 유지, 조기 탈출 방지
         self.declare_parameter('target_loops', 1)
-        self.declare_parameter('min_loop_time_s', 3.0)    # cannot finish a lap faster (HARD floor)
-        self.declare_parameter('max_loop_time_s', 20.0)   # failsafe exit if all estimates fail
+        self.declare_parameter('min_loop_time_s', 3.0)    # 이보다 빨리 한 바퀴 완료 불가 (절대 하한)
+        self.declare_parameter('max_loop_time_s', 20.0)   # 모든 추정치 실패 시 failsafe 탈출
         self.declare_parameter('junction_cooldown_s', 2.0)
-        # --- lap voting (junction + steering-integral + time), no IMU/marker ---
-        self.declare_parameter('yaw_lap_threshold', 6.0)   # steering-integral per lap; CALIBRATE on track
-        self.declare_parameter('nominal_loop_time_s', 8.0) # measured one-lap time at race speed
-        self.declare_parameter('lap_votes_needed', 2)      # of {junction, yaw, time} to exit
-        # yellow gates roundabout entry (the roundabout is yellow; the outer loop is white)
+        # --- 바퀴 수 표결 (junction + 조향 적분 + 시간), IMU/마커 없음 ---
+        self.declare_parameter('yaw_lap_threshold', 6.0)   # 한 바퀴당 조향 적분값; 트랙에서 캘리브레이션할 것
+        self.declare_parameter('nominal_loop_time_s', 8.0) # 레이스 속도에서 실측한 한 바퀴 시간
+        self.declare_parameter('lap_votes_needed', 2)      # {junction, yaw, time} 중 탈출에 필요한 표 수
+        # 노란색이 회전교차로 진입을 게이트한다 (회전교차로는 노란색, 외곽 루프는 흰색)
         self.declare_parameter('use_yellow_entry', True)
-        self.declare_parameter('yellow_enter_ratio', 0.06)  # ROI yellow fraction => in roundabout
+        self.declare_parameter('yellow_enter_ratio', 0.06)  # ROI 노란색 비율 => 회전교차로 안
         # --- 회전교차로 탈출 = 갈림길과 동일한 브랜치 락온 ---
         # 링을 돌며 게이트(노란 가로선 or 점선 개구부)의 상승엣지를 세고, 이 횟수에
         # 도달하면 출구 브랜치로 락온해 명시적으로 빠져나간다(암묵적 바이어스 해제 대신).
@@ -174,7 +174,7 @@ class DecisionNode(Node):
         self.confirmed_fork_direction = None  # 표결로 확정된 방향
         self.add_on_set_parameters_callback(self._on_set_parameters)
 
-        # latest inputs (safe defaults)
+        # 최신 입력값 (안전한 기본값)
         self.lane = LaneState()
         self.aruco = ArucoState()
         self.aruco.marker_id = -1

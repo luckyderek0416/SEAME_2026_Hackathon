@@ -21,7 +21,7 @@ class CameraNode(Node):
     def __init__(self):
         super().__init__('camera_node')
 
-        # ROS parameters
+        # ROS 파라미터
         self.declare_parameter('vehicle_config_file', get_default_vehicle_config_path())
         self.declare_parameter('publish_topic', 'camera/image/compressed')
         self.declare_parameter('publish_hz', 30.0)
@@ -68,7 +68,7 @@ class CameraNode(Node):
         self.camera_device = camera_device
         self.flip_method = flip_method
 
-        # QoS compatible with web_video_server and monitor subscribers.
+        # web_video_server 와 monitor 구독자들과 호환되는 QoS.
         self.image_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
@@ -116,7 +116,7 @@ class CameraNode(Node):
         return image_width, image_height
 
     def load_camera_source_flags(self):
-        # Backward-compatible default: MIPI enabled.
+        # 하위 호환 기본값: MIPI 활성화.
         default_usb_cam = False
         default_mipi_cam = True
 
@@ -144,7 +144,7 @@ class CameraNode(Node):
 
     def build_candidate_pipelines(self, camera_device, flip_method):
         if self.usb_cam_enabled:
-            # Many USB webcams expose MJPG by default.
+            # 많은 USB 웹캠이 기본적으로 MJPG 포맷을 제공한다.
             mjpg_pipeline = (
                 f"v4l2src device={camera_device} io-mode=2 ! "
                 "image/jpeg,framerate=30/1 ! jpegdec ! "
@@ -152,7 +152,7 @@ class CameraNode(Node):
                 f"video/x-raw,format=BGR,width={self.image_width},height={self.image_height},framerate=30/1 ! "
                 "appsink sync=false drop=true max-buffers=1"
             )
-            # Fallback for raw USB camera modes.
+            # raw 모드 USB 카메라를 위한 폴백.
             raw_pipeline = (
                 f"v4l2src device={camera_device} io-mode=2 ! "
                 "videoconvert ! videoscale ! "

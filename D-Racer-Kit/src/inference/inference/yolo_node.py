@@ -1,12 +1,12 @@
-"""yolo_node: the ONLY deep-learning model in the whole stack.
+"""yolo_node: 전체 스택에서 유일한 딥러닝 모델.
 
-It detects the 4 competition objects (red_light, green_light, left_sign,
-right_sign) and publishes their class + screen position. It does NOT drive
-the car -- lane following is OpenCV in lane_node. decision_node turns these
-detections into actions (start on green, branch on a sign, stop on red).
+대회용 객체 4종(red_light, green_light, left_sign, right_sign)을 감지하고
+클래스 + 화면 위치를 퍼블리시한다. 차를 직접 조종하지는 않는다 --
+차선 추종은 lane_node의 OpenCV가 담당한다. decision_node가 이 감지 결과를
+동작으로 변환한다 (초록불에 출발, 표지판에 분기, 빨간불에 정지).
 
-YOLO inference is run on a TIMER (infer_hz), not on every camera frame, so
-it can run slower than lane following without blocking anything.
+YOLO 추론은 카메라 프레임마다가 아니라 타이머(infer_hz) 기반으로 실행되므로,
+차선 추종보다 느리게 돌아도 아무것도 블로킹하지 않는다.
 """
 
 import cv2
@@ -38,7 +38,7 @@ class YoloNode(Node):
         self.imgsz = int(self.get_parameter('imgsz').value)
 
         self.model = self._load_model()
-        self.latest = None  # (frame, header) of the most recent camera image
+        self.latest = None  # 가장 최근 카메라 이미지의 (frame, header)
 
         self.pub = self.create_publisher(Detections, self.det_topic, 10)
         self.create_subscription(CompressedImage, sub_topic, self.on_image, 10)

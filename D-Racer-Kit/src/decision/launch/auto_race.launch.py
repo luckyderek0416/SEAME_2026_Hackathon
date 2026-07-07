@@ -1,10 +1,10 @@
-"""Bring up the full autonomous-racing stack.
+"""자율주행 레이싱 전체 스택을 기동한다.
 
   ros2 launch decision auto_race.launch.py course:=in
   ros2 launch decision auto_race.launch.py course:=in model_path:=/path/best.pt
 
-Reuses the kit's camera_node and control_node; adds lane/aruco/yolo/decision.
-control_node runs in AUTO mode (use_joystick_control:=False -> listens /control).
+키트의 camera_node 와 control_node 를 재사용하고 lane/aruco/yolo/decision 을 추가한다.
+control_node 는 AUTO 모드로 동작한다 (use_joystick_control:=False -> /control 구독).
 """
 
 from launch import LaunchDescription
@@ -42,8 +42,8 @@ def generate_launch_description():
         DeclareLaunchArgument('race_dir', default_value='left',
                               description="START direction set on race day: 'left' (CCW) or 'right' (CW). "
                                           "Flips roundabout turn + junction side together."),
-        # Dynamic-obstacle marker. Best guess from the marker photo: 4X4_50, white-on-black.
-        # Confirm with tools/identify_aruco.py on the board and override here if different.
+        # 동적 장애물 마커. 마커 사진 기준 최선의 추정: 4X4_50, 검정 바탕에 흰색.
+        # 실제 보드에 tools/identify_aruco.py 로 확인하고 다르면 여기서 override 할 것.
         DeclareLaunchArgument('aruco_dict', default_value='DICT_4X4_50'),
         DeclareLaunchArgument('aruco_inverted', default_value='true'),
         DeclareLaunchArgument('model_param',
@@ -53,49 +53,49 @@ def generate_launch_description():
         DeclareLaunchArgument('skip_missions', default_value='false',
                               description='true = pure lane-following test (no green light / roundabout / '
                                           'obstacle missions); starts driving immediately.'),
-        # Absolute path so the camera finds it regardless of which workspace is sourced.
-        # Without it, camera_node cannot locate src/config/vehicle_config.yaml and silently
-        # falls back to MIPI 640x480 defaults -> USB camera fails to open and the node dies.
+        # 어느 워크스페이스를 source 했든 카메라가 찾을 수 있도록 절대 경로 사용.
+        # 없으면 camera_node 가 src/config/vehicle_config.yaml 을 못 찾고 조용히
+        # MIPI 640x480 기본값으로 떨어져 -> USB 카메라 열기에 실패하고 노드가 죽는다.
         DeclareLaunchArgument('vehicle_config',
                               default_value='/home/topst/SEAME_2026_Hackathon-clone/D-Racer-Kit/'
                                             'src/config/vehicle_config.yaml',
                               description='Vehicle/camera config (USB vs MIPI, device, resolution).'),
 
-        # --- kit: camera ---
+        # --- 키트: 카메라 ---
         Node(package='camera', executable='camera_node', name='camera_node', output='screen',
              parameters=[{'vehicle_config_file': vehicle_config}]),
 
-        # --- new: perception (OpenCV) ---
+        # --- 신규: perception (OpenCV) ---
         # lane_node 는 course 에 따라 use_yellow 를 바꾸므로 OpaqueFunction 으로 생성.
         OpaqueFunction(function=_lane_node),
         Node(package='perception', executable='aruco_node', name='aruco_node', output='screen',
              parameters=[{'dictionary': aruco_dict, 'inverted': aruco_inverted}]),
 
-        # --- new: inference (YOLO via NCNN, ARM-friendly) ---
+        # --- 신규: inference (NCNN 기반 YOLO, ARM 친화적) ---
         Node(package='inference', executable='yolo_ncnn_node', name='yolo_node', output='screen',
              parameters=[{'model_param': model_param, 'model_bin': model_bin}]),
 
-        # --- new: decision (state machine + PID) ---
+        # --- 신규: decision (상태머신 + PID) ---
         Node(package='decision', executable='decision_node', name='decision_node', output='screen',
              parameters=[{'course': course, 'race_dir': race_dir, 'skip_missions': skip_missions}]),
 
-        # --- kit: control in AUTO mode ---
+        # --- 키트: AUTO 모드 control ---
         # respawn: control_node 가 죽으면 모터가 조용히 멈추므로 자동 재시작한다.
         # (재시작 시 ESC 아밍 3초가 다시 돌지만 안전상 문제 없음.)
         Node(package='control', executable='control_node', name='control_node', output='screen',
              respawn=True, respawn_delay=1.0,
              parameters=[{'use_joystick_control': False, 'control_topic': '/control'}]),
 
-        # --- kit: joystick kept alive for E-STOP safety ---
+        # --- 키트: E-STOP 안전용으로 조이스틱 유지 ---
         # 자율주행에선 조향/스로틀은 안 쓰고 X버튼 E-STOP만 쓰므로, 5Hz 디버그 로그
         # (SSH I/O 부하)는 끈다. 비상정지 기능은 그대로 살아있다.
         Node(package='joystick', executable='joystick_node', name='joystick_node', output='screen',
              parameters=[{'debug_log_enable': False}]),
 
-        # --- kit: battery (publishes battery_status for the monitor) ---
+        # --- 키트: 배터리 (모니터용 battery_status publish) ---
         Node(package='battery', executable='battery_node', name='battery_node', output='screen',
              respawn=True, respawn_delay=2.0),
 
-        # --- kit: web monitor (shows camera + battery status) ---
+        # --- 키트: 웹 모니터 (카메라 + 배터리 상태 표시) ---
         Node(package='monitor', executable='monitor_node', name='monitor_node', output='screen'),
     ])

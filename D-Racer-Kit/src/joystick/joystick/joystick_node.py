@@ -35,7 +35,7 @@ class JoystickNode(Node):
     def __init__(self):
         super().__init__('joystick_node')
 
-        # ROS parameters
+        # ROS 파라미터
         self.declare_parameter('publish_topic', 'joystick')
         self.declare_parameter('publish_hz', 50.0)
         self.declare_parameter('throttle_scale', 0.12)

@@ -23,7 +23,7 @@ class ControlNode(Node):
     def __init__(self):
         super().__init__('control_node')
 
-        # ROS parameters
+        # ROS 파라미터
         self.declare_parameter('i2c_bus', 3)
         self.declare_parameter('pca9685_addr', 0x40)
         self.declare_parameter('steering_channel', 0)
@@ -38,8 +38,8 @@ class ControlNode(Node):
         # (I2C 쓰기 빈도 2배지만 apply_actuation 이 오류를 방어처리하므로 안전.
         #  decision 과 완전히 맞추려면 30.0 으로. 오버슈트의 주원인은 아니고 지연 개선용.)
         self.declare_parameter('command_hz', 20.0)
-        # ESC needs a neutral throttle signal held for a few seconds at startup to arm.
-        # Until then, incoming throttle is ignored (kept at neutral) or the ESC never arms.
+        # ESC 는 시동(arming)을 위해 시작 시 몇 초간 중립 throttle 신호를 유지해야 한다.
+        # 그 전까지 들어오는 throttle 은 무시(중립 유지)하며, 그렇지 않으면 ESC 가 arm 되지 않는다.
         self.declare_parameter('esc_arm_sec', 3.0)
 
         i2c_bus = int(self.get_parameter('i2c_bus').value)
@@ -102,11 +102,11 @@ class ControlNode(Node):
         self.e_stop_active = False
         self._io_err_streak = 0  # 연속 I2C 쓰기 실패 카운트 (로그 rate-limit 용)
 
-        # ESC arming: hold neutral throttle for esc_arm_sec before honoring commands.
+        # ESC arming: 명령을 받아들이기 전에 esc_arm_sec 동안 중립 throttle 을 유지한다.
         self.arming = self.esc_arm_sec > 0.0
         self._arm_start = self.get_clock().now()
 
-        # Control inputs
+        # 제어 입력
         self.create_subscription(
             Joystick,
             joystick_topic,
@@ -120,7 +120,7 @@ class ControlNode(Node):
             10,
         )
 
-        # Command output loop
+        # 명령 출력 루프
         self.timer = self.create_timer(1.0 / self.command_hz, self.timer_callback)
 
     def timer_callback(self):
@@ -131,7 +131,7 @@ class ControlNode(Node):
         if self.arming:
             elapsed = (self.get_clock().now() - self._arm_start).nanoseconds / 1e9
             if elapsed < self.esc_arm_sec:
-                # Steering is free to move, but throttle stays neutral so the ESC arms.
+                # 조향은 자유롭게 움직여도 되지만, ESC 가 arm 되도록 throttle 은 중립을 유지한다.
                 self.apply_actuation(self.steering, 0.0)
                 return
             self.arming = False
