@@ -39,11 +39,13 @@ class DecisionNode(Node):
         self.declare_parameter('kp', 0.6)
         self.declare_parameter('ki', 0.0)
         self.declare_parameter('kd', 0.15)
-        self.declare_parameter('steer_center', 0.2)  # 쏠림(drift) 보정용 조향 bias
+        self.declare_parameter('steer_center', 0.26)  # 쏠림(drift) 보정용 조향 bias (07-07 수동주행 실측: 0.26에서 정확히 직진)
         self.declare_parameter('steer_scale', -1.0)   # NEGATIVE: 트랙 검증 결과 조향 부호가 반대였음(오른쪽 치우침 offset<0 -> 더 왼쪽 조향해야 교정)
         # 좌우 조향 비대칭 보정: 차가 좌조향 시 실제로 덜 꺾여서, 좌조향(steer_center 위쪽
         # 편차)만 이 배율로 증폭한다. 1.0=off. 좌조향 = steer > steer_center (PID 부호 검증).
-        self.declare_parameter('steer_left_gain', 1.2)
+        self.declare_parameter('steer_left_gain', 1.0)  # 07-07 원 그리기 실측: center 0.26 기준
+        # 좌/우 원 지름 동일(187cm) = 대칭 확인. 예전 "좌측 덜 꺾임"은 center 오프셋(0.2)
+        # 증상이었음. center 재캘리 시 이 값도 원 테스트로 재확인할 것.
         # 급커브 feed-forward: DRIVE 에서 곡률에 비례한 조향 편향을 추가한다. 급좌커브에서
         # 가까운 왼선을 놓쳐도 curvature(밴드 간 차이)는 살아있어 미리·더 꺾게 해준다.
         # 0=off. 부호는 offset 과 동일 규약이라 target 에 그대로 더한다(좌커브 curvature<0).

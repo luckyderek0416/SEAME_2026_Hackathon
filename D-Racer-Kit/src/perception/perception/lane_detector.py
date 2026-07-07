@@ -33,8 +33,8 @@ class LaneDetector:
                  use_lookahead_control=False, near_weight=0.7, lookahead_weight=0.3,
                  lookahead_band_index=-1, adaptive_lookahead=False,
                  curve_lookahead_weight=0.4, curve_lookahead_thresh=0.25,
-                 crossline_roi_top_ratio=0.55, crossline_roi_bottom_ratio=0.90,
-                 crossline_min_width_ratio=0.30, crossline_min_rows=4,
+                 crossline_roi_top_ratio=0.40, crossline_roi_bottom_ratio=0.95,
+                 crossline_min_width_ratio=0.20, crossline_min_rows=4,
                  fork_scan_top_ratio=0.0, fork_scan_bottom_ratio=0.5,
                  fork_col_min_ratio=0.15, fork_min_groups=3, fork_span_ratio=0.65,
                  fork_seed_px=90,
@@ -109,8 +109,10 @@ class LaneDetector:
         # 차선 중심 계산은 전혀 건드리지 않는다.
         self.crossline_roi_top_ratio = crossline_roi_top_ratio       # 스캔 창 상단 (ROI 높이의 0..1)
         self.crossline_roi_bottom_ratio = crossline_roi_bottom_ratio # 스캔 창 하단
-        self.crossline_min_width_ratio = crossline_min_width_ratio   # 행의 노란 폭이 w 의 이 비율 이상이면 "넓음"
-        self.crossline_min_rows = crossline_min_rows                 # 넓은 행이 이 개수만큼 필요
+        self.crossline_min_width_ratio = crossline_min_width_ratio   # 성분의 가로 스팬 최소 비율 (w 기준)
+        self.crossline_min_rows = crossline_min_rows                 # (미사용; 옛 행-스캔 버전 하위호환)
+        self.crossline_max_angle_deg = 50.0   # 주축이 수평에서 이 각도 이내면 가로선 (대각선 허용)
+        self.crossline_min_area_px = 60       # 성분 최소 픽셀 수 (노이즈/점선 dash 필터)
         # --- 좌/우 갈림길 (fork) 감지 + 브랜치 선택 ---
         # 분기 구간은 도로가 두 브랜치로 갈라져, BEV 상단 스캔밴드에서 세로 라인 군집이
         # 3개 이상(각 브랜치 안/바깥선)이거나 바깥 라인 간격이 한 차선보다 훨씬 넓어진다.
@@ -133,8 +135,12 @@ class LaneDetector:
         # In 코스 색상 추종 상태머신 (히스테리시스):
         #   WHITE 모드(기본): 흰색 전용 마스크 추종. yellow_ratio >= follow_yellow_ratio
         #     (노란 점선이 조금이라도 보이기 시작) -> YELLOW 모드 진입.
-        #   YELLOW 모드: 노란 전용 마스크 추종(흰 점선/실선 완전 무시). 흰 픽셀수가
-        #     노란 픽셀수보다 많아지면(white > exit_white_ratio * yellow) WHITE 복귀.
+        #   YELLOW 모드: 노란 전용 마스크 추종(흰 점선/실선 완전 무시). WHITE 복귀는
+        #     "노란색이 사실상 사라지고"(yellow_ratio < 진입문턱×exit_yellow_frac)
+        #     "흰색이 우세"(white > exit_white_ratio × yellow)한 상태가
+        #     follow_yellow_exit_frames 프레임 연속일 때만. 진입/해제 조건을 상호배타로
+        #     두는 이유: 전환 구간엔 노란 점선(픽셀 적음)+흰 실선(픽셀 많음)이 공존해
+        #     "노랑 보임"과 "흰>노랑"이 동시에 참 -> 조건이 겹치면 Y/W 가 매 프레임 튐.
         #     단 drive_mode == 'ROUNDABOUT' 동안은 강제 YELLOW 유지 (링 위에서 바깥
         #     흰 루프가 보여도 튀지 않게).
         # course != 'in' 이면 전체 비활성(기존 합친-마스크 동작; Out 코스에서 노란
@@ -142,8 +148,11 @@ class LaneDetector:
         self.follow_yellow = follow_yellow
         self.follow_yellow_ratio = follow_yellow_ratio
         self.follow_yellow_exit_white_ratio = follow_yellow_exit_white_ratio
+        self.follow_yellow_exit_yellow_frac = 0.5   # 해제 노랑 문턱 = 진입문턱 × 이 비율
+        self.follow_yellow_exit_frames = 10         # 해제 조건 연속 프레임 수 (~0.3s@30fps)
         self.course = course
         self._following_yellow = False   # 현재 YELLOW 모드인지 (프레임 간 유지)
+        self._yellow_exit_count = 0      # 해제 조건 연속 카운터
         # 현재 주행 모드(상태머신 상태 문자열). decision 이 publish 하고 lane_node 가
         # 매 프레임 갱신 -> BEV 디버그 화면에 표시. '' 면 표시 안 함(decision 미실행).
         self.drive_mode = ''
@@ -189,14 +198,16 @@ class LaneDetector:
         return mask, wmask, ymask, yellow_ratio, yellow_offset, yellow_crossline
 
     def _detect_crossline(self, ymask):
-        """노란 '가로' 라인 감지기 (contour/Hough 없이 저렴한 행 픽셀 수 스캔).
+        """노란 '가로선'(정지선) 감지 — 기울기 허용 버전 (연결성분 + 주축 각도).
 
-        노란색 전용 mask 의 중하단 창을 스캔한다: 행의 노란 픽셀 범위가 이미지
-        폭의 crossline_min_width_ratio 를 넘으면 그 행을 "넓음"으로 간주하고
-        (일반 차선 라인은 얇고 거의 세로인 줄무늬라 절대 그렇게 넓어지지 않음),
-        그런 행이 crossline_min_rows 개 필요하다.
-        use_birdeye 가 켜져 있으면 BEV 워프된 mask 위에서 동작하며 (roi 는
-        _build_mask 이전에 이미 워프됨), 라인 폭이 원근에 무관하게 안정된다.
+        옛 행(row) 폭 스캔은 가로선이 화면에 수평으로 보인다고 가정했는데, 커브에서
+        비스듬한 헤딩으로 접근하면 가로선이 BEV 에 대각선으로 찍혀 구조적으로 실패했다.
+        헤딩이 θ 틀어지면 차선은 수직에서 θ, 가로선은 수평에서 θ 기울므로,
+        "수평에 가까운 주축인가"로 판정하면 기울어도 차선과 항상 구분된다:
+          - 연결성분의 가로 스팬 >= crossline_min_width_ratio × w  (dash 는 작아서 탈락)
+          - 주축의 수평 기준 각도 <= crossline_max_angle_deg       (차선은 수직쪽이라 탈락)
+        use_birdeye ON 이면 BEV 워프된 mask 위에서 동작해 원근 무관.
+        (crossline_min_rows 는 이 버전에서 미사용 — 하위호환으로만 남김)
         """
         h_m, w_m = ymask.shape[:2]
         y1 = int(h_m * self.crossline_roi_top_ratio)
@@ -204,9 +215,35 @@ class LaneDetector:
         if y2 <= y1:
             return False
         cross_roi = ymask[y1:y2, :]
-        row_counts = np.count_nonzero(cross_roi, axis=1)
-        rows_hit = row_counts > int(w_m * self.crossline_min_width_ratio)
-        return bool(np.count_nonzero(rows_hit) >= int(self.crossline_min_rows))
+        if cv2.countNonZero(cross_roi) < int(self.crossline_min_area_px):
+            return False
+        num, labels, stats, _ = cv2.connectedComponentsWithStats(cross_roi, connectivity=8)
+        min_len = float(w_m) * float(self.crossline_min_width_ratio)
+        for i in range(1, num):
+            if stats[i, cv2.CC_STAT_AREA] < int(self.crossline_min_area_px):
+                continue
+            ys, xs = np.nonzero(labels == i)
+            xspan = int(xs.max() - xs.min())
+            if xspan < 4:          # 세로 줄무늬(가로 퍼짐 없음)는 fit 무의미
+                continue
+            # 컬럼별 평균 y 로 주축 기울기 추정 (수평 기준). 정지선이 양끝에서
+            # 세로 차선과 붙어 한 성분이 돼도, 컬럼 평균은 대부분 정지선 위라 강건.
+            cols = xs - xs.min()
+            cnt = np.bincount(cols)
+            ysum = np.bincount(cols, weights=ys.astype(np.float64))
+            valid = cnt > 0
+            xcols = np.nonzero(valid)[0].astype(np.float64)
+            ymean = ysum[valid] / cnt[valid]
+            if xcols.size < 4:
+                continue
+            slope = float(np.polyfit(xcols, ymean, 1)[0])
+            angle_deg = float(np.degrees(np.arctan(abs(slope))))
+            # 주축 길이 = 가로 스팬 / cos(기울기): 대각선이라 창에 짧게 걸려도
+            # 실제 선 길이로 평가된다 (bbox 폭 기준의 구조적 실패 회피).
+            axis_len = float(xspan) * float(np.hypot(1.0, slope))
+            if angle_deg <= float(self.crossline_max_angle_deg) and axis_len >= min_len:
+                return True
+        return False
 
     def process(self, bgr, draw_debug=True):
         h, w = bgr.shape[:2]
@@ -238,15 +275,30 @@ class LaneDetector:
             if not self._following_yellow:
                 if yellow_ratio >= self.follow_yellow_ratio:
                     self._following_yellow = True
+                    self._yellow_exit_count = 0
             elif self.drive_mode != 'ROUNDABOUT':
+                # WHITE 복귀 = "노랑이 사실상 사라짐" AND "흰 우세" 가 연속 N프레임.
+                # 노랑이 조금이라도(진입문턱×frac 이상) 보이는 동안엔 절대 안 풀림 ->
+                # 점선 노랑 + 흰 실선 공존 구간에서 Y/W 플리커 방지.
                 wcount = int(np.count_nonzero(wmask))
                 ycount = int(np.count_nonzero(ymask))
-                if wcount > self.follow_yellow_exit_white_ratio * max(1, ycount):
-                    self._following_yellow = False
+                yellow_gone = yellow_ratio < (self.follow_yellow_ratio
+                                              * self.follow_yellow_exit_yellow_frac)
+                white_dom = wcount > self.follow_yellow_exit_white_ratio * max(1, ycount)
+                if yellow_gone and white_dom:
+                    self._yellow_exit_count += 1
+                    if self._yellow_exit_count >= int(self.follow_yellow_exit_frames):
+                        self._following_yellow = False
+                        self._yellow_exit_count = 0
+                else:
+                    self._yellow_exit_count = 0
+            else:
+                self._yellow_exit_count = 0   # ROUNDABOUT: 강제 YELLOW 유지
             sel = ymask if self._following_yellow else wmask
             track = cv2.morphologyEx(sel, cv2.MORPH_OPEN, k) if use_morph else sel
         else:
             self._following_yellow = False
+            self._yellow_exit_count = 0
 
         # (1) multi-band look-ahead: ROI 를 가로 band 들(가까움..멂)로 나누고 각각에서
         # 차선 중심을 찾는다. 가까운 band 는 조향에, 먼 band 는 커브 선행 감지에 쓴다.
@@ -547,13 +599,19 @@ class LaneDetector:
                 f"LA {'ON' if self.use_lookahead_control else 'OFF'}"
                 f"{follow_tag}")
         vals = f"off {offset:+.2f}  yr {yellow_ratio:.2f}  cv {curvature:+.2f}"
-        # 현재 주행 모드를 크게(검은 배경 위 노랑) 맨 위에 표시. decision 미실행이면 생략.
+        # 현재 주행 모드를 크게 맨 위에 표시. decision 미실행이면 생략.
+        # 색상 추종 상태를 함께 표기: [Y]=노란선 추종(노란 글씨) / [W]=흰선 추종(흰 글씨)
+        # -> 대시보드에서 "DRIVE 인데 어느 색을 따라가는 중인지" 한눈에 구분.
         y_mode = 10
         if self.drive_mode:
             txt = f"MODE: {self.drive_mode}"
+            color = (0, 255, 255)
+            if self.follow_yellow and self.course == 'in':
+                txt += ' [Y]' if self._following_yellow else ' [W]'
+                color = (0, 255, 255) if self._following_yellow else (255, 255, 255)
             (tw, th), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
             cv2.rectangle(dbg, (0, 0), (tw + 6, th + 8), (0, 0, 0), -1)
-            cv2.putText(dbg, txt, (3, th + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+            cv2.putText(dbg, txt, (3, th + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
             y_mode = th + 18
         cv2.putText(dbg, mode, (2, y_mode), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
         cv2.putText(dbg, vals, (2, dbg.shape[0] - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)

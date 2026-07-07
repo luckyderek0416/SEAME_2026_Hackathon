@@ -82,10 +82,12 @@ class LaneNode(Node):
         self.declare_parameter('curve_lookahead_weight', 0.4)
         self.declare_parameter('curve_lookahead_thresh', 0.25)
         # --- yellow crossline (노란 가로선; 회전교차로 진입/탈출 위치 신호) ---
-        self.declare_parameter('crossline_roi_top_ratio', 0.55)     # 스캔 창 상단 (ROI h 비율)
-        self.declare_parameter('crossline_roi_bottom_ratio', 0.90)  # 스캔 창 하단
-        self.declare_parameter('crossline_min_width_ratio', 0.30)   # row가 "넓다" 판정 폭 비율
-        self.declare_parameter('crossline_min_rows', 4)             # 넓은 row 최소 줄 수
+        self.declare_parameter('crossline_roi_top_ratio', 0.40)     # 스캔 창 상단 (대각선 위해 넓힘)
+        self.declare_parameter('crossline_roi_bottom_ratio', 0.95)  # 스캔 창 하단
+        self.declare_parameter('crossline_min_width_ratio', 0.20)   # 성분 "주축 길이" 최소 비율 (w 기준)
+        self.declare_parameter('crossline_min_rows', 4)             # (미사용; 하위호환)
+        self.declare_parameter('crossline_max_angle_deg', 50.0)     # 수평 기준 허용 기울기 (대각선 정지선)
+        self.declare_parameter('crossline_min_area_px', 60)         # 성분 최소 픽셀 (dash/노이즈 필터)
         # --- 좌/우 갈림길 (fork) 감지 + 브랜치 선택 ---
         self.declare_parameter('fork_topic', '/decision/fork_dir')  # decision 이 확정 방향 publish
         self.declare_parameter('state_topic', '/decision/state')    # decision 주행 모드 -> BEV 표시
@@ -99,7 +101,9 @@ class LaneNode(Node):
         self.declare_parameter('follow_yellow', True)               # In 코스 색상 추종 상태머신 on/off
         self.declare_parameter('follow_yellow_ratio', 0.03)         # 이 노란비율 이상 -> YELLOW 모드 진입
                                                                     # (노란선이 점선이라 yr 이 낮음 -> 0.03)
-        self.declare_parameter('follow_yellow_exit_white_ratio', 1.0)  # 흰픽셀 > 이 배율*노란픽셀 -> WHITE 복귀
+        self.declare_parameter('follow_yellow_exit_white_ratio', 1.0)  # 흰픽셀 > 이 배율*노란픽셀 (해제 조건 일부)
+        self.declare_parameter('follow_yellow_exit_yellow_frac', 0.5)  # 해제 노랑문턱 = 진입문턱*이 비율 (노랑 보이면 유지)
+        self.declare_parameter('follow_yellow_exit_frames', 10)        # 해제 조건 연속 프레임 (플리커 방지)
         self.declare_parameter('course', 'in')                      # 'in' 일 때만 색상 추종 활성 (launch 전달)
         # 차선 폭 초기값(px, BEV 워프 기준). 0=학습대기. EMA 학습은 그대로 계속 미세보정.
         # 192 = 실측 차선폭 350mm 를 BEV 캘리로 변환한 값((0.80-0.20)*320px). 단선 구간
@@ -178,6 +182,11 @@ class LaneNode(Node):
             course=str(gp('course').value).lower(),
             lane_width_init=float(gp('lane_width_init').value),
         )
+        # 생성자 인자에 없는 튜닝들은 속성으로 직접 주입 (라이브 변경도 동일 경로)
+        self.detector.follow_yellow_exit_yellow_frac = float(gp('follow_yellow_exit_yellow_frac').value)
+        self.detector.follow_yellow_exit_frames = int(gp('follow_yellow_exit_frames').value)
+        self.detector.crossline_max_angle_deg = float(gp('crossline_max_angle_deg').value)
+        self.detector.crossline_min_area_px = int(gp('crossline_min_area_px').value)
 
         self.pub = self.create_publisher(LaneState, self.lane_topic, 10)
         self.debug_pub = None

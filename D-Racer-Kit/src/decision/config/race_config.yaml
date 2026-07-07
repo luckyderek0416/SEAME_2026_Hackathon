@@ -41,7 +41,7 @@ decision_node:
     kp: 0.6
     ki: 0.0
     kd: 0.15
-    steer_center: 0.2          # 직진 편향 보정
+    steer_center: 0.26         # 직진 편향 보정 (07-07 실측; ⚠️ launch가 이 파일을 안 읽음 — 실값은 decision_node.py)
     steer_scale: -1.0          # 트랙 검증: 이 차는 부호 반대 (양수로 두면 역조향)
     drive_throttle: 0.20
     slow_throttle: 0.12
