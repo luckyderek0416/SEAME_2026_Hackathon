@@ -5,7 +5,7 @@
 
   WAIT_GREEN    -> 정지선에서 정차; YOLO 가 green_light 를 보면 -> 출발
   DRIVE         -> 주행 속도로 차선 추종 (직선, S커브, 갈림길).
-                   'in' 코스에서는 회전교차로 진입(지속적인 급커브)도
+                   'in' 코스에서는 회전교차로 진입(노란 가로선=정지선 첫 감지)을
                    감시하다가 ROUNDABOUT 으로 전환한다.
   ROUNDABOUT    -> 링을 돈다 (차선 추종 + 조기 이탈 방지용 turn bias) 그리고
                    JUNCTION 감지로 바퀴 수를 센다 (링 바깥 라인이 입구/출구에서
@@ -57,6 +57,7 @@ class RaceStateMachine:
         self.red_count = 0
         self.marker_gone = 0
         self._resume_state = State.DRIVE
+        self.race_t = 0.0             # 초록불 출발 후 경과 시간 (빨간불 오인식 게이트용)
 
         # 회전교차로 (junction 카운트) 상태
         self.roundabout_done = False  # 이미 회전을 완료함 (재진입 금지)
@@ -77,15 +78,21 @@ class RaceStateMachine:
     # ---------- 감지 헬퍼 ----------
     def _seen(self, dets, label):
         c = self.cfg['conf_threshold']
+        # 신호등은 bbox 면적 게이트 추가(light_min_area, 0=off): 멀리 있는 빨간
+        # 물체(트랙 빨간 띠, 옷 등)의 작은 오검출 박스를 걸러낸다.
+        min_area = self.cfg.get('light_min_area', 0.0) if label.endswith('_light') else 0.0
         for d in dets:
             if d.label == label and d.confidence >= c:
+                if min_area > 0.0 and (d.width * d.height) < min_area:
+                    continue
                 return d
         return None
 
     # ---------- 조향 (항상 차선 PID) ----------
     def _lane_steer(self, lane, dt):
         if lane.lane_found:
-            target = lane.offset + self._turn_bias() + self._branch_bias(lane)
+            target = (lane.offset + self._turn_bias() + self._branch_bias(lane)
+                      + self._curve_bias(lane))
         else:
             target = 0.0  # 차선 놓침: 직진하며 재획득을 기다린다
         correction = self.pid.update(target, dt)
@@ -103,6 +110,15 @@ class RaceStateMachine:
         if self.turn_latch == 'right':
             return +self.cfg['fork_bias']
         return 0.0
+
+    def _curve_bias(self, lane):
+        """급커브 feed-forward: 곡률에 비례한 조향 편향(DRIVE 에서만). 급좌커브에서
+        가까운 왼선이 사라져도 curvature(밴드 간 차이)는 살아있어, 선이 완전히
+        사라지기 전에 미리·더 꺾어 바깥으로 튕기는 것을 막는다. 부호는 offset 과 동일
+        규약이라 target 에 그대로 더한다(좌커브 curvature<0 -> 좌조향 강화). 0=off."""
+        if self.state != State.DRIVE:
+            return 0.0
+        return self.cfg.get('curve_steer_bias', 0.0) * getattr(lane, 'curvature', 0.0)
 
     def _branch_bias(self, lane):
         """색상 기반 In/Out 갈림길 선택 (방향 무관). 갈림길에서 In 경로는 노란색,
@@ -160,6 +176,8 @@ class RaceStateMachine:
 
         if self.cooldown > 0.0:
             self.cooldown = max(0.0, self.cooldown - dt)
+        if self.state not in (State.WAIT_GREEN, State.DONE):
+            self.race_t += dt   # 출발 후 경과 시간 (FINISH 게이트용)
 
         # 갈림길 방향은 decision_node 의 다중 프레임 표결에서 온다(단일 감지가 아님).
         # confirmed_fork_direction 으로 전달된다. 표지판은 두 브랜치 사이에 있으므로
@@ -207,31 +225,29 @@ class RaceStateMachine:
         # ----- DRIVE -----
         if self.state == State.DRIVE:
             # 회전교차로 진입 (In 코스, 한 번 완료하기 전까지만).
-            # 3중 2 표결: yellow_crossline (갈림길의 노란 가로선), junction (점선
-            # 개구부), 급한 curvature. 어떤 단일 신호도 혼자서는 진입시키지 못하고,
-            # yellow_ratio 게이트가 흰색 외곽 루프의 코너가 이를 트리거하는 것을
-            # 막는다. 기존 enter_acc/enter_sustain_s debounce 는 유지: 표결이
-            # enter_sustain_s 동안 유지되어야 진입한다.
+            # 큰 틀(인코스 플로우): 노란 추종으로 링까지 온 뒤, 정지선처럼 보이는
+            # 노란 가로선(yellow_crossline)을 "처음" 만나면 ROUNDABOUT on.
+            # 오검 방지 장치 둘은 유지 — yellow_ratio 게이트(흰 외곽 루프에서
+            # 안 걸리게) + enter_sustain_s 지속 debounce(한 프레임 깜빡임 무시).
+            # 탈출은 ROUNDABOUT 블록의 게이트 카운트: 같은 가로선을 "한 번 더"
+            # 만나면 출구 브랜치 락온으로 나간다.
             if self.cfg['course'] == 'in' and not self.roundabout_done:
-                entry_votes = 0
-                if lane.yellow_crossline:
-                    entry_votes += 1
-                if lane.junction:
-                    entry_votes += 1
-                # ⚠️ enter_curvature(기본 0.45)는 원래 |offset| 기준값이었다.
-                # curvature 는 스케일이 더 작으므로(대략 0.1~0.3) 트랙에서 재튜닝 필요.
-                if lane.lane_found and abs(lane.curvature) >= self.cfg['enter_curvature']:
-                    entry_votes += 1
-                self._entry_votes = entry_votes
                 on_yellow = lane.yellow_ratio >= self.cfg['yellow_enter_ratio']
                 gate = on_yellow if self.cfg['use_yellow_entry'] else True
-                trigger = gate and entry_votes >= 2
+                trigger = gate and bool(lane.yellow_crossline)
+                self._entry_votes = int(trigger)
                 self.enter_acc = self.enter_acc + dt if trigger else 0.0
                 if self.enter_acc >= self.cfg['enter_sustain_s']:
                     self._start_roundabout()
                     return steer, self.cfg['slow_throttle'], self.state.value
 
-            self.red_count = self.red_count + 1 if self._seen(dets, 'red_light') else 0
+            # 빨간불 = 도착 신호. 주행 초반 트랙 주변 빨간 물체(빨간 띠·옷 등) 오인식
+            # 으로 코스 중간에 FINISH/DONE 으로 빠지는 사고를 막기 위해, 출발 후
+            # finish_min_drive_s 가 지나기 전에는 빨간불을 아예 무시한다.
+            if self.race_t >= self.cfg.get('finish_min_drive_s', 0.0):
+                self.red_count = self.red_count + 1 if self._seen(dets, 'red_light') else 0
+            else:
+                self.red_count = 0
             if self.red_count >= self.cfg['red_frames']:
                 self._enter(State.FINISH)
                 return center, stop, self.state.value
@@ -266,14 +282,14 @@ class RaceStateMachine:
                 self.cooldown = self.cfg['junction_cooldown_s']
                 self.side_present = False
 
-            # (2b) 브랜치 락온 탈출용 게이트 통과 카운터. 게이트 신호(노란 가로선
-            # 또는 점선 junction 개구부)의 상승엣지를 쿨다운과 함께 세서, 물리적으로
-            # 한 번 지나가면 딱 1회만 카운트되게 한다(프레임마다 1회가 아님). 갈림길이
-            # 쓰는 것과 같은 취지의 명시적 탈출 트리거: 출구 게이트를
-            # roundabout_exit_gates 번 통과하면 출구 브랜치로 락온해 빠져나간다.
+            # (2b) 브랜치 락온 탈출용 게이트 통과 카운터. 노란 가로선(진입 때 만난
+            # 그 정지선)의 상승엣지를 쿨다운과 함께 세서, 물리적으로 한 번 지나가면
+            # 딱 1회만 카운트되게 한다(프레임마다 1회가 아님). 큰 틀: 진입 가로선은
+            # _start_roundabout 의 쿨다운으로 무시되고, 링을 돌아 같은 가로선을
+            # roundabout_exit_gates(기본 1)번 더 만나면 출구 브랜치로 락온해 나간다.
             if self._gate_cd > 0.0:
                 self._gate_cd = max(0.0, self._gate_cd - dt)
-            gate_now = bool(lane.yellow_crossline or lane.junction)
+            gate_now = bool(lane.yellow_crossline)
             if gate_now and not self._gate_prev and self._gate_cd <= 0.0:
                 self._gate_count += 1
                 self._gate_cd = self.cfg['junction_cooldown_s']
@@ -320,7 +336,9 @@ class RaceStateMachine:
 
         # ----- FINISH -----
         if self.state == State.FINISH:
-            if self._seen(dets, 'red_light'):
+            # DONE 도 단일 프레임이 아니라 red_frames 연속 인식으로만 확정.
+            self.red_count = self.red_count + 1 if self._seen(dets, 'red_light') else 0
+            if self.red_count >= self.cfg['red_frames']:
                 self._enter(State.DONE)
             return center, stop, self.state.value
 

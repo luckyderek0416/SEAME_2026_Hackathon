@@ -37,7 +37,10 @@ class LaneDetector:
                  crossline_min_width_ratio=0.30, crossline_min_rows=4,
                  fork_scan_top_ratio=0.0, fork_scan_bottom_ratio=0.5,
                  fork_col_min_ratio=0.15, fork_min_groups=3, fork_span_ratio=0.65,
-                 fork_seed_px=90):
+                 fork_seed_px=90,
+                 follow_yellow=True, follow_yellow_ratio=0.03,
+                 follow_yellow_exit_white_ratio=1.0, course='in',
+                 lane_width_init=0.0):
         self.roi_top_ratio = roi_top_ratio        # 프레임 하단 (1 - ratio) 부분만 사용
         self.bright_thresh = bright_thresh         # gray 모드 흰색 라인 밝기 threshold (0-255)
         self.min_pixels = min_pixels               # 한쪽을 신뢰하기 위한 최소 차선 픽셀 수
@@ -47,7 +50,8 @@ class LaneDetector:
         self.morph_kernel = morph_kernel           # MORPH_OPEN 크기; 반사광 점/점선 조각 제거 (0=끔)
         self.width_ema = width_ema                 # 기억된 차선 폭이 적응하는 속도
         self.smooth_alpha = smooth_alpha           # offset EMA (1=스무딩 없음, 낮을수록 부드러움)
-        self._lane_width = 0.0                     # 기억된 차선 폭(px), 단일 라인 중심 계산용
+        self._lane_width = float(lane_width_init)  # 기억된 차선 폭(px), 단일 라인 중심 계산용
+                                                   # (0=콜드스타트 학습대기; 실측 픽셀폭 넣으면 단선 구간 강건)
         self._offset_ema = 0.0                     # 스무딩된 offset 상태
         # 회전교차로 junction = 진입/진출부의 점선 마킹 (이 트랙에서 링은 실선이고
         # junction 만 점선이다). 사이드 스트립을 따라 차선 라인이 켜졌다 꺼졌다 하는
@@ -122,11 +126,35 @@ class LaneDetector:
         # 그 브랜치 쪽으로 밀어(fork_seed_px) 한쪽 브랜치만 추종 => median(표지판 섬) 배제.
         self.fork_dir = None
         self.fork_seed_px = fork_seed_px
+        # --- 노란색 우선 추종 (In 코스: 노란 진입 커브/회전교차로 링) ---
+        # 노란색이 ROI 의 follow_yellow_ratio 이상이면, 밴드 차선 중심을 흰+노랑 합친
+        # 마스크가 아니라 노란색 전용 마스크에서 계산한다 -> 중앙 흰 점선/바깥 흰선에
+        # 끌리지 않고 노란 차선만 추종. junction/fork 감지는 합친 마스크 그대로 사용.
+        # In 코스 색상 추종 상태머신 (히스테리시스):
+        #   WHITE 모드(기본): 흰색 전용 마스크 추종. yellow_ratio >= follow_yellow_ratio
+        #     (노란 점선이 조금이라도 보이기 시작) -> YELLOW 모드 진입.
+        #   YELLOW 모드: 노란 전용 마스크 추종(흰 점선/실선 완전 무시). 흰 픽셀수가
+        #     노란 픽셀수보다 많아지면(white > exit_white_ratio * yellow) WHITE 복귀.
+        #     단 drive_mode == 'ROUNDABOUT' 동안은 강제 YELLOW 유지 (링 위에서 바깥
+        #     흰 루프가 보여도 튀지 않게).
+        # course != 'in' 이면 전체 비활성(기존 합친-마스크 동작; Out 코스에서 노란
+        # 갈림길에 끌려가는 것 방지).
+        self.follow_yellow = follow_yellow
+        self.follow_yellow_ratio = follow_yellow_ratio
+        self.follow_yellow_exit_white_ratio = follow_yellow_exit_white_ratio
+        self.course = course
+        self._following_yellow = False   # 현재 YELLOW 모드인지 (프레임 간 유지)
+        # 현재 주행 모드(상태머신 상태 문자열). decision 이 publish 하고 lane_node 가
+        # 매 프레임 갱신 -> BEV 디버그 화면에 표시. '' 면 표시 안 함(decision 미실행).
+        self.drive_mode = ''
 
     def _build_mask(self, roi):
-        """(lane_mask, yellow_ratio, yellow_offset, yellow_crossline) 을 반환.
+        """(lane_mask, white_mask, yellow_mask, yellow_ratio, yellow_offset,
+        yellow_crossline) 을 반환.
 
-        HSV 모드 = 흰색|노란색 차선 mask; gray 모드 = 밝기 threshold.
+        HSV 모드 = 흰색|노란색 차선 mask; gray 모드 = 밝기 threshold (w/y mask 는 None).
+        white_mask/yellow_mask 는 색상별 전용 mask — In 코스 색상 추종 상태머신이
+        추종 대상을 고를 때 쓴다 (lane_mask 는 둘을 합친 것; junction/fork 감지용).
         yellow_ratio  = ROI 중 노란색 비율 (노란 회전교차로와 흰색 바깥
                         루프를 구분해 줌).
         yellow_offset = 노란색 무게중심의 정규화된 x, [-1..1] (+ = 노란색이
@@ -139,12 +167,15 @@ class LaneDetector:
         if self.mask_mode == 'gray':
             gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
             _, mask = cv2.threshold(gray, self.bright_thresh, 255, cv2.THRESH_BINARY)
-            return mask, 0.0, 0.0, False
+            return mask, None, None, 0.0, 0.0, False
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         w = hsv.shape[1]
         mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
+        wmask = None
+        ymask = None
         if self.use_white:
-            mask = cv2.bitwise_or(mask, cv2.inRange(hsv, self.white_hsv_lo, self.white_hsv_hi))
+            wmask = cv2.inRange(hsv, self.white_hsv_lo, self.white_hsv_hi)
+            mask = cv2.bitwise_or(mask, wmask)
         yellow_ratio, yellow_offset = 0.0, 0.0
         yellow_crossline = False
         if self.use_yellow:
@@ -155,7 +186,7 @@ class LaneDetector:
             if xs.size >= self.min_pixels:
                 yellow_offset = float((xs.mean() - w / 2.0) / (w / 2.0))
             yellow_crossline = self._detect_crossline(ymask)
-        return mask, yellow_ratio, yellow_offset, yellow_crossline
+        return mask, wmask, ymask, yellow_ratio, yellow_offset, yellow_crossline
 
     def _detect_crossline(self, ymask):
         """노란 '가로' 라인 감지기 (contour/Hough 없이 저렴한 행 픽셀 수 스캔).
@@ -186,23 +217,44 @@ class LaneDetector:
         if self.use_birdeye:
             roi = self._apply_birdeye(roi)   # 실패 시 원본 ROI 로 폴백
 
-        mask, yellow_ratio, yellow_offset, yellow_crossline = self._build_mask(roi)
+        (mask, wmask, ymask, yellow_ratio,
+         yellow_offset, yellow_crossline) = self._build_mask(roi)
 
         # (4) 노이즈 정리: MORPH_OPEN 이 대리석 바닥 반사광 점과 점선의 작은 틈을
         # 제거해, 떠도는 픽셀이 차선 중심을 잡아끌지 않게 한다.
-        if self.morph_kernel and self.morph_kernel > 1:
-            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (self.morph_kernel, self.morph_kernel))
-            clean = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k)
+        use_morph = bool(self.morph_kernel and self.morph_kernel > 1)
+        k = (cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (self.morph_kernel, self.morph_kernel))
+             if use_morph else None)
+        clean = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k) if use_morph else mask
+
+        # In 코스 색상 추종 상태머신 (히스테리시스; __init__ 주석 참고):
+        #   WHITE 모드 = 흰색 전용 추종, 노란색이 조금이라도 보이면 YELLOW 로 진입.
+        #   YELLOW 모드 = 노란 전용 추종(흰선 완전 무시), 흰색이 노란색보다 많이
+        #   검출되면 WHITE 복귀. ROUNDABOUT 상태 동안은 강제 YELLOW 유지.
+        # junction/fork 감지는 아래에서 합친 마스크(clean)를 그대로 쓴다.
+        track = clean
+        if (self.follow_yellow and self.course == 'in'
+                and ymask is not None and wmask is not None):
+            if not self._following_yellow:
+                if yellow_ratio >= self.follow_yellow_ratio:
+                    self._following_yellow = True
+            elif self.drive_mode != 'ROUNDABOUT':
+                wcount = int(np.count_nonzero(wmask))
+                ycount = int(np.count_nonzero(ymask))
+                if wcount > self.follow_yellow_exit_white_ratio * max(1, ycount):
+                    self._following_yellow = False
+            sel = ymask if self._following_yellow else wmask
+            track = cv2.morphologyEx(sel, cv2.MORPH_OPEN, k) if use_morph else sel
         else:
-            clean = mask
+            self._following_yellow = False
 
         # (1) multi-band look-ahead: ROI 를 가로 band 들(가까움..멂)로 나누고 각각에서
         # 차선 중심을 찾는다. 가까운 band 는 조향에, 먼 band 는 커브 선행 감지에 쓴다.
-        roi_h = clean.shape[0]
+        roi_h = track.shape[0]
         band_h = max(1, roi_h // self.num_bands)
         band_windows = []   # guided 모드 탐색 창, 디버그 오버레이용
         if self.use_guided_band:
-            bands, near_lanes, band_windows = self._guided_bands(clean, w, roi_h, band_h)
+            bands, near_lanes, band_windows = self._guided_bands(track, w, roi_h, band_h)
         else:
             bands = []   # (center_x, weight, band_index)  band 0 = 가장 가까움 (ROI 하단)
             near_lanes = 0
@@ -211,7 +263,7 @@ class LaneDetector:
                 y0 = max(0, roi_h - (i + 1) * band_h)
                 if y1 - y0 < 2:
                     continue
-                cx, nlanes = self._band_center(clean[y0:y1, :], w)
+                cx, nlanes = self._band_center(track[y0:y1, :], w)
                 if cx is not None:
                     bands.append((cx, float(self.num_bands - i), i))  # 가까울수록 -> 가중치 큼
                     if i == 0:
@@ -255,7 +307,8 @@ class LaneDetector:
 
         # 디버그 이미지는 웹 대시보드용일 뿐 주행에 안 쓰인다. 프레임을 띄엄띄엄
         # (lane_node 의 debug_hz) 보낼 때 그리기+인코딩을 통째로 건너뛰어 보드 부하를 던다.
-        debug = (self._draw_debug(roi, clean, lane_center, offset, yellow_ratio,
+        # 노란 추종 중이면 실제 추종 대상인 track(노란 전용)을 그려 튜닝에 도움 준다.
+        debug = (self._draw_debug(roi, track, lane_center, offset, yellow_ratio,
                                   curvature, band_windows, roi_raw, near_cx, la_cx)
                  if draw_debug else None)
         return (lane_found, offset, num_lanes, junction, yellow_ratio, yellow_offset,
@@ -486,11 +539,23 @@ class LaneDetector:
                 lx = int(max(0, min(dbg.shape[1] - 1, la_cx)))
                 cv2.line(dbg, (lx, 0), (lx, dh // 3), (0, 165, 255), 1)
         # 상태 텍스트 (프레임이 겨우 ~320x72: 폰트를 아주 작게 유지)
+        follow_tag = ''
+        if self.follow_yellow and self.course == 'in':
+            follow_tag = '  FOLLOW-Y' if self._following_yellow else '  FOLLOW-W'
         mode = (f"BEV {'ON' if self.use_birdeye else 'OFF'}  "
                 f"GUIDED {'ON' if self.use_guided_band else 'OFF'}  "
-                f"LA {'ON' if self.use_lookahead_control else 'OFF'}")
+                f"LA {'ON' if self.use_lookahead_control else 'OFF'}"
+                f"{follow_tag}")
         vals = f"off {offset:+.2f}  yr {yellow_ratio:.2f}  cv {curvature:+.2f}"
-        cv2.putText(dbg, mode, (2, 10), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
+        # 현재 주행 모드를 크게(검은 배경 위 노랑) 맨 위에 표시. decision 미실행이면 생략.
+        y_mode = 10
+        if self.drive_mode:
+            txt = f"MODE: {self.drive_mode}"
+            (tw, th), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            cv2.rectangle(dbg, (0, 0), (tw + 6, th + 8), (0, 0, 0), -1)
+            cv2.putText(dbg, txt, (3, th + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+            y_mode = th + 18
+        cv2.putText(dbg, mode, (2, y_mode), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
         cv2.putText(dbg, vals, (2, dbg.shape[0] - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
 
         # BEV 켜짐: src 튜닝을 위해 (소스 사각형이 그려진) 원본 ROI 를 위에 쌓는다.

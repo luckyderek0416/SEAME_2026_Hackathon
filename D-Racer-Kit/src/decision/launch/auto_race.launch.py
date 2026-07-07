@@ -21,9 +21,11 @@ def _lane_node(context, *args, **kwargs):
     course_val = LaunchConfiguration('course').perform(context).strip().lower()
     race_dir_val = LaunchConfiguration('race_dir').perform(context)
     use_yellow = course_val != 'out'
+    # course 도 전달: In 코스에서만 색상 추종 상태머신(흰->노랑->흰)이 활성화된다.
     return [Node(package='perception', executable='lane_node', name='lane_node',
                  output='screen',
-                 parameters=[{'race_dir': race_dir_val, 'use_yellow': use_yellow}])]
+                 parameters=[{'race_dir': race_dir_val, 'use_yellow': use_yellow,
+                              'course': course_val}])]
 
 
 def generate_launch_description():

@@ -33,7 +33,7 @@ class LaneNode(Node):
         # 30Hz 인코딩은 3/4가 버려진다. 10Hz면 보드 CPU를 아끼면서 대시보드 체감은 동일.
         # (0 이하 = 매 프레임; 라이브로 ros2 param set /lane_node debug_hz 5.0 조절 가능)
         self.declare_parameter('debug_hz', 10.0)
-        self.declare_parameter('roi_top_ratio', 0.50)   # 상단 50% crop (아래 50% 사용)
+        self.declare_parameter('roi_top_ratio', 0.35)   # 상단 35% crop (아래 65% 사용)
         self.declare_parameter('bright_thresh', 160)
         self.declare_parameter('min_pixels', 40)
         # --- 강건한 차선 추종 (멀티밴드 look-ahead, 곡률, 스무딩) ---
@@ -58,10 +58,13 @@ class LaneNode(Node):
         # 평탄화한 비율 리스트 [x1,y1, x2,y2, x3,y3, x4,y4] (TL,TR,BR,BL), ROI 크기 대비 0..1
         # src: 2026-07-05 실측 캘리브레이션 (직선 구간, 차선 픽셀 추적 fit + 워프 드리프트
         # 최소화; 잔차 L+1.5px/R-0.3px). 카메라 높이/각도를 다시 바꾸면 재캘리브레이션 필요.
-        # 2026-07-06: roi_top_ratio 0.55->0.50 변경에 맞춰 src y 재계산(절대 위치 0.5725/0.9775
-        # 유지 -> ROI 상대 0.145/0.955). x는 ROI 폭=전체 폭이라 불변. 워프 결과는 종전과 동일.
+        # 2026-07-07: roi_top_ratio=0.35 에서 실측 프레임 재캘리브레이션. 직선 구간에 차를
+        # 가운데 두고 좌/우 흰선을 직선 피팅(밴드 구간 행) -> src 좌/우 변을 실제 차선 위에
+        # 얹힘. 검증: 워프 후 두 차선 slope ±0.05(거의 수직), x=0.20w/0.80w 평행.
+        # TL(왼쪽 윗꼭짓점) x 는 실측 0.196 에서 수동으로 오른쪽으로 살짝 옮김(0.226).
+        # TR(오른쪽 윗꼭짓점) x 는 실측 0.761 에서 수동으로 왼쪽으로 아주 살짝 옮김(0.745).
         self.declare_parameter('use_birdeye', True)
-        self.declare_parameter('birdeye_src_ratio', [0.262, 0.145, 0.811, 0.145, 1.017, 0.955, 0.034, 0.955])
+        self.declare_parameter('birdeye_src_ratio', [0.226, 0.342, 0.745, 0.342, 0.998, 0.965, -0.006, 0.965])
         self.declare_parameter('birdeye_dst_ratio', [0.20, 0.00, 0.80, 0.00, 0.80, 1.00, 0.20, 1.00])
         # --- 가이드 밴드 탐색 (기본 ON) ---
         self.declare_parameter('use_guided_band', True)
@@ -85,12 +88,23 @@ class LaneNode(Node):
         self.declare_parameter('crossline_min_rows', 4)             # 넓은 row 최소 줄 수
         # --- 좌/우 갈림길 (fork) 감지 + 브랜치 선택 ---
         self.declare_parameter('fork_topic', '/decision/fork_dir')  # decision 이 확정 방향 publish
+        self.declare_parameter('state_topic', '/decision/state')    # decision 주행 모드 -> BEV 표시
         self.declare_parameter('fork_scan_top_ratio', 0.0)          # 분기 스캔밴드 상단(BEV far)
         self.declare_parameter('fork_scan_bottom_ratio', 0.5)       # 분기 스캔밴드 하단
         self.declare_parameter('fork_col_min_ratio', 0.15)          # 컬럼=라인 판정 세로픽셀 비율
         self.declare_parameter('fork_min_groups', 3)                # 라인 군집 개수 이상 => 분기
         self.declare_parameter('fork_span_ratio', 0.65)             # 바깥라인 간격 폭 이상 => 분기
         self.declare_parameter('fork_seed_px', 90)                  # 브랜치 선택 시드 이동량(px)
+        # --- 노란색 우선 추종 (In 코스: 노란 진입 커브/회전교차로 링) ---
+        self.declare_parameter('follow_yellow', True)               # In 코스 색상 추종 상태머신 on/off
+        self.declare_parameter('follow_yellow_ratio', 0.03)         # 이 노란비율 이상 -> YELLOW 모드 진입
+                                                                    # (노란선이 점선이라 yr 이 낮음 -> 0.03)
+        self.declare_parameter('follow_yellow_exit_white_ratio', 1.0)  # 흰픽셀 > 이 배율*노란픽셀 -> WHITE 복귀
+        self.declare_parameter('course', 'in')                      # 'in' 일 때만 색상 추종 활성 (launch 전달)
+        # 차선 폭 초기값(px, BEV 워프 기준). 0=학습대기. EMA 학습은 그대로 계속 미세보정.
+        # 192 = 실측 차선폭 350mm 를 BEV 캘리로 변환한 값((0.80-0.20)*320px). 단선 구간
+        # 콜드스타트 해결용. 카메라 마운트/BEV 재캘리 시 다시 확인.
+        self.declare_parameter('lane_width_init', 192.0)
 
         sub_topic = str(self.get_parameter('subscribe_topic').value)
         self.lane_topic = str(self.get_parameter('lane_topic').value)
@@ -158,6 +172,11 @@ class LaneNode(Node):
             fork_min_groups=int(gp('fork_min_groups').value),
             fork_span_ratio=float(gp('fork_span_ratio').value),
             fork_seed_px=int(gp('fork_seed_px').value),
+            follow_yellow=bool(gp('follow_yellow').value),
+            follow_yellow_ratio=float(gp('follow_yellow_ratio').value),
+            follow_yellow_exit_white_ratio=float(gp('follow_yellow_exit_white_ratio').value),
+            course=str(gp('course').value).lower(),
+            lane_width_init=float(gp('lane_width_init').value),
         )
 
         self.pub = self.create_publisher(LaneState, self.lane_topic, 10)
@@ -168,6 +187,8 @@ class LaneNode(Node):
         self.create_subscription(CompressedImage, sub_topic, self.on_image, 10)
         # decision 이 표결로 확정한 갈림길 방향('left'/'right'/'')을 받아 브랜치 선택에 쓴다.
         self.create_subscription(String, str(gp('fork_topic').value), self.on_fork_dir, 10)
+        # decision 주행 모드(상태머신 상태)를 받아 BEV 디버그 화면에 표시한다.
+        self.create_subscription(String, str(gp('state_topic').value), self.on_state, 10)
         # 라이브 튜닝: `ros2 param set /lane_node yellow_hsv_lo "[18,45,110]"` 등을 실행하면
         # detector 가 즉시 갱신되어 재시작 없이 반영된다. 튜닝하면서 대시보드로
         # HSV 마스크를 바로 확인할 수 있다.
@@ -182,6 +203,10 @@ class LaneNode(Node):
                 self.debug_period = (1.0 / float(v)) if float(v) > 0.0 else 0.0
                 self.get_logger().info(f'param live-updated: debug_hz = {v}')
                 continue
+            if n == 'lane_width_init':   # detector 속성명은 _lane_width
+                self.detector._lane_width = float(v)
+                self.get_logger().info(f'param live-updated: lane_width_init = {v}')
+                continue
             if n in hsv_keys:
                 setattr(self.detector, n, tuple(int(x) for x in v))
             elif n in ('birdeye_src_ratio', 'birdeye_dst_ratio'):
@@ -189,7 +214,7 @@ class LaneNode(Node):
                 self.detector.invalidate_birdeye_cache()   # 변환 행렬을 다시 만들어야 함
             elif n in ('use_white', 'use_yellow', 'use_birdeye', 'use_guided_band',
                        'guide_use_previous_frame', 'use_lookahead_control',
-                       'adaptive_lookahead'):
+                       'adaptive_lookahead', 'follow_yellow'):
                 setattr(self.detector, n, bool(v))
             elif hasattr(self.detector, n):
                 setattr(self.detector, n, v)
@@ -199,6 +224,9 @@ class LaneNode(Node):
     def on_fork_dir(self, msg: String):
         d = msg.data.strip().lower()
         self.detector.fork_dir = d if d in ('left', 'right') else None
+
+    def on_state(self, msg: String):
+        self.detector.drive_mode = str(msg.data)
 
     def on_image(self, msg: CompressedImage):
         frame = cv2.imdecode(np.frombuffer(msg.data, dtype=np.uint8), cv2.IMREAD_COLOR)

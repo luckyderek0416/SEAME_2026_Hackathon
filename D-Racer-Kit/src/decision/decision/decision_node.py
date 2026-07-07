@@ -28,6 +28,7 @@ class DecisionNode(Node):
         self.declare_parameter('detections_topic', '/inference/detections')
         self.declare_parameter('control_topic', '/control')
         self.declare_parameter('fork_dir_topic', '/decision/fork_dir')  # 확정 방향을 perception 에 전달
+        self.declare_parameter('state_topic', '/decision/state')        # 주행 모드 -> BEV 표시/모니터
         self.declare_parameter('control_hz', 30.0)
 
         # ----- 전략 -----
@@ -40,6 +41,13 @@ class DecisionNode(Node):
         self.declare_parameter('kd', 0.15)
         self.declare_parameter('steer_center', 0.2)  # 쏠림(drift) 보정용 조향 bias
         self.declare_parameter('steer_scale', -1.0)   # NEGATIVE: 트랙 검증 결과 조향 부호가 반대였음(오른쪽 치우침 offset<0 -> 더 왼쪽 조향해야 교정)
+        # 좌우 조향 비대칭 보정: 차가 좌조향 시 실제로 덜 꺾여서, 좌조향(steer_center 위쪽
+        # 편차)만 이 배율로 증폭한다. 1.0=off. 좌조향 = steer > steer_center (PID 부호 검증).
+        self.declare_parameter('steer_left_gain', 1.2)
+        # 급커브 feed-forward: DRIVE 에서 곡률에 비례한 조향 편향을 추가한다. 급좌커브에서
+        # 가까운 왼선을 놓쳐도 curvature(밴드 간 차이)는 살아있어 미리·더 꺾게 해준다.
+        # 0=off. 부호는 offset 과 동일 규약이라 target 에 그대로 더한다(좌커브 curvature<0).
+        self.declare_parameter('curve_steer_bias', 0.0)
 
         # ----- throttle 단계 (키트의 set_throttle_percent 규약) -----
         self.declare_parameter('drive_throttle', 0.20)
@@ -54,6 +62,11 @@ class DecisionNode(Node):
         self.declare_parameter('conf_threshold', 0.5)
         self.declare_parameter('green_frames', 3)
         self.declare_parameter('red_frames', 3)
+        # 빨간불 오인식 가드: 출발 후 이 시간(초) 전에는 빨간불 무시(코스 중간에
+        # 빨간 물체 오인식으로 FINISH/DONE 되는 사고 방지). 신호등 bbox 최소 면적
+        # (정규화 w*h, 0=off)도 함께 — 멀리 있는 작은 오검출 박스 필터.
+        self.declare_parameter('finish_min_drive_s', 15.0)
+        self.declare_parameter('light_min_area', 0.0)
         self.declare_parameter('marker_area_trigger', 0.02)
         self.declare_parameter('marker_clear_frames', 5)
         self.declare_parameter('fork_bias', 0.2)    # 브랜치 선택(perception)이 주역이라 진입 보조용으로 축소
@@ -65,8 +78,8 @@ class DecisionNode(Node):
         self.declare_parameter('fork_vote_clear_s', 1.0)    # 표지판 끊긴 뒤 표결 초기화까지(떨림방지창; 홀드 아님)
 
         # ----- 회전교차로 (junction 카운트, IMU 없음) -----
-        self.declare_parameter('enter_curvature', 0.45)   # |lane offset| 이 이 값을 넘는 상태가 ...
-        self.declare_parameter('enter_sustain_s', 0.6)    # ... 이 시간 지속되면 -> 회전 진입
+        self.declare_parameter('enter_curvature', 0.45)   # (미사용) 진입이 가로선 단독 트리거로 바뀜
+        self.declare_parameter('enter_sustain_s', 0.3)    # 가로선이 이 시간 지속 보이면 -> 회전 진입
         # race_dir 마스터 (당일 설정): 'left' (CCW) 또는 'right' (CW). 여기서 회전교차로
         # turn_direction 을, 그리고 lane_node 의 junction_side 를 파생한다. 값 하나로
         # 방향 의존적인 모든 것이 뒤집힌다. 아래 turn_direction 은 race_dir 이
@@ -78,7 +91,7 @@ class DecisionNode(Node):
         # 동작한다 -> 당일 설정 불필요.
         self.declare_parameter('branch_bias', 0.35)        # 갈림길에서의 조향 bias
         self.declare_parameter('branch_yellow_min', 0.03)  # yellow_ratio 가 이 값 이상 => 갈림길이 보임
-        self.declare_parameter('circle_steer_bias', 0.15) # 링 유지, 조기 탈출 방지
+        self.declare_parameter('circle_steer_bias', 0.225) # 링 유지, 조기 탈출 방지
         self.declare_parameter('target_loops', 1)
         self.declare_parameter('min_loop_time_s', 3.0)    # 이보다 빨리 한 바퀴 완료 불가 (절대 하한)
         self.declare_parameter('max_loop_time_s', 20.0)   # 모든 추정치 실패 시 failsafe 탈출
@@ -93,7 +106,8 @@ class DecisionNode(Node):
         # --- 회전교차로 탈출 = 갈림길과 동일한 브랜치 락온 ---
         # 링을 돌며 게이트(노란 가로선 or 점선 개구부)의 상승엣지를 세고, 이 횟수에
         # 도달하면 출구 브랜치로 락온해 명시적으로 빠져나간다(암묵적 바이어스 해제 대신).
-        self.declare_parameter('roundabout_exit_gates', 2)   # 게이트 통과 이 횟수면 탈출(엣지 카운트)
+        self.declare_parameter('roundabout_exit_gates', 1)   # 진입 후 가로선을 이 횟수 더 만나면 탈출
+                                                             # (진입 가로선은 쿨다운으로 제외; 1=한 바퀴)
         self.declare_parameter('roundabout_exit_side', '')   # 출구 브랜치 side; '' 이면 race_dir 파생
 
         g = self.get_parameter
@@ -116,6 +130,8 @@ class DecisionNode(Node):
             'kp': float(g('kp').value), 'ki': float(g('ki').value), 'kd': float(g('kd').value),
             'steer_center': float(g('steer_center').value),
             'steer_scale': float(g('steer_scale').value),
+            'steer_left_gain': float(g('steer_left_gain').value),
+            'curve_steer_bias': float(g('curve_steer_bias').value),
             'drive_throttle': float(g('drive_throttle').value),
             'slow_throttle': float(g('slow_throttle').value),
             'stop_throttle': float(g('stop_throttle').value),
@@ -125,6 +141,8 @@ class DecisionNode(Node):
             'conf_threshold': float(g('conf_threshold').value),
             'green_frames': int(g('green_frames').value),
             'red_frames': int(g('red_frames').value),
+            'finish_min_drive_s': float(g('finish_min_drive_s').value),
+            'light_min_area': float(g('light_min_area').value),
             'marker_area_trigger': float(g('marker_area_trigger').value),
             'marker_clear_frames': int(g('marker_clear_frames').value),
             'fork_bias': float(g('fork_bias').value),
@@ -155,11 +173,17 @@ class DecisionNode(Node):
         # (steer_center/steer_scale 는 _lane_steer 에서 매번 cfg 를 읽으므로 즉시 반영됨)
         self.live_tunable = {
             'drive_throttle', 'slow_throttle', 'stop_throttle', 'curve_slow',
-            'steer_center', 'steer_scale',
+            'steer_center', 'steer_scale', 'steer_left_gain',
             'kp', 'ki', 'kd',   # PID 게인 (조향 세기) 트랙에서 라이브 튜닝
             'max_steering_delta', 'steer_slow',   # look-ahead 보조 (rate limit / 조향 감속)
             'fork_bias', 'fork_hold_s',           # 갈림길 편향 세기 / 유지 시간
             'roundabout_exit_gates',              # 회전교차로 탈출 게이트 카운트 (트랙 실측)
+            'enter_sustain_s',                    # 진입 가로선 지속 debounce (트랙 실측)
+            'finish_min_drive_s',                 # 빨간불 무시 최소 주행시간 (오인식 가드)
+            'light_min_area',                     # 신호등 bbox 최소 면적 (오검출 필터)
+            'conf_threshold',                     # YOLO confidence 문턱 (현장 조정)
+            'circle_steer_bias',                  # 회전교차로 링 유지 편향 세기
+            'curve_steer_bias',                   # DRIVE 급커브 feed-forward 편향
         }
         self._prev_steer = None   # rate limit 용 직전 조향값
         # 갈림길 표지판 표결 상태 (decision_node 로컬)
@@ -186,6 +210,8 @@ class DecisionNode(Node):
         self.pub = self.create_publisher(Control, str(g('control_topic').value), 10)
         # 확정된 갈림길 방향을 perception(lane_node)에 전달 -> 브랜치 선택(guide 시드).
         self.fork_dir_pub = self.create_publisher(String, str(g('fork_dir_topic').value), 10)
+        # 현재 주행 모드를 publish -> lane_node 가 BEV 디버그 화면에 표시.
+        self.state_pub = self.create_publisher(String, str(g('state_topic').value), 10)
 
         self.dt = 1.0 / float(g('control_hz').value)
         self.timer = self.create_timer(self.dt, self.on_timer)
@@ -283,7 +309,15 @@ class DecisionNode(Node):
         # 표지판이 시야에서 사라진 뒤에도 latch 가 유지되는 동안(갈림길 통과 전) 계속
         # 그 브랜치를 좇게 하려고, confirmed 가 아니라 sm.turn_latch 를 보낸다.
         self.fork_dir_pub.publish(String(data=self.sm.turn_latch or ''))
+        # 현재 주행 모드를 publish -> BEV 디버그 화면 표시.
+        self.state_pub.publish(String(data=state))
         cfg = self.sm.cfg
+        # 좌우 조향 비대칭 보정: 차가 좌조향 시 실제로 덜 꺾이므로, steer_center 위쪽
+        # 편차(=좌조향)만 steer_left_gain 배로 증폭한다. rate limit 전에 적용.
+        lg = float(cfg.get('steer_left_gain', 1.0))
+        center = float(cfg['steer_center'])
+        if lg != 1.0 and steer > center:
+            steer = max(-1.0, min(1.0, center + (steer - center) * lg))
         # 조향 rate limit: 틱당 변화량 제한으로 프레임 간 조향 급변(튐)을 막는다.
         # 0 이면 완전 비활성(기존 동작). roundabout 의 yaw 적분은 제한 전 값을 쓰지만
         # 편향이 '늦게 나가기' 쪽이라 랩 카운트 안전에는 문제 없음.
