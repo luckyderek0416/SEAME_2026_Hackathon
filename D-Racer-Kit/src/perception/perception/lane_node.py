@@ -33,7 +33,7 @@ class LaneNode(Node):
         # 30Hz 인코딩은 3/4가 버려진다. 10Hz면 보드 CPU를 아끼면서 대시보드 체감은 동일.
         # (0 이하 = 매 프레임; 라이브로 ros2 param set /lane_node debug_hz 5.0 조절 가능)
         self.declare_parameter('debug_hz', 10.0)
-        self.declare_parameter('roi_top_ratio', 0.55)
+        self.declare_parameter('roi_top_ratio', 0.50)   # 상단 50% crop (아래 50% 사용)
         self.declare_parameter('bright_thresh', 160)
         self.declare_parameter('min_pixels', 40)
         # --- robust lane following (multi-band look-ahead, curvature, smoothing) ---
@@ -58,8 +58,10 @@ class LaneNode(Node):
         # flat ratio lists [x1,y1, x2,y2, x3,y3, x4,y4] (TL,TR,BR,BL), 0..1 of ROI size
         # src: 2026-07-05 실측 캘리브레이션 (직선 구간, 차선 픽셀 추적 fit + 워프 드리프트
         # 최소화; 잔차 L+1.5px/R-0.3px). 카메라 높이/각도를 다시 바꾸면 재캘리브레이션 필요.
+        # 2026-07-06: roi_top_ratio 0.55->0.50 변경에 맞춰 src y 재계산(절대 위치 0.5725/0.9775
+        # 유지 -> ROI 상대 0.145/0.955). x는 ROI 폭=전체 폭이라 불변. 워프 결과는 종전과 동일.
         self.declare_parameter('use_birdeye', True)
-        self.declare_parameter('birdeye_src_ratio', [0.262, 0.05, 0.811, 0.05, 1.017, 0.95, 0.034, 0.95])
+        self.declare_parameter('birdeye_src_ratio', [0.262, 0.145, 0.811, 0.145, 1.017, 0.955, 0.034, 0.955])
         self.declare_parameter('birdeye_dst_ratio', [0.20, 0.00, 0.80, 0.00, 0.80, 1.00, 0.20, 1.00])
         # --- guided band search (default ON) ---
         self.declare_parameter('use_guided_band', True)
