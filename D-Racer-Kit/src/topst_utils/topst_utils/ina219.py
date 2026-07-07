@@ -6,7 +6,7 @@ from smbus2 import SMBus
 # from PIL import ImageFont
 
 # =========================
-# TOPST I2C settings
+# TOPST I2C 설정
 # =========================
 I2C_BUS   = 3
 OLED_ADDR = 0x3C
@@ -23,7 +23,7 @@ def get_battery_percentage(voltage):
     return round(((voltage - MIN_VOLTAGE) / (MAX_VOLTAGE - MIN_VOLTAGE)) * 100)
 
 # =========================
-# INA219 minimal driver (no adafruit)
+# INA219 최소 드라이버 (adafruit 라이브러리 불필요)
 # =========================
 class INA219:
     REG_CONFIG  = 0x00
@@ -37,7 +37,7 @@ class INA219:
         self.bus = bus
         self.addr = addr
 
-        # calibration
+        # 캘리브레이션
         self.current_lsb = max_current_a / 32768.0
         self.power_lsb = 20.0 * self.current_lsb
         calib = int(0.04096 / (self.current_lsb * r_shunt_ohm))
@@ -64,25 +64,25 @@ class INA219:
 
     @property
     def shunt_voltage(self) -> float:
-        # volts
+        # 단위: V (볼트)
         raw = self.to_int16(self.read_u16(self.REG_SHUNT_V))
-        return raw * 10e-6  # 10uV/bit
+        return raw * 10e-6  # 비트당 10uV
 
     @property
     def bus_voltage(self) -> float:
-        # volts
+        # 단위: V (볼트)
         raw = self.read_u16(self.REG_BUS_V)
         raw = (raw >> 3) & 0x1FFF
-        return raw * 4e-3  # 4mV/bit
+        return raw * 4e-3  # 비트당 4mV
 
     @property
     def current(self) -> float:
-        # mA
+        # 단위: mA
         raw = self.to_int16(self.read_u16(self.REG_CURRENT))
         return (raw * self.current_lsb) * 1000.0
 
     @property
     def power(self) -> float:
-        # W
+        # 단위: W
         raw = self.read_u16(self.REG_POWER)
         return raw * self.power_lsb

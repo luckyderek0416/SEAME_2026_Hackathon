@@ -1,8 +1,8 @@
-"""Minimal PID with output clamp and integral anti-windup.
+"""출력 클램프와 적분 anti-windup 을 갖춘 최소 구현 PID.
 
-For lane following you will usually run this as a PD controller (ki=0).
-Tune in this order:  Kp first, then Kd to kill the wobble, add tiny Ki
-only if the car drifts consistently to one side.
+차선 추종에서는 보통 PD 제어기(ki=0)로 쓴다.
+튜닝 순서: 먼저 Kp, 그다음 Kd 로 흔들림(wobble)을 잡고, 차가 한쪽으로
+일관되게 치우칠 때만 아주 작은 Ki 를 추가한다.
 """
 
 

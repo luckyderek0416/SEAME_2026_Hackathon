@@ -1,18 +1,18 @@
-"""OpenCV lane detector (rule-based, NOT deep learning).
+"""OpenCV 차선 감지기 (규칙 기반, 딥러닝 아님).
 
-Takes a BGR frame, looks at a bottom region of interest (ROI), finds the
-bright lane markings on the left and right, and returns a normalised
-steering offset. Every constant here is a TUNING knob for the real track.
+BGR 프레임을 받아 하단 관심영역(ROI)을 보고, 좌우의 밝은 차선 마킹을
+찾아 정규화된 조향 offset 을 반환한다. 여기의 모든 상수는 실제 트랙용
+튜닝 노브다.
 
-Baseline strategy:
-  1. crop the bottom part of the frame (the road right in front of the car)
-  2. threshold for bright pixels (the white boundary lines)
-  3. find the mean x of bright pixels on each half -> the two lane lines
-  4. lane center = midpoint of the two lines
-  5. offset = how far that center sits from the image center, in [-1, 1]
+기본 전략:
+  1. 프레임 하단(차 바로 앞의 도로)을 잘라낸다
+  2. 밝은 픽셀(흰색 경계선)을 threshold 로 걸러낸다
+  3. 좌우 절반마다 밝은 픽셀의 평균 x 를 구한다 -> 두 차선 라인
+  4. 차선 중심 = 두 라인의 중점
+  5. offset = 그 중심이 이미지 중심에서 얼마나 떨어졌는지, [-1, 1] 범위
 
-If only one line is visible we estimate the center from it. If the track
-has a yellow center line you can add a second HSV mask and blend it in.
+라인이 하나만 보이면 그것으로 중심을 추정한다. 트랙에 노란 중앙선이
+있다면 두 번째 HSV mask 를 추가해 섞을 수 있다.
 """
 
 import cv2
@@ -38,26 +38,26 @@ class LaneDetector:
                  fork_scan_top_ratio=0.0, fork_scan_bottom_ratio=0.5,
                  fork_col_min_ratio=0.15, fork_min_groups=3, fork_span_ratio=0.65,
                  fork_seed_px=90):
-        self.roi_top_ratio = roi_top_ratio        # use only the bottom (1 - ratio) of the frame
-        self.bright_thresh = bright_thresh         # gray-mode white-line brightness threshold (0-255)
-        self.min_pixels = min_pixels               # min lane pixels per side to trust it
-        self.single_line_offset = single_line_offset  # fallback offset when no lane width known yet
-        # --- robust lane following on a curvy, marble-floor track ---
-        self.num_bands = max(1, num_bands)         # horizontal look-ahead bands (curve anticipation)
-        self.morph_kernel = morph_kernel           # MORPH_OPEN size; kills glare specks / dash bits (0=off)
-        self.width_ema = width_ema                 # how fast the remembered lane width adapts
-        self.smooth_alpha = smooth_alpha           # offset EMA (1=no smoothing, lower=smoother)
-        self._lane_width = 0.0                     # remembered lane width (px), for single-line centering
-        self._offset_ema = 0.0                     # smoothed offset state
-        # roundabout junction = the DASHED marking at the entry/exit (on this track the
-        # ring is a solid line and only the junction is dashed). Detect the dashes by
-        # the lane line turning on/off down the side strip (solid line stays on).
-        self.junction_side = junction_side                 # side the dashed junction shows on
-        self.junction_dash_transitions = junction_dash_transitions  # vertical on/off changes => dashed
-        self.junction_min_row_pixels = junction_min_row_pixels      # row counts as 'line' above this
-        self.junction_gap_rows = junction_gap_rows         # full-opening fallback (few rows with line)
-        # colour masking: 'hsv' detects white AND/OR yellow lines (robust, distinguishes
-        # the yellow roundabout lane); 'gray' is the old brightness-only threshold.
+        self.roi_top_ratio = roi_top_ratio        # 프레임 하단 (1 - ratio) 부분만 사용
+        self.bright_thresh = bright_thresh         # gray 모드 흰색 라인 밝기 threshold (0-255)
+        self.min_pixels = min_pixels               # 한쪽을 신뢰하기 위한 최소 차선 픽셀 수
+        self.single_line_offset = single_line_offset  # 차선 폭을 아직 모를 때의 폴백 offset
+        # --- 굴곡 많은 대리석 바닥 트랙에서의 견고한 차선 추종 ---
+        self.num_bands = max(1, num_bands)         # 가로 look-ahead band 개수 (커브 선행 감지)
+        self.morph_kernel = morph_kernel           # MORPH_OPEN 크기; 반사광 점/점선 조각 제거 (0=끔)
+        self.width_ema = width_ema                 # 기억된 차선 폭이 적응하는 속도
+        self.smooth_alpha = smooth_alpha           # offset EMA (1=스무딩 없음, 낮을수록 부드러움)
+        self._lane_width = 0.0                     # 기억된 차선 폭(px), 단일 라인 중심 계산용
+        self._offset_ema = 0.0                     # 스무딩된 offset 상태
+        # 회전교차로 junction = 진입/진출부의 점선 마킹 (이 트랙에서 링은 실선이고
+        # junction 만 점선이다). 사이드 스트립을 따라 차선 라인이 켜졌다 꺼졌다 하는
+        # 것으로 점선을 감지한다 (실선은 계속 켜져 있음).
+        self.junction_side = junction_side                 # 점선 junction 이 나타나는 쪽
+        self.junction_dash_transitions = junction_dash_transitions  # 세로 on/off 변화 수 => 점선
+        self.junction_min_row_pixels = junction_min_row_pixels      # 이 값 이상이면 행을 '라인'으로 간주
+        self.junction_gap_rows = junction_gap_rows         # 완전 개방 폴백 (라인 있는 행이 적음)
+        # 색상 마스킹: 'hsv' 는 흰색 그리고/또는 노란색 라인을 감지 (견고하며 노란
+        # 회전교차로 차선을 구분함); 'gray' 는 예전의 밝기 전용 threshold.
         self.mask_mode = mask_mode
         self.use_white = use_white
         self.use_yellow = use_yellow
@@ -65,48 +65,48 @@ class LaneDetector:
         self.white_hsv_hi = tuple(white_hsv_hi)
         self.yellow_hsv_lo = tuple(yellow_hsv_lo)
         self.yellow_hsv_hi = tuple(yellow_hsv_hi)
-        # --- bird-eye view (optional, default OFF = legacy behaviour) ---
-        # src/dst are flat ratio lists [x1,y1, x2,y2, x3,y3, x4,y4] (TL,TR,BR,BL) in 0..1
-        # of the ROI size, so they survive resolution changes.
+        # --- bird-eye view (선택, 기본 OFF = 기존 동작) ---
+        # src/dst 는 ROI 크기 대비 0..1 비율의 평탄한 리스트 [x1,y1, x2,y2, x3,y3, x4,y4]
+        # (TL,TR,BR,BL) 라서 해상도가 바뀌어도 유효하다.
         self.use_birdeye = use_birdeye
         self.birdeye_src_ratio = (list(birdeye_src_ratio) if birdeye_src_ratio
                                   else [0.25, 0.05, 0.75, 0.05, 0.95, 0.95, 0.05, 0.95])
         self.birdeye_dst_ratio = (list(birdeye_dst_ratio) if birdeye_dst_ratio
                                   else [0.20, 0.00, 0.80, 0.00, 0.80, 1.00, 0.20, 1.00])
         self._bev_matrix = None
-        self._bev_key = None       # (w, h, src, dst) the cached matrix was built for
+        self._bev_key = None       # 캐시된 행렬이 만들어진 기준 (w, h, src, dst)
         self._bev_warned = False
-        # --- guided band search (optional, default OFF = legacy multi-band) ---
-        # Each band only searches around the previous band's centre so a far
-        # exit/branch line cannot yank the lane centre (roundabout/fork robustness).
+        # --- guided band 탐색 (선택, 기본 OFF = 기존 multi-band) ---
+        # 각 band 가 이전 band 중심 주변만 탐색하므로 멀리 있는 진출/분기 라인이
+        # 차선 중심을 잡아끌 수 없다 (회전교차로/fork 견고성).
         self.use_guided_band = use_guided_band
         self.guide_margin_px = guide_margin_px
         self.guide_margin_growth_px = guide_margin_growth_px
         self.guide_min_pixels = guide_min_pixels
         self.guide_use_previous_frame = guide_use_previous_frame
         self.guide_max_jump_px = guide_max_jump_px
-        self._prev_center = None   # last frame's lane_center (guide seed)
-        # --- look-ahead steering blend (partial pure-pursuit; default OFF) ---
-        # Legacy lane_center is the all-band weighted average. With this ON the
-        # centre becomes near_weight*nearest_band + lookahead_weight*far_band, so
-        # the car starts turning into a curve earlier. NOT a full pure-pursuit:
-        # the PID in decision stays the controller, we only shape its input.
+        self._prev_center = None   # 직전 프레임의 lane_center (guide 시드)
+        # --- look-ahead 조향 블렌딩 (부분 pure-pursuit; 기본 OFF) ---
+        # 기존 lane_center 는 전체 band 가중 평균이다. 이 옵션을 켜면 중심이
+        # near_weight*가장 가까운 band + lookahead_weight*먼 band 가 되어, 차가
+        # 커브에 더 일찍 진입하며 돌기 시작한다. 완전한 pure-pursuit 은 아님:
+        # decision 의 PID 가 여전히 컨트롤러이고, 우리는 그 입력만 다듬는다.
         self.use_lookahead_control = use_lookahead_control
         self.near_weight = near_weight
         self.lookahead_weight = lookahead_weight
-        self.lookahead_band_index = lookahead_band_index   # -1 = farthest detected band
+        self.lookahead_band_index = lookahead_band_index   # -1 = 감지된 가장 먼 band
         self.adaptive_lookahead = adaptive_lookahead
-        self.curve_lookahead_weight = curve_lookahead_weight  # lookahead weight on sharp curves
-        self.curve_lookahead_thresh = curve_lookahead_thresh  # |curvature| that counts as sharp
-        # --- yellow crossline (노란 가로선) detection ---
-        # A wide horizontal yellow band only appears near the roundabout entry/exit
-        # fork, so it is a POSITION signal. Detected on the yellow-only mask (never
-        # the combined lane mask) and used purely as one extra vote in decision's
-        # roundabout entry/exit logic — it does NOT touch lane-centre computation.
-        self.crossline_roi_top_ratio = crossline_roi_top_ratio       # scan window top (0..1 of ROI h)
-        self.crossline_roi_bottom_ratio = crossline_roi_bottom_ratio # scan window bottom
-        self.crossline_min_width_ratio = crossline_min_width_ratio   # row is "wide" above this fraction of w
-        self.crossline_min_rows = crossline_min_rows                 # need this many wide rows
+        self.curve_lookahead_weight = curve_lookahead_weight  # 급커브에서의 lookahead 가중치
+        self.curve_lookahead_thresh = curve_lookahead_thresh  # 급커브로 간주하는 |curvature|
+        # --- 노란 가로선 (yellow crossline) 감지 ---
+        # 넓은 가로 방향 노란 band 는 회전교차로 진입/진출 fork 근처에서만 나타나므로
+        # 위치 신호다. 노란색 전용 mask 에서 감지하며 (결합 차선 mask 에서는 절대 안 함)
+        # decision 의 회전교차로 진입/진출 로직에서 추가 표결 하나로만 쓰인다 —
+        # 차선 중심 계산은 전혀 건드리지 않는다.
+        self.crossline_roi_top_ratio = crossline_roi_top_ratio       # 스캔 창 상단 (ROI 높이의 0..1)
+        self.crossline_roi_bottom_ratio = crossline_roi_bottom_ratio # 스캔 창 하단
+        self.crossline_min_width_ratio = crossline_min_width_ratio   # 행의 노란 폭이 w 의 이 비율 이상이면 "넓음"
+        self.crossline_min_rows = crossline_min_rows                 # 넓은 행이 이 개수만큼 필요
         # --- 좌/우 갈림길 (fork) 감지 + 브랜치 선택 ---
         # 분기 구간은 도로가 두 브랜치로 갈라져, BEV 상단 스캔밴드에서 세로 라인 군집이
         # 3개 이상(각 브랜치 안/바깥선)이거나 바깥 라인 간격이 한 차선보다 훨씬 넓어진다.
@@ -124,17 +124,17 @@ class LaneDetector:
         self.fork_seed_px = fork_seed_px
 
     def _build_mask(self, roi):
-        """Return (lane_mask, yellow_ratio, yellow_offset, yellow_crossline).
+        """(lane_mask, yellow_ratio, yellow_offset, yellow_crossline) 을 반환.
 
-        HSV mode = white|yellow lane mask; gray mode = brightness threshold.
-        yellow_ratio  = fraction of ROI that is yellow (tells the yellow roundabout
-                        from the white outer loop).
-        yellow_offset = normalised x of the yellow centroid, [-1..1] (+ = yellow is
-                        to the right). Lets decision steer toward the yellow branch
-                        regardless of which side it is on (direction-agnostic).
-        yellow_crossline = a wide horizontal yellow band is in view (roundabout
-                        entry/exit fork position marker). Computed on the
-                        yellow-only mask; never affects the lane centre.
+        HSV 모드 = 흰색|노란색 차선 mask; gray 모드 = 밝기 threshold.
+        yellow_ratio  = ROI 중 노란색 비율 (노란 회전교차로와 흰색 바깥
+                        루프를 구분해 줌).
+        yellow_offset = 노란색 무게중심의 정규화된 x, [-1..1] (+ = 노란색이
+                        오른쪽에 있음). 노란 브랜치가 어느 쪽에 있든 decision 이
+                        그쪽으로 조향할 수 있게 한다 (방향 무관).
+        yellow_crossline = 넓은 가로 방향 노란 band 가 시야에 있음 (회전교차로
+                        진입/진출 fork 위치 표식). 노란색 전용 mask 에서
+                        계산하며 차선 중심에는 절대 영향 없음.
         """
         if self.mask_mode == 'gray':
             gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
@@ -158,14 +158,14 @@ class LaneDetector:
         return mask, yellow_ratio, yellow_offset, yellow_crossline
 
     def _detect_crossline(self, ymask):
-        """Yellow HORIZONTAL line detector (cheap row-count scan, no contours/Hough).
+        """노란 '가로' 라인 감지기 (contour/Hough 없이 저렴한 행 픽셀 수 스캔).
 
-        Scans the lower-middle window of the yellow-only mask: a row counts as
-        "wide" when its yellow pixels span more than crossline_min_width_ratio of
-        the image width (a normal lane line is a thin, near-vertical stripe and
-        never gets that wide), and we need crossline_min_rows such rows.
-        Runs on the BEV-warped mask when use_birdeye is on (roi is already warped
-        before _build_mask), which makes the line's width perspective-stable.
+        노란색 전용 mask 의 중하단 창을 스캔한다: 행의 노란 픽셀 범위가 이미지
+        폭의 crossline_min_width_ratio 를 넘으면 그 행을 "넓음"으로 간주하고
+        (일반 차선 라인은 얇고 거의 세로인 줄무늬라 절대 그렇게 넓어지지 않음),
+        그런 행이 crossline_min_rows 개 필요하다.
+        use_birdeye 가 켜져 있으면 BEV 워프된 mask 위에서 동작하며 (roi 는
+        _build_mask 이전에 이미 워프됨), 라인 폭이 원근에 무관하게 안정된다.
         """
         h_m, w_m = ymask.shape[:2]
         y1 = int(h_m * self.crossline_roi_top_ratio)
@@ -182,29 +182,29 @@ class LaneDetector:
         roi_top = int(h * self.roi_top_ratio)
         roi = bgr[roi_top:h, 0:w]
 
-        roi_raw = roi   # keep the pre-warp ROI so the debug view can show the BEV source region
+        roi_raw = roi   # 디버그 뷰에서 BEV 소스 영역을 보여줄 수 있게 워프 전 ROI 를 보관
         if self.use_birdeye:
-            roi = self._apply_birdeye(roi)   # falls back to raw ROI on failure
+            roi = self._apply_birdeye(roi)   # 실패 시 원본 ROI 로 폴백
 
         mask, yellow_ratio, yellow_offset, yellow_crossline = self._build_mask(roi)
 
-        # (4) noise cleanup: MORPH_OPEN removes marble-floor glare specks and the small
-        # gaps of a dashed line, so the lane centre is not pulled by stray pixels.
+        # (4) 노이즈 정리: MORPH_OPEN 이 대리석 바닥 반사광 점과 점선의 작은 틈을
+        # 제거해, 떠도는 픽셀이 차선 중심을 잡아끌지 않게 한다.
         if self.morph_kernel and self.morph_kernel > 1:
             k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (self.morph_kernel, self.morph_kernel))
             clean = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k)
         else:
             clean = mask
 
-        # (1) multi-band look-ahead: split the ROI into horizontal bands (near..far),
-        # find the lane centre in each. Near bands steer; far bands anticipate curves.
+        # (1) multi-band look-ahead: ROI 를 가로 band 들(가까움..멂)로 나누고 각각에서
+        # 차선 중심을 찾는다. 가까운 band 는 조향에, 먼 band 는 커브 선행 감지에 쓴다.
         roi_h = clean.shape[0]
         band_h = max(1, roi_h // self.num_bands)
-        band_windows = []   # guided-mode search windows, for the debug overlay
+        band_windows = []   # guided 모드 탐색 창, 디버그 오버레이용
         if self.use_guided_band:
             bands, near_lanes, band_windows = self._guided_bands(clean, w, roi_h, band_h)
         else:
-            bands = []   # (center_x, weight, band_index)  band 0 = nearest (bottom of ROI)
+            bands = []   # (center_x, weight, band_index)  band 0 = 가장 가까움 (ROI 하단)
             near_lanes = 0
             for i in range(self.num_bands):
                 y1 = roi_h - i * band_h
@@ -213,7 +213,7 @@ class LaneDetector:
                     continue
                 cx, nlanes = self._band_center(clean[y0:y1, :], w)
                 if cx is not None:
-                    bands.append((cx, float(self.num_bands - i), i))  # nearer -> heavier
+                    bands.append((cx, float(self.num_bands - i), i))  # 가까울수록 -> 가중치 큼
                     if i == 0:
                         near_lanes = nlanes
 
@@ -227,27 +227,27 @@ class LaneDetector:
             num_lanes = near_lanes if near_lanes else 1
             tw = sum(wt for _, wt, _ in bands)
             lane_center = sum(cx * wt for cx, wt, _ in bands) / tw
-            # (2) curvature = how far the lane drifts from near to far band, normalised.
-            # sign = curve direction, magnitude = sharpness (used by decision to slow down).
+            # (2) curvature = 차선이 가까운 band 에서 먼 band 로 얼마나 흘러갔는지, 정규화됨.
+            # 부호 = 커브 방향, 크기 = 급한 정도 (decision 이 감속하는 데 사용).
             curvature = self._estimate_curvature(bands, w)
-            # partial pure-pursuit: blend nearest + look-ahead band centres instead of
-            # the all-band average. OFF (default) keeps lane_center above unchanged.
-            near_cx = bands[0][0]                    # nearest detected band
+            # 부분 pure-pursuit: 전체 band 평균 대신 가장 가까운 band + look-ahead band
+            # 중심을 블렌딩한다. OFF(기본값)면 위의 lane_center 를 그대로 유지.
+            near_cx = bands[0][0]                    # 감지된 가장 가까운 band
             la_cx = self._lookahead_center(bands)
             if self.use_lookahead_control and la_cx is not None:
                 nw, lw = self.near_weight, self.lookahead_weight
                 if self.adaptive_lookahead and abs(curvature) >= self.curve_lookahead_thresh:
-                    lw = self.curve_lookahead_weight  # sharp curve: look further ahead
+                    lw = self.curve_lookahead_weight  # 급커브: 더 멀리 내다봄
                     nw = max(0.0, 1.0 - lw)
                 if nw + lw > 0.0:
                     lane_center = (nw * near_cx + lw * la_cx) / (nw + lw)
 
         raw_offset = float(max(-1.0, min(1.0, (lane_center - mid) / (w / 2.0))))
-        # (5) temporal smoothing (EMA) to reduce frame-to-frame steering jitter.
+        # (5) 시간축 스무딩(EMA)으로 프레임 간 조향 떨림을 줄인다.
         if lane_found:
             self._offset_ema = (self.smooth_alpha * raw_offset
                                 + (1.0 - self.smooth_alpha) * self._offset_ema)
-            self._prev_center = lane_center   # guide seed for the next frame
+            self._prev_center = lane_center   # 다음 프레임을 위한 guide 시드
         offset = float(self._offset_ema)
 
         junction = self._detect_junction(clean, w)
@@ -262,17 +262,17 @@ class LaneDetector:
                 curvature, yellow_crossline, fork, debug)
 
     def _band_center(self, band, w):
-        """Lane centre for one horizontal band, searching the FULL width and
-        splitting left/right at the fixed image middle (legacy behaviour)."""
+        """가로 band 하나의 차선 중심. 전체 폭을 탐색하고 고정된 이미지
+        중앙에서 좌/우를 나눈다 (기존 동작)."""
         mid = w // 2
         lx = self._mean_x(band[:, 0:mid], 0)
         rx = self._mean_x(band[:, mid:w], mid)
         return self._combine_lr(lx, rx, w)
 
     def _combine_lr(self, lx, rx, w):
-        """Combine left/right line x-positions into a lane centre. (3) When both
-        lines are seen, remember the lane width; when only one is seen, place the
-        centre half-a-width away — far more accurate on curves than a fixed fraction."""
+        """좌/우 라인의 x 위치를 결합해 차선 중심을 구한다. (3) 두 라인이 다
+        보이면 차선 폭을 기억하고, 하나만 보이면 그 라인에서 반 폭만큼 떨어진
+        곳을 중심으로 둔다 — 고정 비율보다 커브에서 훨씬 정확하다."""
         if lx is not None and rx is not None:
             width = rx - lx
             if width > 0:
@@ -287,16 +287,16 @@ class LaneDetector:
             return rx - half, 1
         return None, 0
 
-    # ---------- guided band search (optional) ----------
+    # ---------- guided band 탐색 (선택) ----------
     def _guided_bands(self, clean, w, roi_h, band_h):
-        """Multi-band centres where each band only searches around the previous
-        band's centre (± margin). Keeps _band_center's left/right split and
-        lane-width memory — just windowed — so a far exit/branch line cannot
-        yank the centre. NOT a sliding-window/polyfit fit.
+        """각 band 가 이전 band 중심 주변(± margin)만 탐색하는 multi-band 중심.
+        _band_center 의 좌/우 분할과 차선 폭 기억을 그대로 유지하되 창만
+        제한하므로, 멀리 있는 진출/분기 라인이 중심을 잡아끌 수 없다.
+        sliding-window/polyfit 피팅이 아님.
 
-        Returns (bands, near_lanes, band_windows) with bands in the legacy
-        [(center_x, weight, band_index), ...] format and band_windows =
-        [(x0, y0, x1, y1, cx_or_None), ...] for the debug overlay."""
+        (bands, near_lanes, band_windows) 를 반환하며 bands 는 기존
+        [(center_x, weight, band_index), ...] 형식이고 band_windows =
+        [(x0, y0, x1, y1, cx_or_None), ...] 는 디버그 오버레이용이다."""
         bands = []
         band_windows = []
         near_lanes = 0
@@ -315,7 +315,7 @@ class LaneDetector:
                 continue
             band = clean[y0:y1, :]
             if guide is None:
-                # no guide yet: full-width search (band 0, or all bands so far empty)
+                # 아직 guide 없음: 전체 폭 탐색 (band 0 이거나, 지금까지 모든 band 가 비었을 때)
                 cx, nlanes = self._band_center(band, w)
                 x0, x1 = 0, w
                 if (cx is None and i == 0 and self.guide_use_previous_frame
@@ -326,10 +326,10 @@ class LaneDetector:
             if cx is not None:
                 if guide is not None:
                     jump = cx - guide
-                    if abs(jump) > self.guide_max_jump_px:   # clamp sudden centre jumps
+                    if abs(jump) > self.guide_max_jump_px:   # 갑작스러운 중심 점프를 클램프
                         cx = guide + (self.guide_max_jump_px if jump > 0
                                       else -self.guide_max_jump_px)
-                bands.append((cx, float(self.num_bands - i), i))  # nearer -> heavier
+                bands.append((cx, float(self.num_bands - i), i))  # 가까울수록 -> 가중치 큼
                 if i == 0:
                     near_lanes = nlanes
                 guide = cx
@@ -337,8 +337,8 @@ class LaneDetector:
         return bands, near_lanes, band_windows
 
     def _windowed_center(self, band, w, guide, band_index):
-        """_band_center restricted to [guide-margin, guide+margin], with the
-        left/right split at the guide centre instead of the fixed w//2."""
+        """[guide-margin, guide+margin] 범위로 제한된 _band_center. 좌/우 분할
+        지점이 고정된 w//2 대신 guide 중심이다."""
         margin = self.guide_margin_px + band_index * self.guide_margin_growth_px
         x0 = int(max(0, min(w - 2, guide - margin)))
         x1 = int(max(x0 + 2, min(w, guide + margin)))
@@ -348,15 +348,15 @@ class LaneDetector:
         cx, nlanes = self._combine_lr(lx, rx, w)
         return x0, x1, cx, nlanes
 
-    # ---------- bird-eye view (optional) ----------
+    # ---------- bird-eye view (선택) ----------
     def invalidate_birdeye_cache(self):
-        """Force the perspective matrix to be rebuilt (call after src/dst change)."""
+        """원근 변환 행렬을 강제로 다시 만들게 한다 (src/dst 변경 후 호출)."""
         self._bev_key = None
         self._bev_warned = False
 
     def _apply_birdeye(self, roi):
-        """Warp the ROI to a top-down view (same size). Returns the input ROI
-        unchanged on any failure so lane following never dies from bad points."""
+        """ROI 를 탑다운 뷰로 워프한다 (같은 크기). 어떤 실패에서도 입력 ROI 를
+        그대로 반환해, 잘못된 점 때문에 차선 추종이 죽는 일이 없게 한다."""
         h, w = roi.shape[:2]
         key = (w, h, tuple(self.birdeye_src_ratio), tuple(self.birdeye_dst_ratio))
         if key != self._bev_key:
@@ -385,9 +385,9 @@ class LaneDetector:
             return roi
 
     def _lookahead_center(self, bands):
-        """Centre x of the look-ahead band: lookahead_band_index if that band was
-        detected this frame, otherwise the farthest detected band (-1 = always
-        farthest). bands are ordered near -> far."""
+        """look-ahead band 의 중심 x: 이번 프레임에 lookahead_band_index band 가
+        감지됐으면 그것을, 아니면 감지된 가장 먼 band 를 쓴다 (-1 = 항상 가장
+        먼 것). bands 는 가까운 것 -> 먼 것 순서다."""
         if not bands:
             return None
         if self.lookahead_band_index >= 0:
@@ -398,7 +398,7 @@ class LaneDetector:
 
     @staticmethod
     def _estimate_curvature(bands, w):
-        """Normalised lateral drift between the farthest and nearest detected band."""
+        """감지된 가장 먼 band 와 가장 가까운 band 사이의 정규화된 횡방향 드리프트."""
         if len(bands) < 2:
             return 0.0
         near = min(bands, key=lambda b: b[2])
@@ -406,19 +406,18 @@ class LaneDetector:
         return float(max(-1.0, min(1.0, (far[0] - near[0]) / (w / 2.0))))
 
     def _detect_junction(self, mask, w):
-        """Junction = the DASHED roundabout entry/exit marking.
+        """junction = 회전교차로 진입/진출부의 '점선' 마킹.
 
-        Down the side strip, mark each row 'line present' or not. A SOLID line is
-        present in (almost) every row -> ~0 on/off transitions. A DASHED line
-        alternates present/absent -> many transitions. So `transitions` tells the
-        dashes apart from a solid line. A full opening (very few present rows) is
-        also treated as a junction (fallback).
+        사이드 스트립을 따라 각 행에 '라인 존재' 여부를 표시한다. 실선은 (거의)
+        모든 행에 존재 -> on/off 변화가 ~0회. 점선은 존재/부재가 번갈아 나타남
+        -> 변화가 많음. 따라서 `transitions` 로 점선과 실선을 구분할 수 있다.
+        완전 개방(존재하는 행이 아주 적음)도 junction 으로 처리한다 (폴백).
         """
         strip = max(1, w // 3)
         side = mask[:, 0:strip] if self.junction_side == 'left' else mask[:, w - strip:w]
         row_present = (np.count_nonzero(side, axis=1) >= self.junction_min_row_pixels).astype(np.uint8)
         present_rows = int(row_present.sum())
-        transitions = int(np.count_nonzero(np.diff(row_present)))  # on/off changes down the strip
+        transitions = int(np.count_nonzero(np.diff(row_present)))  # 스트립을 따라 내려가며 on/off 변화 수
         dashed = transitions >= self.junction_dash_transitions
         full_gap = present_rows <= self.junction_gap_rows
         return bool(dashed or full_gap)
@@ -450,8 +449,8 @@ class LaneDetector:
         return bool(groups >= self.fork_min_groups or span >= self.fork_span_ratio * w)
 
     def _mean_x(self, half_mask, x_offset, min_pixels=None):
-        # min_pixels=None keeps the legacy threshold; guided windows are narrow so
-        # they pass their own (lower) guide_min_pixels.
+        # min_pixels=None 이면 기존 threshold 를 유지; guided 창은 좁아서
+        # 자체적인 (더 낮은) guide_min_pixels 를 넘겨준다.
         xs = np.nonzero(half_mask)[1]
         if xs.size < (self.min_pixels if min_pixels is None else min_pixels):
             return None
@@ -460,33 +459,33 @@ class LaneDetector:
     def _draw_debug(self, roi, mask, lane_center, offset=0.0, yellow_ratio=0.0,
                     curvature=0.0, band_windows=(), roi_raw=None,
                     near_cx=None, la_cx=None):
-        """Build the debug image the monitor shows on /perception/lane/debug.
+        """모니터가 /perception/lane/debug 에서 보여주는 디버그 이미지를 만든다.
 
-        Bottom (always): the ANALYSED ROI (bird-eye warped if on) with the HSV mask
-        pixels (cyan), guided search windows (magenta) + found centres (orange), the
-        detected lane centre (red) and image centre (green), plus status text.
+        하단 (항상): 분석에 쓰인 ROI (bird-eye 켜져 있으면 워프된 것) 위에 HSV mask
+        픽셀(시안), guided 탐색 창(마젠타) + 찾은 중심(주황), 감지된 차선 중심(빨강)과
+        이미지 중심(초록), 그리고 상태 텍스트를 그린다.
 
-        Top (only when bird-eye is on): the RAW pre-warp ROI with the bird-eye SOURCE
-        quad (yellow) drawn on it, so you can tune birdeye_src_ratio by eye instead of
-        guessing from the warped result alone."""
+        상단 (bird-eye 켜졌을 때만): 워프 전 원본 ROI 위에 bird-eye 소스 사각형
+        (노랑)을 그려, 워프 결과만 보고 추측하는 대신 눈으로 보며
+        birdeye_src_ratio 를 튜닝할 수 있게 한다."""
         dbg = roi.copy()
-        dbg[mask > 0] = (255, 255, 0)                                     # HSV-selected lane pixels (cyan)
-        for x0, y0, x1, y1, bcx in band_windows:                          # guided search windows
+        dbg[mask > 0] = (255, 255, 0)                                     # HSV 로 선택된 차선 픽셀 (시안)
+        for x0, y0, x1, y1, bcx in band_windows:                          # guided 탐색 창
             cv2.rectangle(dbg, (int(x0), int(y0)), (int(x1) - 1, int(y1) - 1), (255, 0, 255), 1)
             if bcx is not None:
                 cv2.circle(dbg, (int(bcx), int((y0 + y1) / 2)), 2, (0, 165, 255), -1)
         cx = int(max(0, min(dbg.shape[1] - 1, lane_center)))
-        cv2.line(dbg, (cx, 0), (cx, dbg.shape[0]), (0, 0, 255), 2)        # detected lane center (red)
-        cv2.line(dbg, (dbg.shape[1] // 2, 0), (dbg.shape[1] // 2, dbg.shape[0]), (0, 255, 0), 1)  # image center (green)
+        cv2.line(dbg, (cx, 0), (cx, dbg.shape[0]), (0, 0, 255), 2)        # 감지된 차선 중심 (빨강)
+        cv2.line(dbg, (dbg.shape[1] // 2, 0), (dbg.shape[1] // 2, dbg.shape[0]), (0, 255, 0), 1)  # 이미지 중심 (초록)
         if self.use_lookahead_control:
             dh = dbg.shape[0]
-            if near_cx is not None:   # near band centre = blue tick (bottom third)
+            if near_cx is not None:   # 가까운 band 중심 = 파란 눈금 (하단 1/3)
                 nx = int(max(0, min(dbg.shape[1] - 1, near_cx)))
                 cv2.line(dbg, (nx, dh * 2 // 3), (nx, dh), (255, 0, 0), 1)
-            if la_cx is not None:     # look-ahead centre = orange tick (top third)
+            if la_cx is not None:     # look-ahead 중심 = 주황 눈금 (상단 1/3)
                 lx = int(max(0, min(dbg.shape[1] - 1, la_cx)))
                 cv2.line(dbg, (lx, 0), (lx, dh // 3), (0, 165, 255), 1)
-        # status text (frame is only ~320x72: keep the font tiny)
+        # 상태 텍스트 (프레임이 겨우 ~320x72: 폰트를 아주 작게 유지)
         mode = (f"BEV {'ON' if self.use_birdeye else 'OFF'}  "
                 f"GUIDED {'ON' if self.use_guided_band else 'OFF'}  "
                 f"LA {'ON' if self.use_lookahead_control else 'OFF'}")
@@ -494,13 +493,13 @@ class LaneDetector:
         cv2.putText(dbg, mode, (2, 10), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
         cv2.putText(dbg, vals, (2, dbg.shape[0] - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
 
-        # BEV on: stack the raw ROI (with the source quad) on top for src tuning.
+        # BEV 켜짐: src 튜닝을 위해 (소스 사각형이 그려진) 원본 ROI 를 위에 쌓는다.
         if self.use_birdeye and roi_raw is not None and roi_raw.shape == roi.shape:
             src_view = roi_raw.copy()
             h, w = src_view.shape[:2]
             pts = np.int32([(int(self.birdeye_src_ratio[i] * w),
                              int(self.birdeye_src_ratio[i + 1] * h)) for i in range(0, 8, 2)])
-            cv2.polylines(src_view, [pts], True, (0, 255, 255), 1)        # BEV source quad (yellow)
+            cv2.polylines(src_view, [pts], True, (0, 255, 255), 1)        # BEV 소스 사각형 (노랑)
             for px, py in pts:
                 cv2.circle(src_view, (int(px), int(py)), 2, (0, 255, 255), -1)
             cv2.putText(src_view, 'SRC (raw ROI)', (2, 10),

@@ -13,7 +13,7 @@ class BatteryPublisher(Node):
     def __init__(self):
         super().__init__('battery_node')
 
-        # ROS parameters
+        # ROS 파라미터
         self.declare_parameter('publish_topic', 'battery_status')
         self.declare_parameter('publish_hz', 10.0)
         self.declare_parameter('i2c_bus', I2C_BUS)

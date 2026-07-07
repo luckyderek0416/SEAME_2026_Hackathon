@@ -1,17 +1,17 @@
-"""yolo_ncnn_node: YOLOv8 object detection via NCNN (ARM-friendly, no PyTorch).
+"""yolo_ncnn_node: NCNN 기반 YOLOv8 객체 감지 (ARM 친화적, PyTorch 불필요).
 
-Drop-in replacement for yolo_node that runs the NCNN-exported model
-(best_ncnn_model/model.ncnn.param + .bin) instead of ultralytics .pt.
-Publishes the SAME inference_msgs/Detections, so decision_node is unchanged.
+ultralytics .pt 대신 NCNN으로 내보낸 모델
+(best_ncnn_model/model.ncnn.param + .bin)을 실행하는 yolo_node의 드롭인 대체품.
+동일한 inference_msgs/Detections 를 퍼블리시하므로 decision_node는 변경 불필요.
 
-Why NCNN: on the D3-G (ARM CPU) it is far faster and lighter than
-ultralytics+PyTorch, with no heavy dependency (pip install ncnn).
+NCNN을 쓰는 이유: D3-G(ARM CPU)에서 ultralytics+PyTorch보다 훨씬 빠르고
+가벼우며, 무거운 의존성이 없다 (pip install ncnn).
 
-Model output (this export): out0 = [4+nc, 2100]
-  rows 0..3  = box cx,cy,w,h in letterboxed 320px space
-  rows 4..   = per-class scores (already sigmoid-applied in the graph)
+모델 출력 (이 export 기준): out0 = [4+nc, 2100]
+  0..3 행  = letterbox 처리된 320px 공간에서의 박스 cx,cy,w,h
+  4..  행  = 클래스별 점수 (그래프 내에서 이미 sigmoid 적용됨)
 
-Decode lives in `decode_yolov8()` so it can be unit-tested without ncnn.
+디코딩은 `decode_yolov8()`에 분리되어 있어 ncnn 없이도 단위 테스트할 수 있다.
 """
 import cv2
 import numpy as np
@@ -24,7 +24,7 @@ from inference_msgs.msg import Detection, Detections
 
 
 def letterbox(img, new=320, color=(114, 114, 114)):
-    """Resize keeping aspect ratio + pad to new x new. Returns (out, scale, pad_x, pad_y)."""
+    """종횡비를 유지하며 리사이즈 + new x new 크기로 패딩. (out, scale, pad_x, pad_y) 반환."""
     h, w = img.shape[:2]
     scale = min(new / w, new / h)
     nw, nh = int(round(w * scale)), int(round(h * scale))
@@ -37,11 +37,11 @@ def letterbox(img, new=320, color=(114, 114, 114)):
 
 def decode_yolov8(out, num_classes, img_w, img_h, imgsz, scale, pad_x, pad_y,
                   conf_thresh, nms_thresh):
-    """Decode raw NCNN YOLOv8 output -> list of dicts (label_id, conf, normalized xywh).
+    """NCNN YOLOv8 원시 출력 디코딩 -> dict 리스트 (label_id, conf, 정규화된 xywh).
 
-    out: np.ndarray, either (4+nc, N) or (N, 4+nc). Boxes in letterboxed imgsz px.
-    Returns detections with x_center/y_center/width/height normalised to [0,1]
-    of the ORIGINAL image.
+    out: np.ndarray, (4+nc, N) 또는 (N, 4+nc) 형태. 박스는 letterbox 처리된 imgsz px 기준.
+    x_center/y_center/width/height 를 원본 이미지 기준 [0,1] 로
+    정규화한 감지 결과를 반환한다.
     """
     feat = 4 + num_classes
     arr = np.asarray(out, dtype=np.float32)
@@ -52,7 +52,7 @@ def decode_yolov8(out, num_classes, img_w, img_h, imgsz, scale, pad_x, pad_y,
     if arr.shape[0] != feat:
         return []
 
-    boxes_xywh = arr[:4, :]               # cx,cy,w,h (letterboxed px)
+    boxes_xywh = arr[:4, :]               # cx,cy,w,h (letterbox 처리된 px)
     cls_scores = arr[4:4 + num_classes, :]
     class_ids = np.argmax(cls_scores, axis=0)
     confs = cls_scores[class_ids, np.arange(cls_scores.shape[1])]
@@ -64,7 +64,7 @@ def decode_yolov8(out, num_classes, img_w, img_h, imgsz, scale, pad_x, pad_y,
     class_ids = class_ids[keep]
     confs = confs[keep]
 
-    # letterboxed center-xywh -> original-image top-left xywh
+    # letterbox 좌표계 중심 xywh -> 원본 이미지 좌상단 기준 xywh
     cx, cy, bw, bh = boxes_xywh
     x1 = (cx - bw / 2.0 - pad_x) / scale
     y1 = (cy - bh / 2.0 - pad_y) / scale

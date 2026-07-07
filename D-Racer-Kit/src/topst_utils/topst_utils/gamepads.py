@@ -57,14 +57,13 @@ class ShanWanGamepadInput:
 
 class Joystick(object):
     '''
-    Based on the donkeycar project
+    donkeycar 프로젝트 기반
     MIT License
     https://github.com/autorope/donkeycar/blob/4.3.6.2/donkeycar/parts/controller.py
 
-    An interface to a physical joystick.
-    The joystick holds available buttons
-    and axis; both their names and values
-    and can be polled to state changes.
+    물리 조이스틱에 대한 인터페이스.
+    조이스틱은 사용 가능한 버튼과 축의 이름·값을 모두 보관하며,
+    폴링(poll)하여 상태 변화를 확인할 수 있다.
     '''
     def __init__(self, dev_fn='/dev/input/js0') -> None:
         self.axis_states = {}
@@ -79,8 +78,8 @@ class Joystick(object):
 
     def init(self) -> None:
         """
-        Query available buttons and axes given
-        a path in the linux device tree.
+        리눅스 디바이스 트리 경로를 받아
+        사용 가능한 버튼과 축을 조회한다.
         """
         try:
             from fcntl import ioctl
@@ -93,17 +92,17 @@ class Joystick(object):
             return False
 
         '''
-        call once to setup connection to device and map buttons
+        디바이스 연결 설정과 버튼 매핑을 위해 한 번만 호출
         '''
-        # Open the joystick device.
+        # 조이스틱 디바이스를 연다.
         self.jsdev = open(self.dev_fn, 'rb')
 
-        # Get the device name.
+        # 디바이스 이름을 가져온다.
         buf = array.array('B', [0] * 64)
         ioctl(self.jsdev, 0x80006a13 + (0x10000 * len(buf)), buf) # JSIOCGNAME(len)
         self.js_name = buf.tobytes().decode('utf-8')
 
-        # Get number of axes and buttons.
+        # 축과 버튼의 개수를 가져온다.
         buf = array.array('B', [0])
         ioctl(self.jsdev, 0x80016a11, buf) # JSIOCGAXES
         self.num_axes = buf[0]
@@ -112,7 +111,7 @@ class Joystick(object):
         ioctl(self.jsdev, 0x80016a12, buf) # JSIOCGBUTTONS
         self.num_buttons = buf[0]
 
-        # Get the axis map.
+        # 축 맵을 가져온다.
         buf = array.array('B', [0] * 0x40)
         ioctl(self.jsdev, 0x80406a32, buf) # JSIOCGAXMAP
 
@@ -122,7 +121,7 @@ class Joystick(object):
             self.axis_map.append(axis_name)
             self.axis_states[axis_name] = 0.0
 
-        # Get the button map.
+        # 버튼 맵을 가져온다.
         buf = array.array('H', [0] * 200)
         ioctl(self.jsdev, 0x80406a34, buf) # JSIOCGBTNMAP
 
@@ -136,7 +135,7 @@ class Joystick(object):
 
     def show_map(self) -> None:
         '''
-        list the buttons and axis found on this joystick
+        이 조이스틱에서 발견된 버튼과 축을 나열
         '''
         print('axis found')
         for i in range(self.num_axes):
@@ -147,10 +146,10 @@ class Joystick(object):
 
     def poll(self) -> Tuple[Optional[str], Optional[int], Optional[bool], Optional[str], Optional[int], Optional[float]]:
         '''
-        query the state of the joystick, returns button which was pressed, if any,
-        and axis which was moved, if any. button_state will be None, 1, or 0 if no changes,
-        pressed, or released. axis_val will be a float from -1 to +1. button and axis will
-        be the string label determined by the axis map in init.
+        조이스틱 상태를 조회한다. 눌린 버튼(있다면)과 움직인 축(있다면)을 반환한다.
+        button_state 는 변화 없음/눌림/떼짐에 따라 각각 None, 1, 0 이다.
+        axis_val 은 -1 ~ +1 범위의 float 이다. button 과 axis 는 init 의
+        축 맵에서 결정된 문자열 라벨이다.
         '''
         button_name: Optional[str] = None
         button_number: Optional[int] = None
@@ -162,14 +161,14 @@ class Joystick(object):
         if self.jsdev is None:
             return button_name, button_number, button_state, axis_name, axis_number, axis_val
 
-        # Main event loop
+        # 메인 이벤트 루프
         evbuf = self.jsdev.read(8)
 
         if evbuf:
             tval, value, typev, number = struct.unpack('IhBB', evbuf)
 
             if typev & 0x80:
-                #ignore initialization event
+                # 초기화 이벤트는 무시
                 return button_name, button_number, button_state, axis_name, axis_number, axis_val
 
             if typev & 0x01:
@@ -200,35 +199,35 @@ class ShanWanGamepad(Joystick):
     def read_data(self) -> ShanWanGamepadInput:
         button_name, button_number, button_state, axis_name, axis_number, axis_val = super(ShanWanGamepad, self).poll()
 
-        # Joysticks
-        if axis_name == 'L_STICK_Y':        # acceleration control: forward is negative, backward is positive
+        # 조이스틱
+        if axis_name == 'L_STICK_Y':        # 가속 제어: 앞으로 밀면 음수, 뒤로 당기면 양수
             self.gamepad_input.analog_stick_left.y  = -axis_val
-        elif axis_name == 'R_STICK_X':      # steering control: left is negative, right is positive
+        elif axis_name == 'R_STICK_X':      # 조향 제어: 왼쪽이 음수, 오른쪽이 양수
             self.gamepad_input.analog_stick_right.x = -axis_val
-        # DPAD
-        elif axis_name == 'DPAD_X':         # DPAD left/right: left is -1, right is +1
+        # DPAD (십자키)
+        elif axis_name == 'DPAD_X':         # DPAD 좌/우: 왼쪽 -1, 오른쪽 +1
             self.gamepad_input.dpad_left = axis_val if axis_val < 0 else None
             self.gamepad_input.dpad_right = axis_val if axis_val > 0 else None
-        elif axis_name == 'DPAD_Y':         # DPAD up/down: up is -1, down is +1
+        elif axis_name == 'DPAD_Y':         # DPAD 상/하: 위 -1, 아래 +1
             self.gamepad_input.dpad_up = axis_val if axis_val < 0 else None
             self.gamepad_input.dpad_down = axis_val if axis_val > 0 else None
 
-        # Buttons
-        if button_name == 'L1':             # increase acceleration ratio
+        # 버튼
+        if button_name == 'L1':             # 가속 비율 증가
             self.gamepad_input.button_L1 = button_state
-        elif button_name == 'R1':           # decrease acceleration ratio
+        elif button_name == 'R1':           # 가속 비율 감소
             self.gamepad_input.button_R1 = button_state
         elif button_name == 'X':            
             self.gamepad_input.button_x = button_state
         elif button_name == 'A':
             self.gamepad_input.button_a = button_state
-        elif button_name == 'B':            # calibration steering trim up
+        elif button_name == 'B':            # 조향 트림 보정 증가
             self.gamepad_input.button_b = button_state
-        elif button_name == 'Y':            # calibration steering trim down
+        elif button_name == 'Y':            # 조향 트림 보정 감소
             self.gamepad_input.button_y = button_state
         elif button_name == 'SELECT':
             self.gamepad_input.button_select = button_state
-        elif button_name == 'START':        # toggle data recording
+        elif button_name == 'START':        # 데이터 기록 토글
             self.gamepad_input.button_start = button_state
         elif button_name == 'HOME':
             self.gamepad_input.button_home = button_state
@@ -237,7 +236,7 @@ class ShanWanGamepad(Joystick):
 
 
 
-# test joystick code 
+# 조이스틱 테스트 코드
 # js = Joystick()
 # js.init()
 
