@@ -24,7 +24,10 @@ class CameraNode(Node):
         # ROS 파라미터
         self.declare_parameter('vehicle_config_file', get_default_vehicle_config_path())
         self.declare_parameter('publish_topic', 'camera/image/compressed')
-        self.declare_parameter('publish_hz', 30.0)
+        # 07-09: 30 -> 20. 보드 브라운아웃(자가 재부팅) 완화용 전력 다이어트 —
+        # 카메라 파이프라인(디코드+resize+인코드)과 하류(lane/yolo/monitor) 부하가
+        # 함께 줄어든다. 주행 로직은 dt 기반이라 프레임레이트 무관.
+        self.declare_parameter('publish_hz', 20.0)
         self.declare_parameter('camera_device', '/dev/video0')
         self.declare_parameter('usb_camera_device', '/dev/video1')
         self.declare_parameter('mipi_camera_device', '/dev/video0')

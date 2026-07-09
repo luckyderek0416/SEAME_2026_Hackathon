@@ -107,8 +107,14 @@ class YoloNcnnNode(Node):
         self.declare_parameter('conf_threshold', 0.5)
         self.declare_parameter('nms_threshold', 0.45)
         self.declare_parameter('imgsz', 320)
-        self.declare_parameter('infer_hz', 10.0)
-        self.declare_parameter('num_threads', 4)
+        # 07-09: 10 -> 6. 전력 다이어트. 검출 라벨은 decision 이 30Hz 틱마다 최신
+        # 메시지를 재사용하므로 green/red 프레임 카운트 속도는 그대로다.
+        self.declare_parameter('infer_hz', 6.0)
+        # 07-09: 4 -> 2. 4코어 동시 추론 버스트가 보드 전류 피크의 주범이라
+        # 브라운아웃(자가 재부팅) 완화용으로 절반으로. 추론 시간은 늘지만
+        # infer_hz(6Hz≈167ms 예산) 안에 충분히 들어간다. 재부팅이 재발하면
+        # 전원 커넥터 쪽 원인 확률이 올라가는 진단 정보로도 쓴다.
+        self.declare_parameter('num_threads', 2)
 
         g = self.get_parameter
         self.sub_topic = str(g('subscribe_topic').value)

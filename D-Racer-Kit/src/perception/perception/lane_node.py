@@ -29,10 +29,10 @@ class LaneNode(Node):
         self.declare_parameter('debug_topic', '/perception/lane/debug')
         self.declare_parameter('jpeg_quality', 80)
         # debug_hz: 디버그 이미지 그리기+JPEG 인코딩을 이 주기로 제한한다. 주행 로직은
-        # 카메라 풀레이트(30Hz) 그대로 돌지만, 대시보드는 ~7Hz로만 프레임을 가져가므로
-        # 30Hz 인코딩은 3/4가 버려진다. 10Hz면 보드 CPU를 아끼면서 대시보드 체감은 동일.
+        # 카메라 풀레이트(20Hz) 그대로 돌지만, 대시보드는 ~7Hz로만 프레임을 가져가므로
+        # 20Hz 인코딩은 대부분 버려진다. 저주기면 보드 CPU를 아끼면서 대시보드 체감은 동일.
         # (0 이하 = 매 프레임; 라이브로 ros2 param set /lane_node debug_hz 5.0 조절 가능)
-        self.declare_parameter('debug_hz', 10.0)
+        self.declare_parameter('debug_hz', 5.0)   # 07-09: 10->5 전력 다이어트 (그리기+JPEG 인코딩)
         self.declare_parameter('roi_top_ratio', 0.35)   # 상단 35% crop (아래 65% 사용)
         self.declare_parameter('bright_thresh', 160)
         self.declare_parameter('min_pixels', 40)
