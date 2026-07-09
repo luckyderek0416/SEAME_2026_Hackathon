@@ -185,6 +185,26 @@ class CameraNode(Node):
             cap.release()
             self.get_logger().warning(f'Failed to open candidate pipeline: {candidate_pipeline}')
 
+        # GStreamer 미지원 OpenCV 빌드(pip wheel 등) 폴백: USB 카메라를 V4L2 로
+        # 직접 열고, 프레임은 timer_callback 에서 목표 크기로 resize 한다.
+        # 원래 GStreamer 경로도 videoscale(비율 무시 스트레치)이므로 결과 동일.
+        if self.usb_cam_enabled:
+            cap = cv2.VideoCapture(self.camera_device, cv2.CAP_V4L2)
+            if cap.isOpened():
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                cap.set(cv2.CAP_PROP_FPS, 30)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                ok, _ = cap.read()
+                if ok:
+                    self.cap = cap
+                    self.pipeline = f'v4l2-direct({self.camera_device})'
+                    self.get_logger().warning(
+                        'GStreamer 사용 불가 -> V4L2 직접 캡처 + resize 폴백으로 동작')
+                    return True
+                cap.release()
+
         self.cap = None
         self.pipeline = None
         return False
@@ -219,6 +239,12 @@ class CameraNode(Node):
         if not ret or frame is None:
             self.get_logger().warning('Failed to read frame')
             return
+
+        # V4L2 직접 폴백 경로: 네이티브 해상도로 들어오므로 목표 크기로 맞춘다
+        # (GStreamer videoscale 과 동일하게 비율 무시 스트레치).
+        if frame.shape[1] != self.image_width or frame.shape[0] != self.image_height:
+            frame = cv2.resize(frame, (self.image_width, self.image_height),
+                               interpolation=cv2.INTER_AREA)
 
         success, encoded = cv2.imencode(
             '.jpg',

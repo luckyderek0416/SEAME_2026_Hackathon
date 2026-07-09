@@ -95,7 +95,7 @@ joystick_node ─/joystick(E-stop)──> control_node ──PWM(I2C/PCA9685)─
 ```
 target = offset + turn_bias(갈림길) + branch_bias(In/Out 분기) + curve_bias(급커브 FF)
 correction = PID(target)                    # kp=0.6, ki=0, kd=0.15   (lane lost면 target=0)
-steer = steer_center(0.2) + correction × steer_scale(−1.0)   # 좌조향은 steer_left_gain(1.2) 증폭
+steer = steer_center(0.26) + correction × steer_scale(−1.0)   # steer_left_gain=1.0 (07-07 대칭 실측)
 ```
 - `steer_scale`이 **음수인 게 맞다** (트랙 검증: 이 차는 부호 반대).
 - `curve_steer_bias`(기본 0=off): 곡률 비례 feed-forward — 급좌커브에서 가까운 왼선을
@@ -122,7 +122,7 @@ DRIVE:
         lane_node가 guided-band 시드를 그 브랜치로 밀어 "브랜치 락온"(표지판 섬 회피).
         fork_bias(0.2)는 진입 보조. 해제 = lane.fork 재수렴(도로 다시 하나) 또는
         fork_hold_s(8s) failsafe. DRIVE에서만 적용(ROUNDABOUT 자동 억제)
-  · 갈림길에서 노란색 보이면 branch_bias: In코스=노란쪽으로 / Out코스=반대쪽으로 (방향 자동)
+  · branch_bias(In/Out 색상 편향)는 FOLLOW-Y 로 대체돼 기본 0=off (라이브 재활성 가능)
   · [In코스 색상 추종, perception] WHITE(흰선만 추종) ⇄ YELLOW(노란선만 추종) 히스테리시스:
         노란 비율 ≥ follow_yellow_ratio(0.03) → YELLOW / 흰픽셀 > 노란픽셀 → WHITE 복귀.
         ROUNDABOUT 동안은 YELLOW 강제. course:=out 이면 비활성. 디버그에 FOLLOW-W/Y 표시.
@@ -132,8 +132,8 @@ DRIVE:
         단, 출발 후 finish_min_drive_s(15s) 전엔 red 무시 + light_min_area 박스 면적
         게이트(0=off) — 멀리 보이는 도착 신호등/빨간 물체 오인식으로 코스 중간에
         멈추는 사고 방지
-어느 상태든: 아루코 면적비 ≥0.02 ──▶ OBSTACLE_STOP (정지)
-OBSTACLE_STOP ──(마커 5프레임 연속 소실)──▶ 직전 상태 복귀 (랩 카운트 유지)
+DRIVE 중에만: 아루코 면적비 ≥0.02 ──▶ OBSTACLE_STOP (정지; 장애물은 코스상 RA 뒤 마지막 미션)
+OBSTACLE_STOP ──(마커 5프레임 연속 소실)──▶ DRIVE 복귀
 ROUNDABOUT:
   · 조향에 turn_direction × circle_steer_bias(0.225) 더해 링 유지 (조기 이탈 방지)
   · 주(PRIMARY) 탈출 = 노란 가로선 상승엣지 카운트: 진입 가로선은 쿨다운으로 무시,

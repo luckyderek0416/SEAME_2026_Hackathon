@@ -61,13 +61,18 @@ class DecisionNode(Node):
         self.declare_parameter('steer_slow', 0.0)          # |조향|에 비례한 감속 게인; 0=off
 
         # ----- 미션 튜닝 -----
-        self.declare_parameter('conf_threshold', 0.5)
-        self.declare_parameter('green_frames', 3)
+        self.declare_parameter('conf_threshold', 0.5)  # YOLO 인식 confidence 문턱
+        # 07-08 실측: 기동 직후 노출 안정화 전 프레임에서 순간 초록 오인식으로
+        # 3프레임(0.1s)이 뚫려 조기 출발한 사례 -> 10프레임(0.33s) 연속 요구.
+        # 진짜 초록불은 상시 점등이라 출발 지연 영향은 ~0.2s 뿐.
+        self.declare_parameter('green_frames', 10)
         self.declare_parameter('red_frames', 3)
-        # 빨간불 오인식 가드: 출발 후 이 시간(초) 전에는 빨간불 무시(코스 중간에
-        # 빨간 물체 오인식으로 FINISH/DONE 되는 사고 방지). 신호등 bbox 최소 면적
+        # 빨간불 대기 무장: 주 조건은 장애물 미션 완료(obstacle_done, 코스 순서 고정).
+        # finish_min_drive_s 는 아루코를 통째로 놓친 비상 주행용 예비 무장 —
+        # 이 시간(초) 경과 시 장애물 미완이어도 빨간불 인식을 켠다.
+        # 실측 코스 소요시간보다 여유 있게 길게 설정할 것. 신호등 bbox 최소 면적
         # (정규화 w*h, 0=off)도 함께 — 멀리 있는 작은 오검출 박스 필터.
-        self.declare_parameter('finish_min_drive_s', 15.0)
+        self.declare_parameter('finish_min_drive_s', 60.0)
         self.declare_parameter('light_min_area', 0.0)
         self.declare_parameter('marker_area_trigger', 0.02)
         self.declare_parameter('marker_clear_frames', 5)
@@ -91,26 +96,34 @@ class DecisionNode(Node):
         # In/Out 브랜치 (자동, 방향 무관): 갈림길에서 In 코스는 노란 경로 쪽으로,
         # Out 은 반대쪽으로 조향. 노란색의 위치를 이용하므로 어느 쪽에 나타나든
         # 동작한다 -> 당일 설정 불필요.
-        self.declare_parameter('branch_bias', 0.35)        # 갈림길에서의 조향 bias
+        # FOLLOW-Y(노란 전용 추종)가 갈림길 선택을 담당하게 되면서 이 bias 는 중복이
+        # 됐고, 노란 구간 주행 내내 ±branch_bias 타깃 지터/끌림을 만들어 기본 OFF.
+        # 갈림길에서 FOLLOW-Y 전환이 늦는 게 실측되면 트랙에서 라이브로 켜서 보조.
+        self.declare_parameter('branch_bias', 0.0)         # 0=off (07-08: FOLLOW-Y 로 대체)
         self.declare_parameter('branch_yellow_min', 0.03)  # yellow_ratio 가 이 값 이상 => 갈림길이 보임
         self.declare_parameter('circle_steer_bias', 0.225) # 링 유지, 조기 탈출 방지
-        self.declare_parameter('target_loops', 1)
         self.declare_parameter('min_loop_time_s', 3.0)    # 이보다 빨리 한 바퀴 완료 불가 (절대 하한)
         self.declare_parameter('max_loop_time_s', 20.0)   # 모든 추정치 실패 시 failsafe 탈출
-        self.declare_parameter('junction_cooldown_s', 2.0)
-        # --- 바퀴 수 표결 (junction + 조향 적분 + 시간), IMU/마커 없음 ---
+        self.declare_parameter('crossline_cooldown_s', 2.0)  # 게이트 카운트 간 최소 간격 (재카운트 디바운스)
+        # --- 탈출 failsafe 3-표결 (조향 적분 + 시간 + 가로선 재등장), IMU/마커 없음 ---
         self.declare_parameter('yaw_lap_threshold', 6.0)   # 한 바퀴당 조향 적분값; 트랙에서 캘리브레이션할 것
         self.declare_parameter('nominal_loop_time_s', 8.0) # 레이스 속도에서 실측한 한 바퀴 시간
-        self.declare_parameter('lap_votes_needed', 2)      # {junction, yaw, time} 중 탈출에 필요한 표 수
+        self.declare_parameter('lap_votes_needed', 2)      # {yaw, time, crossline} 중 탈출에 필요한 표 수
         # 노란색이 회전교차로 진입을 게이트한다 (회전교차로는 노란색, 외곽 루프는 흰색)
         self.declare_parameter('use_yellow_entry', True)
         self.declare_parameter('yellow_enter_ratio', 0.06)  # ROI 노란색 비율 => 회전교차로 안
-        # --- 회전교차로 탈출 = 갈림길과 동일한 브랜치 락온 ---
-        # 링을 돌며 게이트(노란 가로선 or 점선 개구부)의 상승엣지를 세고, 이 횟수에
-        # 도달하면 출구 브랜치로 락온해 명시적으로 빠져나간다(암묵적 바이어스 해제 대신).
+        # --- 회전교차로 진입/탈출 = 갈림길과 동일한 브랜치 락온 ---
+        # 진입: 가로선 첫 감지 -> RA on + 진입측 one-shot 락온(링 순환 방향).
+        # 탈출: 링을 돌며 가로선 상승엣지를 세고, 도달 시 출구 브랜치로 락온.
         self.declare_parameter('roundabout_exit_gates', 1)   # 진입 후 가로선을 이 횟수 더 만나면 탈출
-                                                             # (진입 가로선은 쿨다운으로 제외; 1=한 바퀴)
+                                                             # (진입 가로선은 블랭크+재무장으로 제외; 1=한 바퀴)
         self.declare_parameter('roundabout_exit_side', '')   # 출구 브랜치 side; '' 이면 race_dir 파생
+        self.declare_parameter('entry_lock_release_s', 2.0)  # 진입측 락온 강제 해제 시간 (one-shot, 짧게)
+        # RA 진입 후 게이트 카운트 금지 시간(진입선 오카운트 방어). 길어서 손해는
+        # "한 바퀴 더"뿐(과회전 허용), 짧으면 조기 탈출=실격 위험 -> 길게 잡는다.
+        # 단, 실측 한 바퀴 시간보다는 반드시 짧아야 함 (트랙에서 라이브 조정).
+        self.declare_parameter('gate_blank_s', 6.0)
+        self.declare_parameter('gate_rearm_s', 0.5)          # 가로선이 이 시간 연속 OFF 여야 다음 카운트 무장
 
         g = self.get_parameter
         race_dir = str(g('race_dir').value).lower()
@@ -122,9 +135,11 @@ class DecisionNode(Node):
             turn_direction = float(g('turn_direction').value)
         # 회전교차로 출구 브랜치 side: 명시값 없으면 race_dir 에서 파생(junction_side 와 동일
         # 원리). 정방향(race_dir=left/CCW)=출구 오른쪽, 역방향(right/CW)=출구 왼쪽.
+        # 진입측은 항상 그 반대(링 순환 방향) — 하드코딩 금지, 역방향 자동 반전.
         exit_side = str(g('roundabout_exit_side').value).lower()
         if exit_side not in ('left', 'right'):
             exit_side = 'right' if race_dir == 'left' else 'left'
+        entry_side = 'left' if exit_side == 'right' else 'right'
         cfg = {
             'course': str(g('course').value),
             'skip_missions': bool(g('skip_missions').value),
@@ -155,10 +170,9 @@ class DecisionNode(Node):
             'branch_bias': float(g('branch_bias').value),
             'branch_yellow_min': float(g('branch_yellow_min').value),
             'circle_steer_bias': float(g('circle_steer_bias').value),
-            'target_loops': int(g('target_loops').value),
             'min_loop_time_s': float(g('min_loop_time_s').value),
             'max_loop_time_s': float(g('max_loop_time_s').value),
-            'junction_cooldown_s': float(g('junction_cooldown_s').value),
+            'crossline_cooldown_s': float(g('crossline_cooldown_s').value),
             'yaw_lap_threshold': float(g('yaw_lap_threshold').value),
             'nominal_loop_time_s': float(g('nominal_loop_time_s').value),
             'lap_votes_needed': int(g('lap_votes_needed').value),
@@ -166,6 +180,10 @@ class DecisionNode(Node):
             'yellow_enter_ratio': float(g('yellow_enter_ratio').value),
             'roundabout_exit_gates': int(g('roundabout_exit_gates').value),
             'roundabout_exit_side': exit_side,
+            'roundabout_entry_side': entry_side,
+            'entry_lock_release_s': float(g('entry_lock_release_s').value),
+            'gate_blank_s': float(g('gate_blank_s').value),
+            'gate_rearm_s': float(g('gate_rearm_s').value),
         }
         self.sm = RaceStateMachine(cfg)
 
@@ -179,8 +197,12 @@ class DecisionNode(Node):
             'kp', 'ki', 'kd',   # PID 게인 (조향 세기) 트랙에서 라이브 튜닝
             'max_steering_delta', 'steer_slow',   # look-ahead 보조 (rate limit / 조향 감속)
             'fork_bias', 'fork_hold_s',           # 갈림길 편향 세기 / 유지 시간
+            'branch_bias',                        # In/Out 색상 편향 (기본 0=off, 현장 재활성용)
             'roundabout_exit_gates',              # 회전교차로 탈출 게이트 카운트 (트랙 실측)
             'enter_sustain_s',                    # 진입 가로선 지속 debounce (트랙 실측)
+            'entry_lock_release_s',               # 진입 락온 강제 해제 시간
+            'gate_blank_s', 'gate_rearm_s',       # 게이트 블랭크 / 재무장 시간
+            'crossline_cooldown_s',               # 게이트 카운트 간 최소 간격
             'finish_min_drive_s',                 # 빨간불 무시 최소 주행시간 (오인식 가드)
             'light_min_area',                     # 신호등 bbox 최소 면적 (오검출 필터)
             'conf_threshold',                     # YOLO confidence 문턱 (현장 조정)
@@ -188,6 +210,7 @@ class DecisionNode(Node):
             'curve_steer_bias',                   # DRIVE 급커브 feed-forward 편향
         }
         self._prev_steer = None   # rate limit 용 직전 조향값
+        self._prev_state = None   # 상태 전환 INFO 로그용
         # 갈림길 표지판 표결 상태 (decision_node 로컬)
         self.fork_sign_min_conf = float(g('fork_sign_min_conf').value)
         self.fork_sign_vote_window = int(g('fork_sign_vote_window').value)
@@ -313,6 +336,15 @@ class DecisionNode(Node):
         self.fork_dir_pub.publish(String(data=self.sm.turn_latch or ''))
         # 현재 주행 모드를 publish -> BEV 디버그 화면 표시.
         self.state_pub.publish(String(data=state))
+        # 상태 전환은 INFO 로 남긴다 (디버그 레벨 없이도 전환 사유 추적 가능):
+        # ROUNDABOUT 탈출이 게이트(gate)였는지 표결(exitV)이었는지 수치로 판별.
+        if state != self._prev_state:
+            self.get_logger().info(
+                f'state {self._prev_state} -> {state} '
+                f'(race_t={self.sm.race_t:.1f}s circle_t={self.sm.circle_t:.1f}s '
+                f'gate={self.sm._gate_count} exitV={self.sm._exit_votes} '
+                f'yaw={self.sm.yaw_proxy:.1f} latch={self.sm.turn_latch})')
+            self._prev_state = state
         cfg = self.sm.cfg
         # 좌우 조향 비대칭 보정: 차가 좌조향 시 실제로 덜 꺾이므로, steer_center 위쪽
         # 편차(=좌조향)만 steer_left_gain 배로 증폭한다. rate limit 전에 적용.

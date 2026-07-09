@@ -56,15 +56,15 @@ class LaneNode(Node):
         self.declare_parameter('yellow_hsv_hi', [40, 255, 255])
         # --- bird-eye view (기본 ON) ---
         # 평탄화한 비율 리스트 [x1,y1, x2,y2, x3,y3, x4,y4] (TL,TR,BR,BL), ROI 크기 대비 0..1
-        # src: 2026-07-05 실측 캘리브레이션 (직선 구간, 차선 픽셀 추적 fit + 워프 드리프트
-        # 최소화; 잔차 L+1.5px/R-0.3px). 카메라 높이/각도를 다시 바꾸면 재캘리브레이션 필요.
-        # 2026-07-07: roi_top_ratio=0.35 에서 실측 프레임 재캘리브레이션. 직선 구간에 차를
-        # 가운데 두고 좌/우 흰선을 직선 피팅(밴드 구간 행) -> src 좌/우 변을 실제 차선 위에
-        # 얹힘. 검증: 워프 후 두 차선 slope ±0.05(거의 수직), x=0.20w/0.80w 평행.
-        # TL(왼쪽 윗꼭짓점) x 는 실측 0.196 에서 수동으로 오른쪽으로 살짝 옮김(0.226).
-        # TR(오른쪽 윗꼭짓점) x 는 실측 0.761 에서 수동으로 왼쪽으로 아주 살짝 옮김(0.745).
+        # 카메라 높이/각도를 다시 바꾸면 재캘리브레이션 필요.
+        # 2026-07-08: 카메라 높이 28cm 재마운트 후 실측 프레임 재캘리브레이션.
+        # 직선 구간에서 좌/우 흰선을 직선 피팅해 y=0.342h/0.965h 에서의 차선 x 를
+        # src 꼭짓점으로 사용 (차선이 워프 후 정확히 0.20w/0.80w 에 오도록 구성).
+        # 검증: 워프 후 slope L-0.021/R+0.002 (거의 수직), 차선폭 top 191/bottom 193px
+        # (목표 192px = 실차선 350mm). 이전(07-07, 낮은 마운트) 값:
+        # [0.226, 0.342, 0.745, 0.342, 0.998, 0.965, -0.006, 0.965]
         self.declare_parameter('use_birdeye', True)
-        self.declare_parameter('birdeye_src_ratio', [0.226, 0.342, 0.745, 0.342, 0.998, 0.965, -0.006, 0.965])
+        self.declare_parameter('birdeye_src_ratio', [0.288, 0.342, 0.713, 0.342, 0.857, 0.965, 0.150, 0.965])
         self.declare_parameter('birdeye_dst_ratio', [0.20, 0.00, 0.80, 0.00, 0.80, 1.00, 0.20, 1.00])
         # --- 가이드 밴드 탐색 (기본 ON) ---
         self.declare_parameter('use_guided_band', True)
@@ -88,6 +88,8 @@ class LaneNode(Node):
         self.declare_parameter('crossline_min_rows', 4)             # (미사용; 하위호환)
         self.declare_parameter('crossline_max_angle_deg', 50.0)     # 수평 기준 허용 기울기 (대각선 정지선)
         self.declare_parameter('crossline_min_area_px', 60)         # 성분 최소 픽셀 (dash/노이즈 필터)
+        self.declare_parameter('crossline_max_resid_px', 2.5)       # 직선성: 피팅 잔차 허용 px
+        self.declare_parameter('crossline_min_inlier_frac', 0.75)   # 직선성: 인라이어 컬럼 비율
         # --- 좌/우 갈림길 (fork) 감지 + 브랜치 선택 ---
         self.declare_parameter('fork_topic', '/decision/fork_dir')  # decision 이 확정 방향 publish
         self.declare_parameter('state_topic', '/decision/state')    # decision 주행 모드 -> BEV 표시
@@ -104,6 +106,11 @@ class LaneNode(Node):
         self.declare_parameter('follow_yellow_exit_white_ratio', 1.0)  # 흰픽셀 > 이 배율*노란픽셀 (해제 조건 일부)
         self.declare_parameter('follow_yellow_exit_yellow_frac', 0.5)  # 해제 노랑문턱 = 진입문턱*이 비율 (노랑 보이면 유지)
         self.declare_parameter('follow_yellow_exit_frames', 10)        # 해제 조건 연속 프레임 (플리커 방지)
+        self.declare_parameter('filter_yellow_dashes', True)           # Y추종 중 점선/정지선 track 제외 (실선만)
+        self.declare_parameter('yellow_solid_min_h_ratio', 0.30)       # "실선" 판정 최소 세로 비율
+        self.declare_parameter('yellow_dash_fallback_px', 120)         # 실선 픽셀 이 미만이면 점선 포함 폴백
+        self.declare_parameter('dash_fallback_exit_frames', 30)        # 폴백 해제(실선 복귀)에 필요한 연속 프레임 (1s)
+        self.declare_parameter('yellow_heading_gain', 0.4)             # 헤어핀 주축 기울기 헤딩 보정 게인 (0=off)
         self.declare_parameter('course', 'in')                      # 'in' 일 때만 색상 추종 활성 (launch 전달)
         # 차선 폭 초기값(px, BEV 워프 기준). 0=학습대기. EMA 학습은 그대로 계속 미세보정.
         # 192 = 실측 차선폭 350mm 를 BEV 캘리로 변환한 값((0.80-0.20)*320px). 단선 구간
@@ -187,6 +194,13 @@ class LaneNode(Node):
         self.detector.follow_yellow_exit_frames = int(gp('follow_yellow_exit_frames').value)
         self.detector.crossline_max_angle_deg = float(gp('crossline_max_angle_deg').value)
         self.detector.crossline_min_area_px = int(gp('crossline_min_area_px').value)
+        self.detector.crossline_max_resid_px = float(gp('crossline_max_resid_px').value)
+        self.detector.crossline_min_inlier_frac = float(gp('crossline_min_inlier_frac').value)
+        self.detector.filter_yellow_dashes = bool(gp('filter_yellow_dashes').value)
+        self.detector.yellow_solid_min_h_ratio = float(gp('yellow_solid_min_h_ratio').value)
+        self.detector.yellow_dash_fallback_px = int(gp('yellow_dash_fallback_px').value)
+        self.detector.dash_fallback_exit_frames = int(gp('dash_fallback_exit_frames').value)
+        self.detector.yellow_heading_gain = float(gp('yellow_heading_gain').value)
 
         self.pub = self.create_publisher(LaneState, self.lane_topic, 10)
         self.debug_pub = None

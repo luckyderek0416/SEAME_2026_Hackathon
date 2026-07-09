@@ -7,23 +7,23 @@
   DRIVE         -> 주행 속도로 차선 추종 (직선, S커브, 갈림길).
                    'in' 코스에서는 회전교차로 진입(노란 가로선=정지선 첫 감지)을
                    감시하다가 ROUNDABOUT 으로 전환한다.
-  ROUNDABOUT    -> 링을 돈다 (차선 추종 + 조기 이탈 방지용 turn bias) 그리고
-                   JUNCTION 감지로 바퀴 수를 센다 (링 바깥 라인이 입구/출구에서
-                   벌어짐). 반드시 >= target_loops 이고 min_loop_time 이 지난
-                   뒤에만 탈출 -- 규정상 한 바퀴를 다 돌기 전에 나가면 실격이다.
+  ROUNDABOUT    -> 링을 돈다 (차선 추종 + 조기 이탈 방지용 turn bias).
+                   진입 순간 진입측 브랜치로 one-shot 락온(링에 확실히 올라탐).
+                   탈출 = 진입 때 만난 노란 가로선(정지선)을 "한 번 더" 만나면
+                   (게이트 카운트) 출구 브랜치로 락온해 나간다. 반드시
+                   min_loop_time 이 지난 뒤에만 -- 한 바퀴 미달 탈출은 실격이다.
   OBSTACLE_STOP -> ArUco 마커가 보이면 -> 사라질 때까지 완전 정지
+                   (DRIVE 중에만 진입 — 장애물은 코스 순서상 항상 RA 뒤 마지막 미션)
   FINISH        -> 결승선 통과 후 red_light 를 기다림 -> 완전 정지
   DONE          -> 영구 정지
 
-바퀴 수 카운트 (IMU 없음, 마커 없음): 세 가지 독립 추정치가 투표한다.
-  (1) junction  - 링 바깥 라인이 입구/출구 지점에서 다시 열림
-  (2) yaw proxy - 조향 편향량의 적분 (IMU 없이 헤딩 추정; 속도가 거의 일정하면
-                  누적 yaw 는 이 값에 비례)
-  (3) time      - 회전 시간이 실측한 한 바퀴 시간에 도달
-min_loop_time 전에는 절대 탈출하지 않고(한 바퀴 미달은 미션 실패), 그 뒤
-세 추정치 중 >= lap_votes_needed 개가 동의하면 탈출한다. max_loop_time 은
-failsafe. 모든 임계값을 늦게 나가는 쪽으로 치우쳐 잡는다: 규정상 >= 1 바퀴가
-허용이라 약간의 과회전은 공짜지만 < 1 바퀴는 실격이다.
+탈출 판정 (IMU 없음, 마커 없음):
+  주(PRIMARY) = 가로선 게이트 카운트 (블랭크 + 재무장으로 진입선 재카운트 차단)
+  백업(failsafe) = 3-표결: yaw proxy(조향 적분) / 경과시간 / 가로선 재등장
+                   중 >= lap_votes_needed 개 동의 (junction 표는 오검출로 제외)
+  최후 = max_loop_time 강제 탈출.
+min_loop_time 전에는 절대 탈출하지 않는다. 모든 임계값은 늦게 나가는 쪽으로:
+규정상 >= 1 바퀴가 허용이라 과회전은 공짜지만 < 1 바퀴는 실격이다.
 yaw_lap_threshold 와 nominal_loop_time_s 는 실제 트랙에서 캘리브레이션할 것.
 """
 
@@ -56,19 +56,19 @@ class RaceStateMachine:
         self.green_count = 0
         self.red_count = 0
         self.marker_gone = 0
-        self._resume_state = State.DRIVE
-        self.race_t = 0.0             # 초록불 출발 후 경과 시간 (빨간불 오인식 게이트용)
+        self.obstacle_done = False    # 동적 장애물 미션 완료(정지->퇴거 1회) -> 빨간불 대기 무장
+        self.race_t = 0.0             # 초록불 출발 후 경과 시간 (빨간불 예비 무장용)
 
         # 회전교차로 (junction 카운트) 상태
         self.roundabout_done = False  # 이미 회전을 완료함 (재진입 금지)
         self.enter_acc = 0.0          # 진입 감지용 지속 커브 누적기
         self.circle_t = 0.0           # 현재 회전에서 보낸 시간
-        self.cooldown = 0.0           # 진입/카운트 직후에는 junction 무시
-        self.loops = 0
-        self.side_present = False     # 링 바깥 라인이 현재 보임 (개구부 아님)
         self.yaw_proxy = 0.0          # IMU 없는 헤딩 추정치 (조향 적분)
         self._entry_votes = 0         # 마지막 회전교차로 진입 투표 수 (디버그/로그)
         self._exit_votes = 0          # 마지막 회전교차로 탈출 투표 수 (디버그/로그)
+        self._entry_lock_active = False  # 진입측 락온이 걸려 있는 동안 True (one-shot)
+        self._gate_armed = False      # 가로선이 충분히 꺼진 뒤에만 다음 카운트 무장
+        self._gate_off_t = 0.0        # 가로선 연속 OFF 시간 (재무장 판정용)
         # 브랜치 락온 탈출용 게이트 통과 카운터 (노란 가로선 or 점선 개구부의
         # 상승엣지 = 게이트 1회 통과). roundabout_exit_gates 회 도달 시 출구 브랜치로 락온.
         self._gate_prev = False       # 직전 프레임의 게이트 신호 (엣지 감지용)
@@ -135,8 +135,7 @@ class RaceStateMachine:
         return -self.cfg['branch_bias'] * toward_yellow         # 흰 브랜치 유지
 
     def _enter(self, state):
-        """일반 상태 전이. 회전교차로 진행 상황은 리셋하지 않으므로, 장애물 이후
-        ROUNDABOUT 으로 복귀해도 바퀴 수 카운트가 유지된다."""
+        """일반 상태 전이 (PID/감지 카운터 리셋; 회전교차로 진행 상황은 건드리지 않음)."""
         self.state = state
         self.pid.reset()
         self.green_count = 0
@@ -147,13 +146,27 @@ class RaceStateMachine:
         self.state = State.ROUNDABOUT
         self.pid.reset()
         self.circle_t = 0.0
-        self.loops = 0
-        self.cooldown = self.cfg['junction_cooldown_s']  # 진입 junction 은 무시
-        self.side_present = False
         self.yaw_proxy = 0.0
-        self._gate_prev = False
+        # 게이트(가로선) 카운터: 진입 정지선 재카운트를 3중으로 차단 —
+        #  ① 블랭크: gate_blank_s(기본 min_loop 연동) 동안 카운트 금지
+        #  ② 재무장(arm): 가로선이 gate_rearm_s 이상 "연속으로 꺼져" 있어야
+        #     다음 상승엣지를 셀 수 있음 (한두 프레임 깜빡임으로는 무장 안 됨)
+        #  ③ 상승엣지: _gate_prev=True 로 시작(진입선이 보이는 상태 가정)
+        self._gate_prev = True
         self._gate_count = 0
-        self._gate_cd = self.cfg['junction_cooldown_s']  # 진입 쪽 게이트는 무시
+        self._gate_cd = float(self.cfg.get('gate_blank_s', self.cfg['min_loop_time_s']))
+        self._gate_armed = False
+        self._gate_off_t = 0.0
+        # 진입측 락온 (one-shot): RA 켜지는 순간 딱 1회, 링 순환 방향 브랜치로
+        # 시드를 밀어 진입 갈림길에서 링을 타게 한다. 해제는 fork 재수렴 또는
+        # entry_lock_release_s 중 먼저 오는 쪽 (아래 ROUNDABOUT 블록에서).
+        # 이후 링 주행 중 fork 가 오발동해도 latch 를 다시 세우는 코드가 없으므로
+        # 재락온은 구조적으로 불가능하다.
+        entry_side = self.cfg.get('roundabout_entry_side')
+        self.turn_latch = entry_side if entry_side in ('left', 'right') else None
+        self.turn_latch_age = 0.0
+        self._fork_seen = False
+        self._entry_lock_active = self.turn_latch is not None
 
     # ---------- 메인 틱 ----------
     def step(self, lane, aruco, dets, dt):
@@ -174,8 +187,6 @@ class RaceStateMachine:
             throttle = max(self.cfg['slow_throttle'], throttle)
             return steer, throttle, 'LANE_ONLY'
 
-        if self.cooldown > 0.0:
-            self.cooldown = max(0.0, self.cooldown - dt)
         if self.state not in (State.WAIT_GREEN, State.DONE):
             self.race_t += dt   # 출발 후 경과 시간 (FINISH 게이트용)
 
@@ -187,7 +198,11 @@ class RaceStateMachine:
         # 중첩돼 ≈2×fork_hold_s 가 되던 것)를 대체한다. fork_hold_s 는 failsafe 상한으로만
         # 유지한다.
         fork_now = bool(getattr(lane, 'fork', False))
-        if self.confirmed_fork_direction is not None:
+        # ROUNDABOUT 동안은 표지판 표결을 무시한다 — 진입/탈출 락온은 RA 로직이
+        # 소유하며, 링 위 표지판 오검출이 latch 를 덮어쓰면 perception 시드가 엉뚱한
+        # 브랜치로 밀린다 (링 위 재락온 금지 원칙).
+        if (self.confirmed_fork_direction is not None
+                and self.state != State.ROUNDABOUT):
             self.turn_latch = self.confirmed_fork_direction
             self.turn_latch_age = 0.0
             if fork_now:
@@ -208,16 +223,20 @@ class RaceStateMachine:
                 self._enter(State.DRIVE)
             return center, stop, self.state.value
 
-        # ----- 전역 장애물 오버라이드 (미션이 주행보다 우선) -----
-        if (self.state != State.OBSTACLE_STOP and aruco.detected
+        # ----- 장애물 정지 (DRIVE 전용) -----
+        # 코스 순서 고정: 동적 장애물은 항상 회전교차로 "뒤" 마지막 미션이라
+        # RA 중에는 마커가 등장하지 않는다. RA 등 다른 상태에서 트리거를 열어두면
+        # 링 안에서 다음 구간의 진짜 마커가 멀리 보이는 것만으로 링 한가운데
+        # 정지(마커 치울 때까지 무한 대기)할 수 있어 DRIVE 로 제한한다.
+        if (self.state == State.DRIVE and aruco.detected
                 and aruco.area_ratio >= self.cfg['marker_area_trigger']):
-            self._resume_state = self.state
             self._enter(State.OBSTACLE_STOP)
 
         if self.state == State.OBSTACLE_STOP:
             self.marker_gone = 0 if aruco.detected else self.marker_gone + 1
             if self.marker_gone >= self.cfg['marker_clear_frames']:
-                self._enter(self._resume_state)   # 이전 상태로 복귀 (바퀴 수 카운트 유지)
+                self.obstacle_done = True  # 장애물 미션 완료 -> 이제부터 빨간불 대기
+                self._enter(State.DRIVE)   # DRIVE 에서만 진입하므로 복귀도 DRIVE
             return center, stop, self.state.value
 
         steer = self._lane_steer(lane, dt)
@@ -241,10 +260,15 @@ class RaceStateMachine:
                     self._start_roundabout()
                     return steer, self.cfg['slow_throttle'], self.state.value
 
-            # 빨간불 = 도착 신호. 주행 초반 트랙 주변 빨간 물체(빨간 띠·옷 등) 오인식
-            # 으로 코스 중간에 FINISH/DONE 으로 빠지는 사고를 막기 위해, 출발 후
-            # finish_min_drive_s 가 지나기 전에는 빨간불을 아예 무시한다.
-            if self.race_t >= self.cfg.get('finish_min_drive_s', 0.0):
+            # 빨간불 = 도착 신호. 코스 순서 고정(... -> 동적 장애물 -> 도착)이므로
+            # 장애물 미션 완료(obstacle_done)가 주 무장 조건: 그 전에는 빨간불을
+            # 아예 무시해 코스 중간 오인식(빨간 띠·옷 등)으로 FINISH/DONE 되는
+            # 사고를 구조적으로 차단한다. 아루코를 통째로 놓친 비상 주행에서도
+            # 결승선에서 멈출 수 있게 finish_min_drive_s 경과를 예비 무장으로
+            # 남긴다 (실측 코스 소요시간보다 길게 설정할 것).
+            red_armed = (self.obstacle_done
+                         or self.race_t >= self.cfg.get('finish_min_drive_s', 0.0))
+            if red_armed:
                 self.red_count = self.red_count + 1 if self._seen(dets, 'red_light') else 0
             else:
                 self.red_count = 0
@@ -273,33 +297,42 @@ class RaceStateMachine:
             if defl > 0.0:
                 self.yaw_proxy += defl * dt
 
-            # (2) JUNCTION 재등장 카운트 (비전)
-            if not lane.junction:
-                self.side_present = True   # 바깥 라인 보임 -> 링 위에 있음
-            elif (self.cooldown <= 0.0 and self.circle_t >= self.cfg['min_loop_time_s']
-                  and self.side_present):
-                self.loops += 1
-                self.cooldown = self.cfg['junction_cooldown_s']
-                self.side_present = False
+            # 진입측 락온 해제: fork 재수렴(위 공통 latch 블록)이 먼저 오면 그때,
+            # 아니면 entry_lock_release_s 경과 시 무조건 해제. 진입 갈림길은 순식간에
+            # 지나가므로 오래 유지하면 시드가 안쪽 실선을 파고든다 (변수 5 대응).
+            if self._entry_lock_active:
+                if (self.turn_latch is None
+                        or self.circle_t >= self.cfg.get('entry_lock_release_s', 2.0)):
+                    self.turn_latch = None
+                    self._fork_seen = False
+                    self._entry_lock_active = False
 
             # (2b) 브랜치 락온 탈출용 게이트 통과 카운터. 노란 가로선(진입 때 만난
-            # 그 정지선)의 상승엣지를 쿨다운과 함께 세서, 물리적으로 한 번 지나가면
-            # 딱 1회만 카운트되게 한다(프레임마다 1회가 아님). 큰 틀: 진입 가로선은
-            # _start_roundabout 의 쿨다운으로 무시되고, 링을 돌아 같은 가로선을
-            # roundabout_exit_gates(기본 1)번 더 만나면 출구 브랜치로 락온해 나간다.
+            # 그 정지선)의 상승엣지를 세되, 진입선 재카운트를 3중 차단한다:
+            # 블랭크(gate_blank_s) + 재무장(가로선이 gate_rearm_s 이상 연속 OFF 여야
+            # 다음 엣지 유효 — 한두 프레임 깜빡임은 무장 실패) + 카운트 후 재무장 해제.
+            # 링을 돌아 같은 가로선을 roundabout_exit_gates(기본 1)번 더 만나면 탈출.
             if self._gate_cd > 0.0:
                 self._gate_cd = max(0.0, self._gate_cd - dt)
             gate_now = bool(lane.yellow_crossline)
-            if gate_now and not self._gate_prev and self._gate_cd <= 0.0:
+            if gate_now:
+                self._gate_off_t = 0.0
+            else:
+                self._gate_off_t += dt
+                if self._gate_off_t >= self.cfg.get('gate_rearm_s', 0.5):
+                    self._gate_armed = True
+            if (gate_now and not self._gate_prev
+                    and self._gate_cd <= 0.0 and self._gate_armed):
                 self._gate_count += 1
-                self._gate_cd = self.cfg['junction_cooldown_s']
+                self._gate_cd = self.cfg.get('crossline_cooldown_s', 2.0)
+                self._gate_armed = False
             self._gate_prev = gate_now
 
             # ----- 바퀴 수 판정 -----
             # 절대 하한: min_loop_time 전에는 절대 탈출하지 않는다 (한 바퀴 미달은
             # 미션 실패이고, 진입 쪽 노란 가로선을 출구로 오인하는 것도 막아준다).
-            # 그 뒤에는 네 가지 독립 추정치(junction 바퀴 수, yaw proxy, 시간, 노란
-            # 가로선 재등장) 중 >= lap_votes_needed 개가 동의하면 탈출한다.
+            # 주 탈출 = 게이트 카운트. 백업 = 세 가지 추정치(yaw proxy, 시간, 노란
+            # 가로선 재등장) 중 >= lap_votes_needed 개 동의.
             # 편향은 늦게 나가는 쪽으로, 절대 일찍 나가지 않는다.
             if self.circle_t >= self.cfg['min_loop_time_s']:
                 # 주(PRIMARY) 탈출: 출구 게이트를 충분히 통과함 -> 출구 브랜치로 락온
@@ -315,21 +348,33 @@ class RaceStateMachine:
                     return steer, self.cfg['slow_throttle'], self.state.value
 
                 # FAILSAFE: 게이트 감지가 통과를 놓칠 수 있다 (포기 없는 미션은
-                # 어떻게든 탈출해야 함). 4중 2 추정치 표결을 백업으로 유지한다
-                # (브랜치 락온 없이 링 유지 편향만 해제).
-                junction_done = self.loops >= self.cfg['target_loops']
+                # 어떻게든 탈출해야 함). 3중 2 추정치 표결을 백업으로 유지한다.
+                # junction 표는 점선 개구부 오검출 문제로 표결에서 제외.
+                # 이 경로도 주 탈출과 똑같이 출구측 락온을 건다 — DRIVE 복귀 후에도
+                # FOLLOW-Y 는 유지되므로 락온 없이는 링 노란선을 계속 따라 무한
+                # 순환할 수 있다. 링 중간에서 걸려도 갈림길 기하가 없으면 시드
+                # 밀기는 무해하고, 출구 개구부에 도달하는 순간 그쪽 브랜치를 잡는다.
                 yaw_done = self.yaw_proxy >= self.cfg['yaw_lap_threshold']
                 time_done = self.circle_t >= self.cfg['nominal_loop_time_s']
-                cross_done = bool(lane.yellow_crossline)   # 출구 갈림길의 노란 가로선 보임
-                votes = int(junction_done) + int(yaw_done) + int(time_done) + int(cross_done)
+                # 가로선 표도 게이트와 같은 재등장 규율 적용: 재무장(_gate_armed,
+                # 0.5s 이상 사라졌다 다시 나타남) 상태에서 보일 때만 인정한다.
+                # 진입선이 시야에 계속 남아 있는 것(정차/저속 통과)은 표가 아니다.
+                cross_done = bool(lane.yellow_crossline) and self._gate_armed
+                votes = int(yaw_done) + int(time_done) + int(cross_done)
                 self._exit_votes = votes
                 if votes >= self.cfg['lap_votes_needed']:
+                    self.turn_latch = self.cfg['roundabout_exit_side']
+                    self.turn_latch_age = 0.0
+                    self._fork_seen = False
                     self.roundabout_done = True
                     self._enter(State.DRIVE)
                     return steer, self.cfg['slow_throttle'], self.state.value
 
-            # failsafe: 모든 추정치가 실패하면 강제 탈출
+            # 최후 failsafe: 모든 추정치가 실패하면 강제 탈출 (역시 출구측 락온)
             if self.circle_t >= self.cfg['max_loop_time_s']:
+                self.turn_latch = self.cfg['roundabout_exit_side']
+                self.turn_latch_age = 0.0
+                self._fork_seen = False
                 self.roundabout_done = True
                 self._enter(State.DRIVE)
             return steer, self.cfg['slow_throttle'], self.state.value

@@ -51,6 +51,7 @@ class LaneDetector:
         self.width_ema = width_ema                 # 기억된 차선 폭이 적응하는 속도
         self.smooth_alpha = smooth_alpha           # offset EMA (1=스무딩 없음, 낮을수록 부드러움)
         self._lane_width = float(lane_width_init)  # 기억된 차선 폭(px), 단일 라인 중심 계산용
+        self._lane_width_init = float(lane_width_init)  # EMA 학습 하한 가드 기준 (0=가드 없음)
                                                    # (0=콜드스타트 학습대기; 실측 픽셀폭 넣으면 단선 구간 강건)
         self._offset_ema = 0.0                     # 스무딩된 offset 상태
         # 회전교차로 junction = 진입/진출부의 점선 마킹 (이 트랙에서 링은 실선이고
@@ -113,6 +114,10 @@ class LaneDetector:
         self.crossline_min_rows = crossline_min_rows                 # (미사용; 옛 행-스캔 버전 하위호환)
         self.crossline_max_angle_deg = 50.0   # 주축이 수평에서 이 각도 이내면 가로선 (대각선 허용)
         self.crossline_min_area_px = 60       # 성분 최소 픽셀 수 (노이즈/점선 dash 필터)
+        # 직선성 검사 (곡선 실선의 수평 구간 오인 방지): 선형 피팅 잔차가
+        # max_resid_px 이하인 컬럼 비율이 min_inlier_frac 이상이어야 정지선.
+        self.crossline_max_resid_px = 2.5
+        self.crossline_min_inlier_frac = 0.75
         # --- 좌/우 갈림길 (fork) 감지 + 브랜치 선택 ---
         # 분기 구간은 도로가 두 브랜치로 갈라져, BEV 상단 스캔밴드에서 세로 라인 군집이
         # 3개 이상(각 브랜치 안/바깥선)이거나 바깥 라인 간격이 한 차선보다 훨씬 넓어진다.
@@ -153,6 +158,34 @@ class LaneDetector:
         self.course = course
         self._following_yellow = False   # 현재 YELLOW 모드인지 (프레임 간 유지)
         self._yellow_exit_count = 0      # 해제 조건 연속 카운터
+        # YELLOW 추종 중 점선(dash) 무시: 조향용 track 마스크에서 세로 길이가 짧은
+        # 노란 성분(점선 dash, 그리고 가로 정지선)을 제거해 "실선만" 추종한다.
+        # raw ymask 는 yellow_ratio/crossline/Y모드 진입판정에 그대로 쓰이므로 무관.
+        self.filter_yellow_dashes = True
+        self.yellow_solid_min_h_ratio = 0.30   # ROI 높이의 이 비율 이상 세로로 이어져야 "실선"
+        # 실선 소실 폴백: 급좌회전에선 안쪽 실선이 단일 전방 카메라 시야에서
+        # 빠져나가 실선 track 이 비고, 그대로 두면 lane_found=False -> 직진 폴백으로
+        # 커브(회전교차로 진입로)를 통째로 놓친다. 실선 픽셀이 이 문턱 미만이면
+        # 그 프레임은 점선 포함 raw ymask 로 추종을 유지한다 (보이는 유일한
+        # 노란 단서가 바깥 점선인 구간 대응).
+        self.yellow_dash_fallback_px = 120
+        # 폴백 해제 히스테리시스: 폴백 진입은 즉시(차선 소실 대응), 해제(실선
+        # 전용 복귀)는 실선이 이 프레임 수 연속 문턱 이상일 때만. 실선이 화면
+        # 구석에 막 걸친 순간 점선을 뚝 버려 추종 대상이 사라지는 급전환 방지 —
+        # 전환 구간 동안 track 에 점선+실선이 공존해 두-선 중점으로 부드럽게 이어짐.
+        self.dash_fallback_exit_frames = 30   # 1s@30fps (07-08 트랙: 0.33s 는 너무 짧음)
+        self._dash_fallback_on = False
+        self._solid_ok_count = 0
+        # 헤어핀(급커브) 헤딩 보정 게인: FOLLOW-Y 주행 중 track 주축이 수직에서
+        # 기울어진 만큼(dx/dy) offset 에 조향 보정을 더한다. 도로가 BEV 에서 옆으로
+        # 누우면 "선 옆 half-width = 중심" 가로 계산이 무효가 되는 것에 대한 대응.
+        # 0=off. ROUNDABOUT 은 제외(링 유지 편향과 중복 방지).
+        self.yellow_heading_gain = 0.4
+        # 단선 좌/우 분류용 점선 힌트 (FOLLOW-Y 전용, 프레임마다 갱신):
+        # 실선은 항상 점선의 반대편 경계이므로, 실선 하나만 보일 때 화면(분할점)
+        # 기준이 아니라 "점선 대비 어느 쪽인가"로 좌/우를 정한다. 오른쪽 실선이
+        # 화면 왼쪽에 재등장해도 왼쪽 경계로 오분류하지 않는다. None = 힌트 없음.
+        self._yellow_dash_cx = None
         # 현재 주행 모드(상태머신 상태 문자열). decision 이 publish 하고 lane_node 가
         # 매 프레임 갱신 -> BEV 디버그 화면에 표시. '' 면 표시 안 함(decision 미실행).
         self.drive_mode = ''
@@ -197,6 +230,23 @@ class LaneDetector:
             yellow_crossline = self._detect_crossline(ymask)
         return mask, wmask, ymask, yellow_ratio, yellow_offset, yellow_crossline
 
+    def _filter_yellow_dashes(self, ymask):
+        """YELLOW 추종용 실선 필터: 세로 연장이 짧은 노란 성분을 제거한다.
+
+        점선 dash 는 세로로 짧고(수십 px 미만), 가로 정지선도 세로가 얇다.
+        반면 실선 차선은 (커브로 휘어도) ROI 세로의 상당 부분을 관통한다.
+        -> bbox HEIGHT >= yellow_solid_min_h_ratio × ROI높이 인 성분만 남긴다.
+        조향(track)용으로만 쓰이고, raw ymask 신호(yellow_ratio/crossline/진입판정)는
+        건드리지 않는다. 필터 결과가 비면 lane_found=False -> 직진 폴백(기존 동작)."""
+        h_m = ymask.shape[0]
+        min_h = max(2, int(h_m * float(self.yellow_solid_min_h_ratio)))
+        num, labels, stats, _ = cv2.connectedComponentsWithStats(ymask, connectivity=8)
+        out = np.zeros_like(ymask)
+        for i in range(1, num):
+            if stats[i, cv2.CC_STAT_HEIGHT] >= min_h:
+                out[labels == i] = 255
+        return out
+
     def _detect_crossline(self, ymask):
         """노란 '가로선'(정지선) 감지 — 기울기 허용 버전 (연결성분 + 주축 각도).
 
@@ -236,12 +286,21 @@ class LaneDetector:
             ymean = ysum[valid] / cnt[valid]
             if xcols.size < 4:
                 continue
-            slope = float(np.polyfit(xcols, ymean, 1)[0])
-            angle_deg = float(np.degrees(np.arctan(abs(slope))))
+            slope, intercept = np.polyfit(xcols, ymean, 1)
+            angle_deg = float(np.degrees(np.arctan(abs(float(slope)))))
             # 주축 길이 = 가로 스팬 / cos(기울기): 대각선이라 창에 짧게 걸려도
             # 실제 선 길이로 평가된다 (bbox 폭 기준의 구조적 실패 회피).
-            axis_len = float(xspan) * float(np.hypot(1.0, slope))
-            if angle_deg <= float(self.crossline_max_angle_deg) and axis_len >= min_len:
+            axis_len = float(xspan) * float(np.hypot(1.0, float(slope)))
+            if angle_deg > float(self.crossline_max_angle_deg) or axis_len < min_len:
+                continue
+            # 직선성 검사: 원근 워프는 직선을 직선으로 보존하므로 정지선은 비스듬히
+            # 접근해도 BEV 에서 항상 곧다. 반면 갈림길의 곡선 실선/점선 호는 먼
+            # 구간이 수평으로 누워 각도·길이를 통과해도 휘어 있다 -> 선형 피팅
+            # 잔차의 인라이어 비율로 걸러낸다. 정지선 양끝에 세로 차선이 붙어
+            # 국소 이상치가 생기는 경우(L자 병합)는 비율 기준이라 통과한다.
+            resid = np.abs(ymean - (slope * xcols + intercept))
+            inlier = float(np.mean(resid <= float(self.crossline_max_resid_px)))
+            if inlier >= float(self.crossline_min_inlier_frac):
                 return True
         return False
 
@@ -294,11 +353,45 @@ class LaneDetector:
                     self._yellow_exit_count = 0
             else:
                 self._yellow_exit_count = 0   # ROUNDABOUT: 강제 YELLOW 유지
-            sel = ymask if self._following_yellow else wmask
+            if self._following_yellow:
+                # 실선만 추종: 점선 dash·가로 정지선(세로로 짧은 성분)을 track 에서 제거.
+                solid = (self._filter_yellow_dashes(ymask)
+                         if self.filter_yellow_dashes else ymask)
+                # 실선 소실 폴백 (히스테리시스): 실선 픽셀이 문턱 미만이면 즉시
+                # 점선 포함 raw 로 전환(급좌회전에서 안쪽 실선이 시야 밖 -> 바깥
+                # 점선이라도 따라간다). 실선 전용 복귀는 dash_fallback_exit_frames
+                # 연속 충족 시에만 — 실선이 막 걸친 순간의 급전환/차선 소실 방지.
+                if self.filter_yellow_dashes:
+                    if cv2.countNonZero(solid) < int(self.yellow_dash_fallback_px):
+                        self._dash_fallback_on = True
+                        self._solid_ok_count = 0
+                    elif self._dash_fallback_on:
+                        self._solid_ok_count += 1
+                        if self._solid_ok_count >= int(self.dash_fallback_exit_frames):
+                            self._dash_fallback_on = False
+                            self._solid_ok_count = 0
+                    sel = ymask if self._dash_fallback_on else solid
+                else:
+                    sel = ymask
+                # 점선 힌트 갱신: 필터로 제거된 점선 픽셀들의 평균 x (track 과 같은
+                # BEV 공간). 폴백으로 sel=ymask 면 차분이 비어 힌트 없음(기존 동작).
+                dash = cv2.subtract(ymask, sel)
+                if cv2.countNonZero(dash) >= 30:
+                    self._yellow_dash_cx = float(np.nonzero(dash)[1].mean())
+                else:
+                    self._yellow_dash_cx = None
+            else:
+                sel = wmask
+                self._yellow_dash_cx = None
+                self._dash_fallback_on = False
+                self._solid_ok_count = 0
             track = cv2.morphologyEx(sel, cv2.MORPH_OPEN, k) if use_morph else sel
         else:
             self._following_yellow = False
             self._yellow_exit_count = 0
+            self._yellow_dash_cx = None
+            self._dash_fallback_on = False
+            self._solid_ok_count = 0
 
         # (1) multi-band look-ahead: ROI 를 가로 band 들(가까움..멂)로 나누고 각각에서
         # 차선 중심을 찾는다. 가까운 band 는 조향에, 먼 band 는 커브 선행 감지에 쓴다.
@@ -347,6 +440,19 @@ class LaneDetector:
                     lane_center = (nw * near_cx + lw * la_cx) / (nw + lw)
 
         raw_offset = float(max(-1.0, min(1.0, (lane_center - mid) / (w / 2.0))))
+        # 헤어핀 헤딩 보정: FOLLOW-Y 주행(DRIVE) 중 track 주축이 수직에서 크게
+        # 기울면(급커브 도로가 BEV 에서 옆으로 누움) 밴드 가로 중심만으로는 조향이
+        # 반대로 나올 수 있다 -> 주축 기울기(dx/dy)를 헤딩 오차로 보고 보정.
+        # dx/dy > 0 = 멀수록(위로 갈수록) 왼쪽 = 좌커브 -> 음(좌조향) 보정.
+        if (self._following_yellow and self.drive_mode == 'DRIVE'
+                and lane_found and float(self.yellow_heading_gain) > 0.0):
+            ys_h, xs_h = np.nonzero(track)
+            if xs_h.size >= 150:
+                a_h = float(np.polyfit(ys_h.astype(np.float64),
+                                       xs_h.astype(np.float64), 1)[0])
+                a_h = max(-2.5, min(2.5, a_h))
+                raw_offset = float(max(-1.0, min(
+                    1.0, raw_offset - float(self.yellow_heading_gain) * a_h)))
         # (5) 시간축 스무딩(EMA)으로 프레임 간 조향 떨림을 줄인다.
         if lane_found:
             self._offset_ema = (self.smooth_alpha * raw_offset
@@ -380,17 +486,30 @@ class LaneDetector:
         곳을 중심으로 둔다 — 고정 비율보다 커브에서 훨씬 정확하다."""
         if lx is not None and rx is not None:
             width = rx - lx
-            if width > 0:
+            # 폭 학습 하한 가드: 단선 하나가 탐색창 중앙에 걸쳐 좌/우로 갈라지면
+            # width 가 선 두께(~6px)로 붕괴해 EMA 를 오염시킨다. 실측 프리셋
+            # (lane_width_init)의 절반 미만 폭은 "같은 선의 오분할"로 보고 학습 스킵.
+            floor = 0.5 * self._lane_width_init
+            if width > 0 and width >= floor:
                 self._lane_width = (width if self._lane_width <= 0
                                     else (1 - self.width_ema) * self._lane_width
                                     + self.width_ema * width)
             return (lx + rx) / 2.0, 2
         half = (self._lane_width / 2.0) if self._lane_width > 0 else (w * self.single_line_offset)
+        line = lx if lx is not None else rx
+        if line is None:
+            return None, 0
+        # FOLLOW-Y 단선 + 점선 힌트: 어느 탐색 반쪽에서 잡혔는지(화면/분할점 기준)
+        # 대신 "점선의 반대편 경계"라는 코스 구조로 좌/우를 정한다. 오른쪽 실선이
+        # 차 왼쪽에 보여도 (점선이 그보다 더 왼쪽에 있으면) 오른쪽 경계로 맞게
+        # 분류돼 중심을 실선의 왼쪽(-half)에 둔다.
+        if self._yellow_dash_cx is not None:
+            if line < self._yellow_dash_cx:
+                return line + half, 1   # 실선이 점선보다 왼쪽 = 왼쪽 경계
+            return line - half, 1       # 실선이 점선보다 오른쪽 = 오른쪽 경계
         if lx is not None:
             return lx + half, 1
-        if rx is not None:
-            return rx - half, 1
-        return None, 0
+        return rx - half, 1
 
     # ---------- guided band 탐색 (선택) ----------
     def _guided_bands(self, clean, w, roi_h, band_h):
