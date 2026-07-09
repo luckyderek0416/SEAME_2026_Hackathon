@@ -14,6 +14,7 @@ from std_msgs.msg import Header, String
 from perception_msgs.msg import LaneState, ArucoState
 from inference_msgs.msg import Detections
 from control_msgs.msg import Control
+from battery_msgs.msg import Battery
 
 from decision.state_machine import RaceStateMachine
 
@@ -59,6 +60,21 @@ class DecisionNode(Node):
         # ----- look-ahead 보조 (기본 0 = 기존 동작 그대로) -----
         self.declare_parameter('max_steering_delta', 0.0)  # 틱당 조향 변화 상한; 0=off
         self.declare_parameter('steer_slow', 0.0)          # |조향|에 비례한 감속 게인; 0=off
+
+        # ----- 전원 보호 (브라운아웃 완화) -----
+        # 스로틀 상승 rate limit: 정지->출발 순간 스로틀이 한 틱에 점프하면 모터 돌입
+        # 전류가 배터리 전압을 끌어내려 보드가 리셋/행에 빠진다. 상승만 제한하고 하강은
+        # 즉시 반영한다(정지 명령은 절대 늦추면 안 됨). 30Hz 기준 0.02 => 0->0.20 에 ~0.33s.
+        self.declare_parameter('max_throttle_delta', 0.02)   # 틱당 스로틀 상승 상한; 0=off
+        # 저전압 가드: battery_node 의 퍼센트를 전압으로 역산해, 임계 아래면 스로틀을
+        # slow_throttle 로 묶고(1단계), 더 떨어지면 정지(2단계)해 스스로를 보호한다.
+        # 0 = off. 배터리 하한 6.4V, 만충 8.4V (battery_node 의 선형 매핑과 동일).
+        self.declare_parameter('undervolt_slow_v', 0.0)      # 이 전압 미만 -> slow_throttle 상한
+        self.declare_parameter('undervolt_stop_v', 0.0)      # 이 전압 미만 -> 정지
+        self.declare_parameter('battery_topic', '/battery_status')
+        # battery_node 의 선형 매핑 역산용. battery_node 의 min/max_voltage 와 일치해야 한다.
+        self.declare_parameter('batt_min_v', 6.4)
+        self.declare_parameter('batt_max_v', 8.4)
 
         # ----- 미션 튜닝 -----
         self.declare_parameter('conf_threshold', 0.5)  # YOLO 인식 confidence 문턱
@@ -155,6 +171,9 @@ class DecisionNode(Node):
             'curve_slow': float(g('curve_slow').value),
             'max_steering_delta': float(g('max_steering_delta').value),
             'steer_slow': float(g('steer_slow').value),
+            'max_throttle_delta': float(g('max_throttle_delta').value),
+            'undervolt_slow_v': float(g('undervolt_slow_v').value),
+            'undervolt_stop_v': float(g('undervolt_stop_v').value),
             'conf_threshold': float(g('conf_threshold').value),
             'green_frames': int(g('green_frames').value),
             'red_frames': int(g('red_frames').value),
@@ -208,8 +227,12 @@ class DecisionNode(Node):
             'conf_threshold',                     # YOLO confidence 문턱 (현장 조정)
             'circle_steer_bias',                  # 회전교차로 링 유지 편향 세기
             'curve_steer_bias',                   # DRIVE 급커브 feed-forward 편향
+            'max_throttle_delta',                 # 스로틀 상승 rate limit (돌입전류 완화)
+            'undervolt_slow_v', 'undervolt_stop_v',   # 저전압 가드 임계
         }
         self._prev_steer = None   # rate limit 용 직전 조향값
+        self._prev_throttle = 0.0   # 스로틀 rate limit 용 직전 출력값
+        self._battery_v = None      # 최근 배터리 전압 (None = 아직 수신 전 -> 가드 비활성)
         self._prev_state = None   # 상태 전환 INFO 로그용
         # 갈림길 표지판 표결 상태 (decision_node 로컬)
         self.fork_sign_min_conf = float(g('fork_sign_min_conf').value)
@@ -232,6 +255,7 @@ class DecisionNode(Node):
         self.create_subscription(LaneState, str(g('lane_topic').value), self.on_lane, 10)
         self.create_subscription(ArucoState, str(g('aruco_topic').value), self.on_aruco, 10)
         self.create_subscription(Detections, str(g('detections_topic').value), self.on_dets, 10)
+        self.create_subscription(Battery, str(g('battery_topic').value), self.on_battery, 10)
         self.pub = self.create_publisher(Control, str(g('control_topic').value), 10)
         # 확정된 갈림길 방향을 perception(lane_node)에 전달 -> 브랜치 선택(guide 시드).
         self.fork_dir_pub = self.create_publisher(String, str(g('fork_dir_topic').value), 10)
@@ -287,6 +311,13 @@ class DecisionNode(Node):
     def on_dets(self, msg):
         self.dets = list(msg.detections)
         self._vote_fork_sign(msg)
+
+    def on_battery(self, msg):
+        """battery_node 는 퍼센트만 발행하므로 선형 매핑을 역산해 전압으로 되돌린다.
+        0%/100% 에서 clamp 되므로 batt_min_v 아래는 구분이 안 된다(가드 임계는 그 위로 잡을 것)."""
+        lo = float(self.get_parameter('batt_min_v').value)
+        hi = float(self.get_parameter('batt_max_v').value)
+        self._battery_v = lo + (float(msg.battery_status) / 100.0) * (hi - lo)
 
     def _vote_fork_sign(self, msg):
         """갈림길 표지판 방향 표결 (메시지당 1표). 한 프레임 오검출로 방향을 확정하지
@@ -365,6 +396,26 @@ class DecisionNode(Node):
         if ss > 0.0 and throttle > 0.0:
             cut = max(0.0, 1.0 - ss * min(1.0, abs(steer - float(cfg['steer_center']))))
             throttle = max(min(throttle, float(cfg['slow_throttle'])), throttle * cut)
+
+        # ----- 저전압 가드: 전압이 무너지면 스스로 부하를 줄인다 -----
+        # 배터리 전압이 낮을 때 모터 돌입 전류가 겹치면 보드가 리셋/행에 빠진다.
+        # 전압 미수신(None)이면 가드는 동작하지 않는다(배터리 노드 없이도 주행 가능).
+        v = self._battery_v
+        if v is not None:
+            v_stop = float(cfg.get('undervolt_stop_v', 0.0))
+            v_slow = float(cfg.get('undervolt_slow_v', 0.0))
+            if v_stop > 0.0 and v < v_stop:
+                throttle = float(cfg['stop_throttle'])
+            elif v_slow > 0.0 and v < v_slow:
+                throttle = min(throttle, float(cfg['slow_throttle']))
+
+        # ----- 스로틀 상승 rate limit: 돌입 전류 피크 억제 -----
+        # 상승만 제한한다. 하강(감속/정지)은 안전 기능이므로 절대 늦추지 않는다.
+        tdelta = float(cfg.get('max_throttle_delta', 0.0))
+        if tdelta > 0.0 and throttle > self._prev_throttle:
+            throttle = min(throttle, self._prev_throttle + tdelta)
+        self._prev_throttle = throttle
+
         out = Control()
         out.header = Header()
         out.header.stamp = self.get_clock().now().to_msg()
