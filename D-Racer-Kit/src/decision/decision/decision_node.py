@@ -53,9 +53,14 @@ class DecisionNode(Node):
         self.declare_parameter('curve_steer_bias', 0.0)
 
         # ----- throttle 단계 (키트의 set_throttle_percent 규약) -----
-        self.declare_parameter('drive_throttle', 0.20)
-        self.declare_parameter('slow_throttle', 0.12)
-        self.declare_parameter('stop_throttle', 0.0)
+        # 07-10 실측(만충 8.2V, 바닥): ESC 는 1580us(0.16)에서 바퀴가 돌기 시작하지만
+        # 차체 무게를 밀고 실제로 '전진'하는 임계는 1600us(0.20)이다. 배터리가 닳으면
+        # 이 임계가 올라가므로 두 값 모두 임계 위로 여유를 두고 잡는다.
+        #   throttle -> pulse:  1500us + throttle*500us  (neutral 1500, fwd 2000)
+        self.declare_parameter('drive_throttle', 0.30)   # 1650us: 직선 주행
+        self.declare_parameter('slow_throttle', 0.24)    # 1620us: 회전교차로/커브 감속 바닥.
+                                                         # 절대 0.20 아래로 내리지 말 것(=정지).
+        self.declare_parameter('stop_throttle', 0.0)     # 1500us: 중립
         self.declare_parameter('curve_slow', 0.5)     # DRIVE: 커브에서 감속 (|curvature| 비례)
         # ----- look-ahead 보조 (기본 0 = 기존 동작 그대로) -----
         self.declare_parameter('max_steering_delta', 0.0)  # 틱당 조향 변화 상한; 0=off

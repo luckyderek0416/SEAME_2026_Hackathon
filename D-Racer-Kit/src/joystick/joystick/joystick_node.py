@@ -38,7 +38,9 @@ class JoystickNode(Node):
         # ROS 파라미터
         self.declare_parameter('publish_topic', 'joystick')
         self.declare_parameter('publish_hz', 50.0)
-        self.declare_parameter('throttle_scale', 0.12)
+        # 07-10 실측: ESC 전진 임계가 0.20(1600us)이라 기존 0.12 는 스틱을 끝까지 밀어도
+        # 중립 데드밴드 안이었다(= 수동주행 자체가 불가능). 임계 위로 올린다.
+        self.declare_parameter('throttle_scale', 0.26)
         self.declare_parameter('throttle_deadzone', 0.05)
         self.declare_parameter('allow_reverse', False)
         self.declare_parameter('steering_deadzone', 0.05)
@@ -52,8 +54,8 @@ class JoystickNode(Node):
             get_default_data_acquisition_script_path(),
         )
         self.declare_parameter('accel_ratio_step', 0.005)
-        self.declare_parameter('accel_ratio_min', 0.12)
-        self.declare_parameter('accel_ratio_max', 0.4)
+        self.declare_parameter('accel_ratio_min', 0.22)   # 1610us: 이 아래는 차가 안 나간다
+        self.declare_parameter('accel_ratio_max', 0.45)
         self.declare_parameter('debug_log_enable', True)
         self.declare_parameter('debug_log_hz', 5.0)
 
