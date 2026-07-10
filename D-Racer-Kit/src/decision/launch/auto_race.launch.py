@@ -7,10 +7,23 @@
 control_node 는 AUTO 모드로 동작한다 (use_joystick_control:=False -> /control 구독).
 """
 
+from pathlib import Path
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+
+def _find_model(filename):
+    """리포 안의 models/ 를 위쪽으로 올라가며 찾는다. 워크스페이스를 어디에 클론하든
+    동작하게 하려는 것 — 예전엔 /home/topst/D-Racer/models 로 하드코딩되어 있어서
+    다른 경로에 클론하면 YOLO 가 조용히 빈 detections 만 발행했다."""
+    for base in Path(__file__).resolve().parents:
+        candidate = base / 'models' / filename
+        if candidate.exists():
+            return str(candidate)
+    return str(Path('/home/topst/D-Racer/models') / filename)   # 예전 기본값 폴백
 
 
 def _lane_node(context, *args, **kwargs):
@@ -49,9 +62,9 @@ def generate_launch_description():
         DeclareLaunchArgument('aruco_dict', default_value='DICT_4X4_50'),
         DeclareLaunchArgument('aruco_inverted', default_value='true'),
         DeclareLaunchArgument('model_param',
-                              default_value='/home/topst/D-Racer/models/model.ncnn.param'),
+                              default_value=_find_model('model.ncnn.param')),
         DeclareLaunchArgument('model_bin',
-                              default_value='/home/topst/D-Racer/models/model.ncnn.bin'),
+                              default_value=_find_model('model.ncnn.bin')),
         DeclareLaunchArgument('skip_missions', default_value='false',
                               description='true = pure lane-following test (no green light / roundabout / '
                                           'obstacle missions); starts driving immediately.'),
