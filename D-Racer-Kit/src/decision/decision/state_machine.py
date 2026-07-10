@@ -111,6 +111,15 @@ class RaceStateMachine:
             return +self.cfg['fork_bias']
         return 0.0
 
+    def _in_red_zone(self, lane):
+        """빨간 노면(ArUco 장애물 구간)에 진입했는가. red_slow_ratio 는 '멀리서 빨간 도로가
+        보이기 시작하는' 수준으로 낮게 잡아, 구간에 닿기 전에 미리 감속하도록 한다.
+        0 = 기능 off (red_ratio 를 발행하지 않는 구버전 perception 과도 호환)."""
+        thr = self.cfg.get('red_slow_ratio', 0.0)
+        if thr <= 0.0:
+            return False
+        return float(getattr(lane, 'red_ratio', 0.0)) >= thr
+
     def _curve_bias(self, lane):
         """급커브 feed-forward: 곡률에 비례한 조향 편향(DRIVE 에서만). 급좌커브에서
         가까운 왼선이 사라져도 curvature(밴드 간 차이)는 살아있어, 선이 완전히
@@ -228,8 +237,15 @@ class RaceStateMachine:
         # RA 중에는 마커가 등장하지 않는다. RA 등 다른 상태에서 트리거를 열어두면
         # 링 안에서 다음 구간의 진짜 마커가 멀리 보이는 것만으로 링 한가운데
         # 정지(마커 치울 때까지 무한 대기)할 수 있어 DRIVE 로 제한한다.
-        if (self.state == State.DRIVE and aruco.detected
-                and aruco.area_ratio >= self.cfg['marker_area_trigger']):
+        #
+        # 빨간 도로 구간(= 마커가 놓이는 곳)에 들어오면 marker_area_trigger 를 무시하고
+        # "마커가 보이는 즉시" 정지한다. 면적 게이트는 멀리 있는 마커를 거르려는 장치인데,
+        # 이미 해당 구간 안이면 그 마커가 곧 미션 대상이므로 일찍 서는 편이 안전하다.
+        # 구간 밖에서는 기존처럼 면적 게이트를 요구해, 트랙 반대편의 마커가 멀리 보이는
+        # 것만으로 서버리는 사고를 막는다.
+        in_red_zone = self._in_red_zone(lane)
+        if self.state == State.DRIVE and aruco.detected and (
+                in_red_zone or aruco.area_ratio >= self.cfg['marker_area_trigger']):
             self._enter(State.OBSTACLE_STOP)
 
         if self.state == State.OBSTACLE_STOP:
@@ -280,6 +296,10 @@ class RaceStateMachine:
             curve = abs(getattr(lane, 'curvature', 0.0))
             throttle = self.cfg['drive_throttle'] * (1.0 - self.cfg['curve_slow'] * curve)
             throttle = max(self.cfg['slow_throttle'], throttle)
+            # 빨간 도로(장애물 구간)가 보이기 시작하면 저속주행. 마커 앞에서 제동 거리를
+            # 줄여 정지 성공률을 높인다. 이 구간은 직선이라 curve_slow 로는 감속되지 않는다.
+            if in_red_zone:
+                throttle = min(throttle, self.cfg['slow_throttle'])
             return steer, throttle, self.state.value
 
         # ----- ROUNDABOUT (IMU/마커 없음: 3가지 바퀴 수 추정치로 표결) -----

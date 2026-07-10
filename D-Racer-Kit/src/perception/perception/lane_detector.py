@@ -23,9 +23,11 @@ class LaneDetector:
     def __init__(self, roi_top_ratio=0.55, bright_thresh=160, min_pixels=40,
                  single_line_offset=0.25, junction_side='right',
                  junction_dash_transitions=3, junction_min_row_pixels=2, junction_gap_rows=2,
-                 mask_mode='hsv', use_white=True, use_yellow=True,
+                 mask_mode='hsv', use_white=True, use_yellow=True, use_red=True,
                  white_hsv_lo=(0, 0, 180), white_hsv_hi=(179, 60, 255),
                  yellow_hsv_lo=(18, 80, 80), yellow_hsv_hi=(38, 255, 255),
+                 red_hsv_lo1=(0, 80, 60), red_hsv_hi1=(10, 255, 255),
+                 red_hsv_lo2=(170, 80, 60), red_hsv_hi2=(179, 255, 255),
                  num_bands=4, morph_kernel=3, width_ema=0.1, smooth_alpha=0.5,
                  use_birdeye=False, birdeye_src_ratio=None, birdeye_dst_ratio=None,
                  use_guided_band=False, guide_margin_px=60, guide_margin_growth_px=10,
@@ -70,6 +72,14 @@ class LaneDetector:
         self.white_hsv_hi = tuple(white_hsv_hi)
         self.yellow_hsv_lo = tuple(yellow_hsv_lo)
         self.yellow_hsv_hi = tuple(yellow_hsv_hi)
+        # 빨간 노면 검출 (ArUco 장애물이 놓이는 빨간 도로 구간). 빨강은 HSV 색상환의
+        # 양끝(H≈0, H≈179)에 걸쳐 있어 두 구간을 따로 잡아 합친다. 차선 mask 에는
+        # 합치지 않으므로 조향/차선중심에는 전혀 영향이 없다.
+        self.use_red = use_red
+        self.red_hsv_lo1 = tuple(red_hsv_lo1)
+        self.red_hsv_hi1 = tuple(red_hsv_hi1)
+        self.red_hsv_lo2 = tuple(red_hsv_lo2)
+        self.red_hsv_hi2 = tuple(red_hsv_hi2)
         # --- bird-eye view (선택, 기본 OFF = 기존 동작) ---
         # src/dst 는 ROI 크기 대비 0..1 비율의 평탄한 리스트 [x1,y1, x2,y2, x3,y3, x4,y4]
         # (TL,TR,BR,BL) 라서 해상도가 바뀌어도 유효하다.
@@ -192,7 +202,7 @@ class LaneDetector:
 
     def _build_mask(self, roi):
         """(lane_mask, white_mask, yellow_mask, yellow_ratio, yellow_offset,
-        yellow_crossline) 을 반환.
+        yellow_crossline, red_ratio) 을 반환.
 
         HSV 모드 = 흰색|노란색 차선 mask; gray 모드 = 밝기 threshold (w/y mask 는 None).
         white_mask/yellow_mask 는 색상별 전용 mask — In 코스 색상 추종 상태머신이
@@ -205,11 +215,13 @@ class LaneDetector:
         yellow_crossline = 넓은 가로 방향 노란 band 가 시야에 있음 (회전교차로
                         진입/진출 fork 위치 표식). 노란색 전용 mask 에서
                         계산하며 차선 중심에는 절대 영향 없음.
+        red_ratio     = ROI 중 빨간 노면 비율. 빨간 도로(ArUco 장애물 구간)에 진입했는지
+                        판단하는 신호. 차선 mask 에 합치지 않으므로 조향에 영향 없음.
         """
         if self.mask_mode == 'gray':
             gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
             _, mask = cv2.threshold(gray, self.bright_thresh, 255, cv2.THRESH_BINARY)
-            return mask, None, None, 0.0, 0.0, False
+            return mask, None, None, 0.0, 0.0, False, 0.0
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         w = hsv.shape[1]
         mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
@@ -228,7 +240,16 @@ class LaneDetector:
             if xs.size >= self.min_pixels:
                 yellow_offset = float((xs.mean() - w / 2.0) / (w / 2.0))
             yellow_crossline = self._detect_crossline(ymask)
-        return mask, wmask, ymask, yellow_ratio, yellow_offset, yellow_crossline
+        # 빨간 노면: HSV 색상환에서 빨강은 H=0 과 H=179 양끝으로 갈라지므로 두 구간을 합친다.
+        # 차선 mask 와 무관하게 비율만 재며, 조향에는 절대 영향을 주지 않는다.
+        red_ratio = 0.0
+        if self.use_red:
+            rmask = cv2.bitwise_or(
+                cv2.inRange(hsv, self.red_hsv_lo1, self.red_hsv_hi1),
+                cv2.inRange(hsv, self.red_hsv_lo2, self.red_hsv_hi2),
+            )
+            red_ratio = float(np.count_nonzero(rmask)) / float(rmask.size)
+        return mask, wmask, ymask, yellow_ratio, yellow_offset, yellow_crossline, red_ratio
 
     def _filter_yellow_dashes(self, ymask):
         """YELLOW 추종용 실선 필터: 세로 연장이 짧은 노란 성분을 제거한다.
@@ -314,7 +335,7 @@ class LaneDetector:
             roi = self._apply_birdeye(roi)   # 실패 시 원본 ROI 로 폴백
 
         (mask, wmask, ymask, yellow_ratio,
-         yellow_offset, yellow_crossline) = self._build_mask(roi)
+         yellow_offset, yellow_crossline, red_ratio) = self._build_mask(roi)
 
         # (4) 노이즈 정리: MORPH_OPEN 이 대리석 바닥 반사광 점과 점선의 작은 틈을
         # 제거해, 떠도는 픽셀이 차선 중심을 잡아끌지 않게 한다.
@@ -470,7 +491,7 @@ class LaneDetector:
                                   curvature, band_windows, roi_raw, near_cx, la_cx)
                  if draw_debug else None)
         return (lane_found, offset, num_lanes, junction, yellow_ratio, yellow_offset,
-                curvature, yellow_crossline, fork, debug)
+                curvature, yellow_crossline, fork, red_ratio, debug)
 
     def _band_center(self, band, w):
         """가로 band 하나의 차선 중심. 전체 폭을 탐색하고 고정된 이미지

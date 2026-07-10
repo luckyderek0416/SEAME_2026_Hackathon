@@ -54,6 +54,13 @@ class LaneNode(Node):
         self.declare_parameter('white_hsv_hi', [179, 60, 255])
         self.declare_parameter('yellow_hsv_lo', [18, 45, 110])   # 옅은/바랜 노란 선을 위해 S 하한을 낮춤
         self.declare_parameter('yellow_hsv_hi', [40, 255, 255])
+        # 빨간 노면(ArUco 장애물 구간). 빨강은 H 양끝에 걸쳐 두 구간을 합쳐 잡는다.
+        # red_ratio 만 계산하고 차선 mask 에는 넣지 않으므로 조향에 영향 없다.
+        self.declare_parameter('use_red', True)
+        self.declare_parameter('red_hsv_lo1', [0, 80, 60])
+        self.declare_parameter('red_hsv_hi1', [10, 255, 255])
+        self.declare_parameter('red_hsv_lo2', [170, 80, 60])
+        self.declare_parameter('red_hsv_hi2', [179, 255, 255])
         # --- bird-eye view (기본 ON) ---
         # 평탄화한 비율 리스트 [x1,y1, x2,y2, x3,y3, x4,y4] (TL,TR,BR,BL), ROI 크기 대비 0..1
         # 카메라 높이/각도를 다시 바꾸면 재캘리브레이션 필요.
@@ -153,6 +160,11 @@ class LaneNode(Node):
             white_hsv_hi=[int(x) for x in gp('white_hsv_hi').value],
             yellow_hsv_lo=[int(x) for x in gp('yellow_hsv_lo').value],
             yellow_hsv_hi=[int(x) for x in gp('yellow_hsv_hi').value],
+            use_red=bool(gp('use_red').value),
+            red_hsv_lo1=[int(x) for x in gp('red_hsv_lo1').value],
+            red_hsv_hi1=[int(x) for x in gp('red_hsv_hi1').value],
+            red_hsv_lo2=[int(x) for x in gp('red_hsv_lo2').value],
+            red_hsv_hi2=[int(x) for x in gp('red_hsv_hi2').value],
             num_bands=int(gp('num_bands').value),
             morph_kernel=int(gp('morph_kernel').value),
             width_ema=float(gp('width_ema').value),
@@ -219,7 +231,8 @@ class LaneNode(Node):
         self.get_logger().info(f'lane_node up. in={sub_topic} out={self.lane_topic}')
 
     def _on_set_params(self, params):
-        hsv_keys = {'white_hsv_lo', 'white_hsv_hi', 'yellow_hsv_lo', 'yellow_hsv_hi'}
+        hsv_keys = {'white_hsv_lo', 'white_hsv_hi', 'yellow_hsv_lo', 'yellow_hsv_hi',
+                    'red_hsv_lo1', 'red_hsv_hi1', 'red_hsv_lo2', 'red_hsv_hi2'}
         for p in params:
             n, v = p.name, p.value
             if n == 'debug_hz':
@@ -268,7 +281,8 @@ class LaneNode(Node):
 
         (lane_found, offset, num_lanes, junction,
          yellow_ratio, yellow_offset, curvature,
-         yellow_crossline, fork, debug) = self.detector.process(frame, draw_debug=want_debug)
+         yellow_crossline, fork, red_ratio, debug) = self.detector.process(
+            frame, draw_debug=want_debug)
 
         out = LaneState()
         out.header = msg.header
@@ -281,6 +295,7 @@ class LaneNode(Node):
         out.yellow_offset = float(yellow_offset)
         out.yellow_crossline = bool(yellow_crossline)
         out.fork = bool(fork)
+        out.red_ratio = float(red_ratio)
         self.pub.publish(out)
 
         if want_debug and debug is not None:

@@ -108,6 +108,11 @@ class DecisionNode(Node):
         # (정규화 w*h, 0=off)도 함께 — 멀리 있는 작은 오검출 박스 필터.
         self.declare_parameter('finish_min_drive_s', 60.0)
         self.declare_parameter('light_min_area', 0.0)
+        # 빨간 도로(ArUco 장애물 구간) 감지 임계. ROI 중 빨간 픽셀 비율이 이 값 이상이면
+        # (1) DRIVE 스로틀을 slow_throttle 로 묶어 미리 감속하고,
+        # (2) 그 구간 안에서는 marker_area_trigger 를 무시하고 마커가 보이는 즉시 정지한다.
+        # 멀리서 빨간 도로가 '보이기 시작하는' 수준으로 낮게 잡을 것. 0 = 기능 off.
+        self.declare_parameter('red_slow_ratio', 0.05)
         self.declare_parameter('marker_area_trigger', 0.02)
         self.declare_parameter('marker_clear_frames', 5)
         self.declare_parameter('fork_bias', 0.2)    # 브랜치 선택(perception)이 주역이라 진입 보조용으로 축소
@@ -200,6 +205,7 @@ class DecisionNode(Node):
             'finish_min_drive_s': float(g('finish_min_drive_s').value),
             'light_min_area': float(g('light_min_area').value),
             'marker_area_trigger': float(g('marker_area_trigger').value),
+            'red_slow_ratio': float(g('red_slow_ratio').value),
             'marker_clear_frames': int(g('marker_clear_frames').value),
             'fork_bias': float(g('fork_bias').value),
             'fork_hold_s': float(g('fork_hold_s').value),
@@ -250,6 +256,8 @@ class DecisionNode(Node):
             'max_throttle_delta',                 # 스로틀 상승 rate limit (돌입전류 완화)
             'undervolt_slow_v', 'undervolt_stop_v',   # 저전압 가드 임계
             'start_kick_throttle', 'start_kick_s',    # 출발 킥 (정지마찰 극복)
+            'red_slow_ratio',                         # 빨간 도로 감지 임계 (트랙 실측 필요)
+            'marker_area_trigger',                    # 마커 면적 게이트 (구간 밖에서만 적용)
         }
         self._prev_steer = None   # rate limit 용 직전 조향값
         self._prev_throttle = 0.0   # 스로틀 rate limit 용 직전 출력값

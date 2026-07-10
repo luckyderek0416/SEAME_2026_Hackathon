@@ -9,3 +9,4 @@ float32 yellow_ratio  # fraction of ROI that is yellow (roundabout region marker
 float32 yellow_offset # normalised x of yellow centroid, [-1..1] (+ = yellow is to the right)
 bool    yellow_crossline  # 노란 가로선 감지 (회전교차로 진입/탈출 갈림길 위치 신호)
 bool    fork        # 좌/우 갈림길 구간 (두 브랜치로 분리된 형상) 감지 — latch 해제 기준
+float32 red_ratio   # ROI 중 빨간 노면 비율, 0..1 — 빨간 도로(장애물 구간) 저속주행 트리거
