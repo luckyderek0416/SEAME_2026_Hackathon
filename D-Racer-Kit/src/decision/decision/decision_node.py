@@ -57,10 +57,21 @@ class DecisionNode(Node):
         # 차체 무게를 밀고 실제로 '전진'하는 임계는 1600us(0.20)이다. 배터리가 닳으면
         # 이 임계가 올라가므로 두 값 모두 임계 위로 여유를 두고 잡는다.
         #   throttle -> pulse:  1500us + throttle*500us  (neutral 1500, fwd 2000)
-        self.declare_parameter('drive_throttle', 0.30)   # 1650us: 직선 주행
-        self.declare_parameter('slow_throttle', 0.24)    # 1620us: 회전교차로/커브 감속 바닥.
-                                                         # 절대 0.20 아래로 내리지 말 것(=정지).
+        # 07-10 바닥 실측(만충 8.22V). PCA9685 12bit/50Hz 라 1틱 = 4.88us = throttle 0.0098:
+        #   정지->출발 임계(정지마찰): 0.20 (1602us, 틱328)
+        #   굴러가는 중 유지 임계(운동마찰): 0.175 (1587us, 틱325) 로도 계속 주행
+        # 배터리가 닳으면 두 임계 모두 올라간다 -> 반쯤 닳은 상태에서 재검증할 것.
+        self.declare_parameter('drive_throttle', 0.20)   # 1602us: DRIVE 기본(=직선 최고 속도).
+                                                         # curve_slow/steer_slow 가 여기서 깎는다.
+        self.declare_parameter('slow_throttle', 0.175)   # 1587us: ROUNDABOUT 주행 + 감속 바닥.
+                                                         # 유지는 되지만 정지에서 출발은 불가.
         self.declare_parameter('stop_throttle', 0.0)     # 1500us: 중립
+        # 출발 킥: 정지마찰 때문에 slow_throttle(0.175)로는 정지 상태에서 출발할 수 없다.
+        # 스로틀이 0에서 살아나는 모든 순간(초록불 출발, 장애물 해제 후 재출발, 정지선
+        # 재출발)에만 잠시 킥 값으로 올렸다가 목표치로 되돌린다. 특히 링 안에서 장애물을
+        # 만나 선 뒤 ROUNDABOUT(=slow_throttle)로 복귀할 때 못 나가는 것을 막는다. 0=off.
+        self.declare_parameter('start_kick_throttle', 0.20)   # 출발 임계값
+        self.declare_parameter('start_kick_s', 0.4)           # 킥 유지 시간(초)
         self.declare_parameter('curve_slow', 0.5)     # DRIVE: 커브에서 감속 (|curvature| 비례)
         # ----- look-ahead 보조 (기본 0 = 기존 동작 그대로) -----
         self.declare_parameter('max_steering_delta', 0.0)  # 틱당 조향 변화 상한; 0=off
@@ -179,6 +190,8 @@ class DecisionNode(Node):
             'max_throttle_delta': float(g('max_throttle_delta').value),
             'undervolt_slow_v': float(g('undervolt_slow_v').value),
             'undervolt_stop_v': float(g('undervolt_stop_v').value),
+            'start_kick_throttle': float(g('start_kick_throttle').value),
+            'start_kick_s': float(g('start_kick_s').value),
             'conf_threshold': float(g('conf_threshold').value),
             'green_frames': int(g('green_frames').value),
             'red_frames': int(g('red_frames').value),
@@ -234,9 +247,11 @@ class DecisionNode(Node):
             'curve_steer_bias',                   # DRIVE 급커브 feed-forward 편향
             'max_throttle_delta',                 # 스로틀 상승 rate limit (돌입전류 완화)
             'undervolt_slow_v', 'undervolt_stop_v',   # 저전압 가드 임계
+            'start_kick_throttle', 'start_kick_s',    # 출발 킥 (정지마찰 극복)
         }
         self._prev_steer = None   # rate limit 용 직전 조향값
         self._prev_throttle = 0.0   # 스로틀 rate limit 용 직전 출력값
+        self._kick_left = 0.0       # 출발 킥 남은 시간(초)
         self._battery_v = None      # 최근 배터리 전압 (None = 아직 수신 전 -> 가드 비활성)
         self._prev_state = None   # 상태 전환 INFO 로그용
         # 갈림길 표지판 표결 상태 (decision_node 로컬)
@@ -413,6 +428,22 @@ class DecisionNode(Node):
                 throttle = float(cfg['stop_throttle'])
             elif v_slow > 0.0 and v < v_slow:
                 throttle = min(throttle, float(cfg['slow_throttle']))
+
+        # ----- 출발 킥: 정지 상태에서 출발하는 순간 정지마찰을 넘긴다 -----
+        # 직전 출력이 0(정지)인데 이번에 스로틀이 살아나면 킥 타이머를 건다. 킥이 도는
+        # 동안에는 목표치와 킥 값 중 큰 쪽을 쓴다(=목표가 이미 크면 무해). rate limit 전에
+        # 적용해야 램프가 킥 값까지 올라간다.
+        kick = float(cfg.get('start_kick_throttle', 0.0))
+        kick_s = float(cfg.get('start_kick_s', 0.0))
+        if kick > 0.0 and kick_s > 0.0:
+            if throttle > 0.0 and self._prev_throttle <= 1e-3:
+                self._kick_left = kick_s
+            if self._kick_left > 0.0:
+                if throttle > 0.0:
+                    throttle = max(throttle, kick)
+                    self._kick_left -= self.dt
+                else:
+                    self._kick_left = 0.0   # 다시 멈췄으면 킥 취소
 
         # ----- 스로틀 상승 rate limit: 돌입 전류 피크 억제 -----
         # 상승만 제한한다. 하강(감속/정지)은 안전 기능이므로 절대 늦추지 않는다.
