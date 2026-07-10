@@ -269,7 +269,13 @@ class RaceStateMachine:
             if self.cfg['course'] == 'in' and not self.roundabout_done:
                 on_yellow = lane.yellow_ratio >= self.cfg['yellow_enter_ratio']
                 gate = on_yellow if self.cfg['use_yellow_entry'] else True
-                trigger = gate and bool(lane.yellow_crossline)
+                # 곡률 게이트: 급커브에서는 노란 차선 자체가 '수평에 가까운 선'으로 보여
+                # 크로스라인 검출을 통과한다(실측: 좌회전 중 cv=-1.00 에서 오진입).
+                # 진짜 정지선은 차선과 수직이므로 곧은 구간에서 만난다. 0 = 게이트 off.
+                cmax = self.cfg.get('enter_max_curvature', 0.0)
+                straight = (cmax <= 0.0
+                            or abs(getattr(lane, 'curvature', 0.0)) <= cmax)
+                trigger = gate and straight and bool(lane.yellow_crossline)
                 self._entry_votes = int(trigger)
                 self.enter_acc = self.enter_acc + dt if trigger else 0.0
                 if self.enter_acc >= self.cfg['enter_sustain_s']:

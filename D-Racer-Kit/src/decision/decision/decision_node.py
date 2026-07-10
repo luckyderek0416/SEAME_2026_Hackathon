@@ -126,6 +126,12 @@ class DecisionNode(Node):
         # ----- 회전교차로 (junction 카운트, IMU 없음) -----
         self.declare_parameter('enter_curvature', 0.45)   # (미사용) 진입이 가로선 단독 트리거로 바뀜
         self.declare_parameter('enter_sustain_s', 0.3)    # 가로선이 이 시간 지속 보이면 -> 회전 진입
+        # 곡률 게이트: 크로스라인 각도 검사는 '수평' 기준이라, 차가 θ 만큼 비스듬히 달리면
+        # 노란 차선 자체가 수평 기준 각도 안으로 들어와 정지선으로 오인된다(급커브에서 실제 발생).
+        # 진짜 정지선은 차선과 수직이므로 곡선 한복판이 아니라 비교적 곧은 구간에서 만난다.
+        # |curvature| 가 이 값보다 크면 회전교차로 진입 트리거를 무시한다. 0 = 게이트 off.
+        # (탈출 게이트에는 적용하지 않는다 — 링 안은 항상 곡률이 크다)
+        self.declare_parameter('enter_max_curvature', 0.5)
         # race_dir 마스터 (당일 설정): 'left' (CCW) 또는 'right' (CW). 여기서 회전교차로
         # turn_direction 을, 그리고 lane_node 의 junction_side 를 파생한다. 값 하나로
         # 방향 의존적인 모든 것이 뒤집힌다. 아래 turn_direction 은 race_dir 이
@@ -211,6 +217,7 @@ class DecisionNode(Node):
             'fork_hold_s': float(g('fork_hold_s').value),
             'enter_curvature': float(g('enter_curvature').value),
             'enter_sustain_s': float(g('enter_sustain_s').value),
+            'enter_max_curvature': float(g('enter_max_curvature').value),
             'turn_direction': turn_direction,
             'branch_bias': float(g('branch_bias').value),
             'branch_yellow_min': float(g('branch_yellow_min').value),
@@ -245,6 +252,7 @@ class DecisionNode(Node):
             'branch_bias',                        # In/Out 색상 편향 (기본 0=off, 현장 재활성용)
             'roundabout_exit_gates',              # 회전교차로 탈출 게이트 카운트 (트랙 실측)
             'enter_sustain_s',                    # 진입 가로선 지속 debounce (트랙 실측)
+            'enter_max_curvature',                # 곡선 구간 크로스라인 오인식 차단
             'entry_lock_release_s',               # 진입 락온 강제 해제 시간
             'gate_blank_s', 'gate_rearm_s',       # 게이트 블랭크 / 재무장 시간
             'crossline_cooldown_s',               # 게이트 카운트 간 최소 간격
