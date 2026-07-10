@@ -66,11 +66,13 @@ class DecisionNode(Node):
         self.declare_parameter('slow_throttle', 0.175)   # 1587us: ROUNDABOUT 주행 + 감속 바닥.
                                                          # 유지는 되지만 정지에서 출발은 불가.
         self.declare_parameter('stop_throttle', 0.0)     # 1500us: 중립
-        # 출발 킥: 정지마찰 때문에 slow_throttle(0.175)로는 정지 상태에서 출발할 수 없다.
-        # 스로틀이 0에서 살아나는 모든 순간(초록불 출발, 장애물 해제 후 재출발, 정지선
-        # 재출발)에만 잠시 킥 값으로 올렸다가 목표치로 되돌린다. 특히 링 안에서 장애물을
-        # 만나 선 뒤 ROUNDABOUT(=slow_throttle)로 복귀할 때 못 나가는 것을 막는다. 0=off.
-        self.declare_parameter('start_kick_throttle', 0.20)   # 출발 임계값
+        # 출발 킥: 스로틀이 0에서 살아나는 모든 순간(초록불 출발, ArUco 장애물 해제 후
+        # 재출발)에만 잠시 킥 값까지 올렸다가 목표치로 되돌린다.
+        # 킥 값은 정지->출발 임계(0.20)보다 확실히 위여야 한다. 정지에서 출발할 때의 목표는
+        # 항상 drive_throttle(0.20)인데 그게 곧 임계값이라 여유가 0이고, 배터리가 닳으면
+        # 임계가 올라가 아예 못 나간다. 0.24(1620us)는 실측상 확실히 출발하는 값이다.
+        # (순항 속도로는 빠르지만 0.4s 만 유지하므로 무해)  0 = off.
+        self.declare_parameter('start_kick_throttle', 0.24)   # 1620us: 임계(0.20)보다 확실히 위
         self.declare_parameter('start_kick_s', 0.4)           # 킥 유지 시간(초)
         self.declare_parameter('curve_slow', 0.5)     # DRIVE: 커브에서 감속 (|curvature| 비례)
         # ----- look-ahead 보조 (기본 0 = 기존 동작 그대로) -----
@@ -433,6 +435,8 @@ class DecisionNode(Node):
         # 직전 출력이 0(정지)인데 이번에 스로틀이 살아나면 킥 타이머를 건다. 킥이 도는
         # 동안에는 목표치와 킥 값 중 큰 쪽을 쓴다(=목표가 이미 크면 무해). rate limit 전에
         # 적용해야 램프가 킥 값까지 올라간다.
+        # In 코스에서 정지->출발이 일어나는 지점: 초록불 출발, 빨간 도로의 ArUco 해제 후.
+        # 둘 다 목표가 drive_throttle 이고 그 값이 곧 출발 임계라 킥 없이는 여유가 없다.
         kick = float(cfg.get('start_kick_throttle', 0.0))
         kick_s = float(cfg.get('start_kick_s', 0.0))
         if kick > 0.0 and kick_s > 0.0:
