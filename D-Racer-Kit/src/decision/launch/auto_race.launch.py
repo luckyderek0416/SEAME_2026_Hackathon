@@ -41,6 +41,23 @@ def _lane_node(context, *args, **kwargs):
                               'course': course_val}])]
 
 
+def _battery_node(context, *args, **kwargs):
+    """use_battery:=false 면 battery_node 를 아예 띄우지 않는다.
+
+    07-10: auto_race 기동 직후 i2c-3 에서 'Arbitration lost' 가 초당 수십 회 쏟아지며
+    콘솔 printk 폭주 -> 시스템 정지(대시보드/네트워크 멈춤)가 재현됐다. battery_node 는
+    INA219(0x42)를 10Hz 로 읽고, control_node 는 PCA9685(0x40)에 20Hz 로 쓴다.
+    배터리 표시는 주행에 불필요하므로(저전압 보호는 undervolt_*=0 으로 비활성) 원인
+    분리 실험과 실주행에서 끌 수 있게 한다. respawn=True 라 i2c 오류 시 2초마다
+    되살아나며 버스를 다시 여는 것도 폭주를 키운다.
+    """
+    val = LaunchConfiguration('use_battery').perform(context).strip().lower()
+    if val in ('false', '0', 'no', 'off'):
+        return []
+    return [Node(package='battery', executable='battery_node', name='battery_node',
+                 output='screen', respawn=True, respawn_delay=2.0)]
+
+
 def generate_launch_description():
     course = LaunchConfiguration('course')
     race_dir = LaunchConfiguration('race_dir')
@@ -61,6 +78,10 @@ def generate_launch_description():
         # 실제 보드에 tools/identify_aruco.py 로 확인하고 다르면 여기서 override 할 것.
         DeclareLaunchArgument('aruco_dict', default_value='DICT_4X4_50'),
         DeclareLaunchArgument('aruco_inverted', default_value='true'),
+        # 07-10: 배터리 표시는 주행에 불필요하고(저전압 보호는 undervolt_*=0 으로 비활성)
+        # i2c-3 마스터를 하나 줄이려고 기본 OFF. 필요하면 use_battery:=true.
+        DeclareLaunchArgument('use_battery', default_value='false',
+                              description='true 면 battery_node 를 띄운다 (대시보드 배터리% 표시)'),
         DeclareLaunchArgument('model_param',
                               default_value=_find_model('model.ncnn.param')),
         DeclareLaunchArgument('model_bin',
@@ -77,7 +98,11 @@ def generate_launch_description():
                               description='Vehicle/camera config (USB vs MIPI, device, resolution).'),
 
         # --- 키트: 카메라 ---
+        # respawn: camera_node 가 죽으면 lane_node 가 이미지를 못 받아 주행 로직 전체가
+        # 조용히 정지한다(decision 은 마지막 명령을 유지). 카메라는 상태가 없어 재시작이
+        # 안전하므로 자동 복구시킨다. USB 재열거에 시간이 걸리므로 delay 2초.
         Node(package='camera', executable='camera_node', name='camera_node', output='screen',
+             respawn=True, respawn_delay=2.0,
              parameters=[{'vehicle_config_file': vehicle_config}]),
 
         # --- 신규: perception (OpenCV) ---
@@ -107,9 +132,8 @@ def generate_launch_description():
         Node(package='joystick', executable='joystick_node', name='joystick_node', output='screen',
              parameters=[{'debug_log_enable': False}]),
 
-        # --- 키트: 배터리 (모니터용 battery_status publish) ---
-        Node(package='battery', executable='battery_node', name='battery_node', output='screen',
-             respawn=True, respawn_delay=2.0),
+        # --- 키트: 배터리 (모니터용 battery_status publish; use_battery:=false 로 끔) ---
+        OpaqueFunction(function=_battery_node),
 
         # --- 키트: 웹 모니터 (카메라 + 배터리 상태 표시) ---
         Node(package='monitor', executable='monitor_node', name='monitor_node', output='screen'),

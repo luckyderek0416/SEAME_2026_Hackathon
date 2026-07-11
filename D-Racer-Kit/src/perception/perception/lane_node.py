@@ -5,13 +5,15 @@ publish 한다. 옵션으로 디버그 이미지를 다시 publish 해서 키트
 대시보드에서 검출 과정을 지켜볼 수 있다.
 """
 
+import json
+
 import cv2
 import numpy as np
 
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 
 from rcl_interfaces.msg import SetParametersResult
 
@@ -26,6 +28,20 @@ class LaneNode(Node):
         self.declare_parameter('subscribe_topic', '/camera/image/compressed')
         self.declare_parameter('lane_topic', '/perception/lane')
         self.declare_parameter('publish_debug', True)
+        self.declare_parameter('crossline_debug', True)   # 임시: 정지선 후보 진단 토픽 발행
+        # 정지선 직교성 게이트: 차선 대비 90°에서 이 각도(도) 이내면 정지선.
+        # 0 = 비활성(측정 모드). 곡선 위에서 비스듬히 접근해도 통과한다.
+        self.declare_parameter('crossline_perp_tol_deg', 20.0)
+        # BEV 가로/세로 스케일비(sx/sy). 07-10 실측 r=1.91. dst_ratio 변경 시 재측정.
+        self.declare_parameter('crossline_bev_aspect', 1.91)
+        self.declare_parameter('lane_heading_alpha', 0.2)
+        self.declare_parameter('crossline_exclude_px', 6.0)  # 후보 선분 배제 반경(px)
+        self.declare_parameter('crossline_perp_tol', 0.35)   # (구 절대값 — 미사용)
+        # HoughLinesP 파라미터 (정지선 선분 검출).
+        self.declare_parameter('crossline_hough_thresh', 25)    # 누적 투표 임계
+        self.declare_parameter('crossline_hough_max_gap', 10)   # 선분 이어붙이기 최대 간격(px). 8 이하면 진짜 정지선도 못 잇는다
+        self.declare_parameter('crossline_min_solidity', 0.80)  # 선분 위 픽셀 충실도 하한 (이어붙인 점선 배제)
+        self.declare_parameter('crossline_debug_all', False)    # 채택 후에도 전 선분 진단
         self.declare_parameter('debug_topic', '/perception/lane/debug')
         self.declare_parameter('jpeg_quality', 80)
         # debug_hz: 디버그 이미지 그리기+JPEG 인코딩을 이 주기로 제한한다. 주행 로직은
@@ -71,7 +87,11 @@ class LaneNode(Node):
         # (목표 192px = 실차선 350mm). 이전(07-07, 낮은 마운트) 값:
         # [0.226, 0.342, 0.745, 0.342, 0.998, 0.965, -0.006, 0.965]
         self.declare_parameter('use_birdeye', True)
-        self.declare_parameter('birdeye_src_ratio', [0.288, 0.342, 0.713, 0.342, 0.857, 0.965, 0.150, 0.965])
+        # 07-10 재캘리: ROI 흰차선 2개를 직선 피팅해 사다리꼴을 차선 위에 정확히 얹었다.
+        # (구값은 하단 좌/우가 각각 23/25px 안쪽이라 워프 후 좌선 기울기가 -0.17 로 기울어
+        #  직선에서도 offset/curvature 가 편향됐다. 신값 검증: 좌 -0.011 / 우 -0.003, x=64/256)
+        # 07-11 재캘리 (카메라 재조정 후): 워프 검증 좌 +0.003/우 +0.000, x=64/256 정확.
+        self.declare_parameter('birdeye_src_ratio', [0.2598, 0.342, 0.7320, 0.342, 0.9264, 0.965, 0.0376, 0.965])
         self.declare_parameter('birdeye_dst_ratio', [0.20, 0.00, 0.80, 0.00, 0.80, 1.00, 0.20, 1.00])
         # --- 가이드 밴드 탐색 (기본 ON) ---
         self.declare_parameter('use_guided_band', True)
@@ -100,16 +120,26 @@ class LaneNode(Node):
         # --- 좌/우 갈림길 (fork) 감지 + 브랜치 선택 ---
         self.declare_parameter('fork_topic', '/decision/fork_dir')  # decision 이 확정 방향 publish
         self.declare_parameter('state_topic', '/decision/state')    # decision 주행 모드 -> BEV 표시
+        self.declare_parameter('merge_zone_topic', '/decision/merge_zone')  # 합류부 창 플래그 (단선=우측 규칙 스코프)
         self.declare_parameter('fork_scan_top_ratio', 0.0)          # 분기 스캔밴드 상단(BEV far)
         self.declare_parameter('fork_scan_bottom_ratio', 0.5)       # 분기 스캔밴드 하단
         self.declare_parameter('fork_col_min_ratio', 0.15)          # 컬럼=라인 판정 세로픽셀 비율
         self.declare_parameter('fork_min_groups', 3)                # 라인 군집 개수 이상 => 분기
-        self.declare_parameter('fork_span_ratio', 0.65)             # 바깥라인 간격 폭 이상 => 분기
+        self.declare_parameter('fork_span_ratio', 0.0)              # 바깥라인 간격 폴백 (0=비활성, 07-10 실측상 무용)
         self.declare_parameter('fork_seed_px', 90)                  # 브랜치 선택 시드 이동량(px)
         # --- 노란색 우선 추종 (In 코스: 노란 진입 커브/회전교차로 링) ---
         self.declare_parameter('follow_yellow', True)               # In 코스 색상 추종 상태머신 on/off
+        # 07-10 실측: 노랑이 전혀 없는 흰색 구간 232프레임의 yellow_ratio 최댓값이 0.0005.
+        # 0.03 은 노란선이 보이기 시작한 뒤에도 1.8초를 더 기다렸다 -> 0.005 로 낮춘다
+        # (노이즈 바닥 대비 10배 여유; 해제문턱 0.005*0.5=0.0025 도 바닥의 5배).
+        # 07-11: 0.005 는 출발 직후 원거리 노란 마킹(yr 0.01~0.08)에 조기 래치해 흰 차선을
+        # 버리고 요동 -> 이탈을 유발했다 (실주행 2회 재현). 0.03 복원.
+        # 07-11 오전: 0.01 완화 실험(run8) 결과 — 입구 yr 램프가 0.01->0.05 를 0.3초에
+        # 통과해 래치 시점이 0.03 대비 최대 0.3초밖에 안 당겨짐 (죽은 레버). 대신 방황 중
+        # 3% 노란 조각에 재래치돼 우측 이탈을 유발 -> 0.03 복원. 입구 실패의 본체는
+        # 문턱이 아니라 래치 후 단선 좌/우 분류 요동 (run7/run8 동일 서명, §3.6-2 대상).
         self.declare_parameter('follow_yellow_ratio', 0.03)         # 이 노란비율 이상 -> YELLOW 모드 진입
-                                                                    # (노란선이 점선이라 yr 이 낮음 -> 0.03)
+                                                                    # (노란선이 점선이라 yr 이 낮음)
         self.declare_parameter('follow_yellow_exit_white_ratio', 1.0)  # 흰픽셀 > 이 배율*노란픽셀 (해제 조건 일부)
         self.declare_parameter('follow_yellow_exit_yellow_frac', 0.5)  # 해제 노랑문턱 = 진입문턱*이 비율 (노랑 보이면 유지)
         self.declare_parameter('follow_yellow_exit_frames', 10)        # 해제 조건 연속 프레임 (플리커 방지)
@@ -117,7 +147,18 @@ class LaneNode(Node):
         self.declare_parameter('yellow_solid_min_h_ratio', 0.30)       # "실선" 판정 최소 세로 비율
         self.declare_parameter('yellow_dash_fallback_px', 120)         # 실선 픽셀 이 미만이면 점선 포함 폴백
         self.declare_parameter('dash_fallback_exit_frames', 30)        # 폴백 해제(실선 복귀)에 필요한 연속 프레임 (1s)
-        self.declare_parameter('yellow_heading_gain', 0.4)             # 헤어핀 주축 기울기 헤딩 보정 게인 (0=off)
+        # 07-11: 이 보정의 a_h(전체 마스크 피팅)가 ±2.5 로 널뛰어 gain 0.4 에서 보정항이
+        # offset 을 ±1.0 통째로 뒤흔들었다 (nl=2 에서도 off ±0.9 요동 -> 이탈). OFF.
+        self.declare_parameter('yellow_heading_gain', 0.0)             # 헤어핀 주축 기울기 헤딩 보정 게인 (0=off)
+        # 최종 차선중심 연속성 가드: 프레임당 중심 이동 상한 = 반 차폭 x 이 비율 (0=off).
+        # 07-11 run9: 분기 목에서 점선+실선이 nl=2 로 잡히며 중점이 한 프레임에 점프
+        # -> 우 급반전 -> 진입 실패. 상세는 lane_detector.__init__ 주석.
+        self.declare_parameter('center_jump_max_ratio', 0.10)   # 07-11 run10/11: 0.15 는 쐐기 당김 통과 -> 0.10 확정
+        # 진입 병합(1L) 모드: 진입 좌회전 중 '안쪽 실선 소실 순간'(dash 폴백 진입)부터
+        # 이 프레임 동안 밴드 좌/우 분할을 끄고 노란 전체 평균을 "바깥선 하나"로 취급
+        # (중심 = 선 - 반차폭). ~2s@20fps. 0=off. 래치당 1회.
+        # 상세 근거는 lane_detector.__init__ 주석 (run9~11 쐐기 + run14 조기무장 실측).
+        self.declare_parameter('entry_oneline_frames', 80)   # 07-11 run17: 저속에서 2s 미완 만료 -> 4s
         self.declare_parameter('course', 'in')                      # 'in' 일 때만 색상 추종 활성 (launch 전달)
         # 차선 폭 초기값(px, BEV 워프 기준). 0=학습대기. EMA 학습은 그대로 계속 미세보정.
         # 192 = 실측 차선폭 350mm 를 BEV 캘리로 변환한 값((0.80-0.20)*320px). 단선 구간
@@ -128,6 +169,7 @@ class LaneNode(Node):
         self.lane_topic = str(self.get_parameter('lane_topic').value)
         self.publish_debug = bool(self.get_parameter('publish_debug').value)
         self.debug_topic = str(self.get_parameter('debug_topic').value)
+        self.crossline_debug = bool(self.get_parameter('crossline_debug').value)
         self.jpeg_quality = int(self.get_parameter('jpeg_quality').value)
         self.debug_period = 0.0
         dbg_hz = float(self.get_parameter('debug_hz').value)
@@ -208,22 +250,40 @@ class LaneNode(Node):
         self.detector.crossline_min_area_px = int(gp('crossline_min_area_px').value)
         self.detector.crossline_max_resid_px = float(gp('crossline_max_resid_px').value)
         self.detector.crossline_min_inlier_frac = float(gp('crossline_min_inlier_frac').value)
+        self.detector.crossline_perp_tol_deg = float(gp('crossline_perp_tol_deg').value)
+        self.detector.crossline_bev_aspect = float(gp('crossline_bev_aspect').value)
+        self.detector.lane_heading_alpha = float(gp('lane_heading_alpha').value)
+        self.detector.crossline_exclude_px = float(gp('crossline_exclude_px').value)
+        self.detector.crossline_perp_tol = float(gp('crossline_perp_tol').value)
+        self.detector.crossline_hough_thresh = int(gp('crossline_hough_thresh').value)
+        self.detector.crossline_hough_max_gap = int(gp('crossline_hough_max_gap').value)
+        self.detector.crossline_min_solidity = float(gp('crossline_min_solidity').value)
+        self.detector.crossline_debug_all = bool(gp('crossline_debug_all').value)
         self.detector.filter_yellow_dashes = bool(gp('filter_yellow_dashes').value)
         self.detector.yellow_solid_min_h_ratio = float(gp('yellow_solid_min_h_ratio').value)
         self.detector.yellow_dash_fallback_px = int(gp('yellow_dash_fallback_px').value)
         self.detector.dash_fallback_exit_frames = int(gp('dash_fallback_exit_frames').value)
         self.detector.yellow_heading_gain = float(gp('yellow_heading_gain').value)
+        self.detector.center_jump_max_ratio = float(gp('center_jump_max_ratio').value)
+        self.detector.entry_oneline_frames = int(gp('entry_oneline_frames').value)
 
         self.pub = self.create_publisher(LaneState, self.lane_topic, 10)
         self.debug_pub = None
         if self.publish_debug:
             self.debug_pub = self.create_publisher(CompressedImage, self.debug_topic, 10)
+        # 임시 진단 토픽: 정지선 후보의 (부호 있는 slope, 각도, 축길이, 인라이어, 판정).
+        # 부호/길이 임계를 실측으로 정하기 위한 것. 확정되면 crossline_debug=False.
+        self.crossline_dbg_pub = (
+            self.create_publisher(String, '/perception/lane/crossline_dbg', 10)
+            if self.crossline_debug else None)
 
         self.create_subscription(CompressedImage, sub_topic, self.on_image, 10)
         # decision 이 표결로 확정한 갈림길 방향('left'/'right'/'')을 받아 브랜치 선택에 쓴다.
         self.create_subscription(String, str(gp('fork_topic').value), self.on_fork_dir, 10)
         # decision 주행 모드(상태머신 상태)를 받아 BEV 디버그 화면에 표시한다.
         self.create_subscription(String, str(gp('state_topic').value), self.on_state, 10)
+        # 합류부 창 활성 플래그 (decision 의 yaw 위치창) -> "단선=우측" 규칙 스코프
+        self.create_subscription(Bool, str(gp('merge_zone_topic').value), self.on_merge_zone, 10)
         # 라이브 튜닝: `ros2 param set /lane_node yellow_hsv_lo "[18,45,110]"` 등을 실행하면
         # detector 가 즉시 갱신되어 재시작 없이 반영된다. 튜닝하면서 대시보드로
         # HSV 마스크를 바로 확인할 수 있다.
@@ -264,6 +324,9 @@ class LaneNode(Node):
     def on_state(self, msg: String):
         self.detector.drive_mode = str(msg.data)
 
+    def on_merge_zone(self, msg: Bool):
+        self.detector.merge_zone = bool(msg.data)
+
     def on_image(self, msg: CompressedImage):
         frame = cv2.imdecode(np.frombuffer(msg.data, dtype=np.uint8), cv2.IMREAD_COLOR)
         if frame is None:
@@ -297,6 +360,16 @@ class LaneNode(Node):
         out.fork = bool(fork)
         out.red_ratio = float(red_ratio)
         self.pub.publish(out)
+
+        if self.crossline_dbg_pub is not None:
+            cands = getattr(self.detector, 'last_crossline_cands', [])
+            if cands:
+                self.crossline_dbg_pub.publish(String(data=json.dumps({
+                    'xl': bool(yellow_crossline),
+                    'yr': round(float(yellow_ratio), 4),
+                    'cv': round(float(curvature), 3),
+                    'c': cands,
+                })))
 
         if want_debug and debug is not None:
             ok, enc = cv2.imencode('.jpg', debug, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])

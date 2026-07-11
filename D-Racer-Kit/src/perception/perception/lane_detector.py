@@ -38,7 +38,7 @@ class LaneDetector:
                  crossline_roi_top_ratio=0.40, crossline_roi_bottom_ratio=0.95,
                  crossline_min_width_ratio=0.20, crossline_min_rows=4,
                  fork_scan_top_ratio=0.0, fork_scan_bottom_ratio=0.5,
-                 fork_col_min_ratio=0.15, fork_min_groups=3, fork_span_ratio=0.65,
+                 fork_col_min_ratio=0.15, fork_min_groups=3, fork_span_ratio=0.0,
                  fork_seed_px=90,
                  follow_yellow=True, follow_yellow_ratio=0.03,
                  follow_yellow_exit_white_ratio=1.0, course='in',
@@ -101,6 +101,18 @@ class LaneDetector:
         self.guide_use_previous_frame = guide_use_previous_frame
         self.guide_max_jump_px = guide_max_jump_px
         self._prev_center = None   # 직전 프레임의 lane_center (guide 시드)
+        # 최종 중심 연속성 가드 (07-11 run9 실측): 분기 목에서 점선(한쪽)+실선(반대쪽)이
+        # 좌/우 경계로 잡히는 순간 nl=2 중점이 직전 중심에서 한 프레임에 반 차폭 가까이
+        # 점프해 (raw -0.57 -> -0.21 -> +0.05) 조향을 분기 쐐기로 끌고 갔다. 차선 중심은
+        # 물리적으로 프레임당 그만큼 못 움직이므로, 최종 lane_center 의 프레임당 이동을
+        # (반 차폭 x 이 비율)로 제한한다. 단선 경로의 연속성 분류(_combine_lr)와 같은
+        # 원리를 두-선 중점 경로까지 확장한 것. 밴드별 중심이 아닌 최종 중심에만 걸어
+        # 곡률 추정(밴드 간 흐름)은 건드리지 않는다. 0 = off.
+        # 트레이드오프: 차선 소실 후 재획득 시 수렴이 프레임당 이 한도로 느려진다.
+        # 07-11 run10/11 실측: 0.10 = 쐐기 당김 동결 성공 / 0.15 = 쐐기 당김(프레임당
+        # 0.05~0.08)이 상한 아래로 통과해 좌커밋을 반납 -> 0.10 확정. 좌커밋 깊이는
+        # 가드가 아니라 진입 병합(1L) 모드가 담당한다.
+        self.center_jump_max_ratio = 0.10
         # --- look-ahead 조향 블렌딩 (부분 pure-pursuit; 기본 OFF) ---
         # 기존 lane_center 는 전체 band 가중 평균이다. 이 옵션을 켜면 중심이
         # near_weight*가장 가까운 band + lookahead_weight*먼 band 가 되어, 차가
@@ -126,8 +138,53 @@ class LaneDetector:
         self.crossline_min_area_px = 60       # 성분 최소 픽셀 수 (노이즈/점선 dash 필터)
         # 직선성 검사 (곡선 실선의 수평 구간 오인 방지): 선형 피팅 잔차가
         # max_resid_px 이하인 컬럼 비율이 min_inlier_frac 이상이어야 정지선.
+        # (구 컬럼평균 피팅 잔여 파라미터 — Hough 방식에서 미사용, 하위호환용)
         self.crossline_max_resid_px = 2.5
         self.crossline_min_inlier_frac = 0.75
+        self.crossline_max_col_px = 0
+        # HoughLinesP: 누적 투표 임계 / 같은 직선으로 이어붙일 최대 간격(px).
+        self.crossline_hough_thresh = 25
+        # 07-10 실측: gap<=8 이면 진짜 정지선(실선)도 마스크의 작은 구멍 때문에 이어지지
+        # 않아 검출률 0% 가 된다. gap=10 이 진짜 정지선을 100% 잡으면서 점선은 잇지 않는
+        # 지점이었다 (점선 구간 정지 측정 12초, 긴 선분 0개).
+        self.crossline_hough_max_gap = 10
+        # 선분 위 픽셀 충실도 하한. 이어붙인 점선을 배제하는 값싼 안전망.
+        # 실측: 진짜 정지선 0.86~1.00, 점선을 이어붙인 선분 0.52~0.73.
+        # (다만 링 안의 '진짜 실선'이 직각으로 보이는 경우는 이걸로 못 거른다 — 그건
+        #  상태머신의 gate_blank_s 가 막아야 한다.)
+        self.crossline_min_solidity = 0.80
+        # True 면 첫 채택 후에도 모든 선분을 진단 목록에 남긴다 (임계 튜닝용).
+        self.crossline_debug_all = False
+        # 수직성 게이트: 정지선은 BEV 에서 차선과 직교한다. 차선 주축을 dx/dy = a_h 라
+        # 하면 차선 방향은 (a_h, 1), 정지선 방향은 (1, slope) 이고 직교 조건은
+        #   a_h + slope = 0  =>  slope = -a_h
+        # 반면 노란 '차선' 성분을 잡으면 그 컬럼평균 기울기는 1/a_h 가 나오므로,
+        # 1/a_h = -a_h (a_h^2 = -1) 는 불가능 -> 어떤 헤딩에서도 원리적으로 구분된다.
+        # (07-10 실측: 헤딩 43° 좌커브에서 slope=+1.07 = 1/0.93 인 '차선'이 정지선으로
+        #  오검출돼 RA 오진입. 절대각 임계 50° 로는 못 거른다.)
+        # 0 이하면 게이트 비활성(구버전 동작).
+        # 07-10: 절대 기울기차 |slope + a_h| 는 헤딩이 클수록 허용각이 좁아지는 결함이
+        # 있어(비스듬히 접근하는 곡선 위 정지선에 불리) 각도 공간으로 바꿨다.
+        # 판정은 정규화된 |cos(차선, 선분)| <= sin(perp_tol_deg).
+        # 차선을 선분으로 잘못 뽑으면 slope = 1/a_h 이므로 cos 이 a_h 와 무관하게 정확히
+        # 1 (평행) 이 되어, 어떤 헤딩에서도 통과할 수 없다.
+        self.crossline_perp_tol_deg = 20.0
+        # BEV 가로/세로 스케일비 sx/sy. 지면 직각을 BEV 에서 판정하려면 필요.
+        # 07-10 실측: r^2 = 3.63 -> r = 1.91. birdeye_dst_ratio 를 바꾸면 재측정 필요.
+        self.crossline_bev_aspect = 1.91
+        self.lane_heading_alpha = 0.2      # a_h EMA 계수 (폴백 경로 전용)
+        self._lane_heading_init = False
+        # 후보 선분에서 이 거리(px) 이내 픽셀은 차선 헤딩 피팅에서 제외한다.
+        self.crossline_exclude_px = 6.0
+        # 직전 프레임 track 의 crossline 창 픽셀 (ys, xs). _detect_crossline 이
+        # _build_mask 안에서 track 보다 먼저 호출되므로 1프레임 지연값을 쓴다.
+        self._crossline_track_pts = None
+        self.crossline_perp_tol = 0.35   # (구 절대값 임계 — 미사용, 하위호환)
+        # 직전 프레임의 차선 주축 기울기(dx/dy). _detect_crossline 은 track 이 만들어지기
+        # 전에 호출되므로 1프레임 지연값을 쓴다 (20Hz 에서 50ms, 무시 가능).
+        self._lane_heading = 0.0
+        # 임시 진단: _detect_crossline 이 마지막 프레임에 평가한 후보 목록.
+        self.last_crossline_cands = []
         # --- 좌/우 갈림길 (fork) 감지 + 브랜치 선택 ---
         # 분기 구간은 도로가 두 브랜치로 갈라져, BEV 상단 스캔밴드에서 세로 라인 군집이
         # 3개 이상(각 브랜치 안/바깥선)이거나 바깥 라인 간격이 한 차선보다 훨씬 넓어진다.
@@ -137,7 +194,15 @@ class LaneDetector:
         self.fork_scan_bottom_ratio = fork_scan_bottom_ratio  # 스캔밴드 하단
         self.fork_col_min_ratio = fork_col_min_ratio          # 컬럼이 '라인'으로 세는 세로픽셀 비율
         self.fork_min_groups = fork_min_groups                # 라인 군집 이 개수 이상 => 분기
-        self.fork_span_ratio = fork_span_ratio                # 바깥라인 간격 이 폭 이상 => 분기(폴백)
+        # 바깥라인 간격 폴백. 0 이하면 비활성 (기본 비활성).
+        # 07-10 실측: BEV 가 잘못 캘리된 상태(구 birdeye_src_ratio)에서는 평범한 직선에서도
+        # span 이 0.85w 라 임계 0.65 를 항상 넘겨 fork 가 96% 오발화했고, 그 탓에
+        # state_machine 의 reconverged(= _fork_seen and not fork) 가 영영 False 가 되어
+        # turn_latch 가 fork_hold_s(8초) 타임아웃으로만 풀렸다.
+        # BEV 재캘리 후에는 span 이 0.60~0.65w 로 내려와 임계 0.65 에서 오발화가 사라진다.
+        # 그러나 직선(0.60~0.65w)과 임계 사이 여유가 0~8% 뿐이라 분기 판별력이 없다.
+        # groups>=fork_min_groups 만으로 충분하므로(직선에서 0% 오발화) 폴백은 끈다.
+        self.fork_span_ratio = fork_span_ratio
         # fork_dir: decision 이 표결 확정한 방향('left'/'right'/None). lane_node 가
         # /decision/fork_dir 구독으로 매 프레임 갱신한다. 설정되면 guided-band 시드를
         # 그 브랜치 쪽으로 밀어(fork_seed_px) 한쪽 브랜치만 추종 => median(표지판 섬) 배제.
@@ -168,6 +233,25 @@ class LaneDetector:
         self.course = course
         self._following_yellow = False   # 현재 YELLOW 모드인지 (프레임 간 유지)
         self._yellow_exit_count = 0      # 해제 조건 연속 카운터
+        # 진입 병합(1L) 모드 (07-11 run9~11 실측 후 팀 합의): 진입 좌회전 중
+        # "안쪽 실선이 시야에서 사라진 순간"(dash 폴백 진입)부터 N프레임 동안,
+        # 밴드의 좌/우 분할을 끄고 노란 픽셀 전체 평균을 "선 하나"로 취급해
+        # 항상 우측(바깥) 경계로 분류: 중심 = 선 - 반차폭.
+        # 근거: 인코스 분기는 항상 좌회전이고, 안쪽 실선이 사라진 뒤 보이는 노란
+        # 선은 구조상 바깥선(점선부+실선부가 이어진 하나의 경계)이다. 이 점선부와
+        # 실선부가 별개 클러스터로 잡혀 nl=2 중점(+0.05)이 조향을 분기 쐐기로
+        # 끌던 것(run9/11 동일 서명)을 분할 자체를 없애 원천 차단.
+        # 발동 시점 주의 (07-11 run14): 래치 '순간'에 무장하면 아직 잘 보이는
+        # 안쪽 실선까지 바깥선으로 오인해 그 왼쪽(도로 밖 안쪽)을 겨냥, 코너를
+        # 깎으며 안쪽 선을 넘는다 (off -0.82 실측). 안쪽 실선이 보이는 동안은
+        # 기존 단선 연속성 분류가 좌측 경계로 옳게 처리하므로 그대로 두고,
+        # 실선 소실 순간에만 무장한다. 래치당 1회 (폴백 깜빡임 재발동 방지).
+        # 07-11 run17: 배터리 열화로 실효 속도가 떨어지자 2초(40) 창이 회전 미완 상태로
+        # 만료 -> 인계 직후 쐐기(nl=2 중점, 가드 스킵)에 격추. 속도 편차 흡수를 위해 4초로.
+        self.entry_oneline_frames = 80   # ~4s@20fps. 0=off
+        self._oneline_left = 0
+        self._oneline_used = False       # 이번 래치에서 이미 무장했는지
+        self._ra_seen = False            # ROUNDABOUT 을 겪은 뒤에는 재무장 안 함
         # YELLOW 추종 중 점선(dash) 무시: 조향용 track 마스크에서 세로 길이가 짧은
         # 노란 성분(점선 dash, 그리고 가로 정지선)을 제거해 "실선만" 추종한다.
         # raw ymask 는 yellow_ratio/crossline/Y모드 진입판정에 그대로 쓰이므로 무관.
@@ -199,6 +283,16 @@ class LaneDetector:
         # 현재 주행 모드(상태머신 상태 문자열). decision 이 publish 하고 lane_node 가
         # 매 프레임 갱신 -> BEV 디버그 화면에 표시. '' 면 표시 안 함(decision 미실행).
         self.drive_mode = ''
+        # 합류부 창(yaw 위치창) 활성 플래그. decision 이 /decision/merge_zone 으로
+        # publish -> "단선=우측 경계" 규칙을 이 창 안으로만 스코프 (07-11 run25 폐기
+        # 후 사용자 지정: RA 전체 적용은 과범위).
+        self.merge_zone = False
+        # 재획득 우측 고정 모드 (07-11 사용자 지정 조건): 창 안에서 "소실(0) -> 단선(1)"
+        # 전이로 잡힌 선에만 우측 경계 고정을 적용한다. 이미 연속 추적 중이던 단선은
+        # 기존 연속성 분류 그대로. 두 선(nl=2)이 보이면 기하가 복원된 것이므로 해제.
+        self._reacq_right_active = False
+        self._prev_found = False   # 직전 프레임 lane_found
+        self._prev_nl = 0          # 직전 프레임 num_lanes
 
     def _build_mask(self, roi):
         """(lane_mask, white_mask, yellow_mask, yellow_ratio, yellow_offset,
@@ -268,18 +362,87 @@ class LaneDetector:
                 out[labels == i] = 255
         return out
 
-    def _detect_crossline(self, ymask):
-        """노란 '가로선'(정지선) 감지 — 기울기 허용 버전 (연결성분 + 주축 각도).
+    @staticmethod
+    def _segment_solidity(mask, seg):
+        """선분 위 픽셀이 실제로 얼마나 채워져 있는가 (0..1).
 
-        옛 행(row) 폭 스캔은 가로선이 화면에 수평으로 보인다고 가정했는데, 커브에서
-        비스듬한 헤딩으로 접근하면 가로선이 BEV 에 대각선으로 찍혀 구조적으로 실패했다.
-        헤딩이 θ 틀어지면 차선은 수직에서 θ, 가로선은 수평에서 θ 기울므로,
-        "수평에 가까운 주축인가"로 판정하면 기울어도 차선과 항상 구분된다:
-          - 연결성분의 가로 스팬 >= crossline_min_width_ratio × w  (dash 는 작아서 탈락)
-          - 주축의 수평 기준 각도 <= crossline_max_angle_deg       (차선은 수직쪽이라 탈락)
-        use_birdeye ON 이면 BEV 워프된 mask 위에서 동작해 원근 무관.
-        (crossline_min_rows 는 이 버전에서 미사용 — 하위호환으로만 남김)
+        HoughLinesP 는 maxLineGap 안의 조각들을 한 직선으로 이어붙인다. 그래서 회전교차로
+        진입/진출부의 '점선' 마킹이 진짜 정지선(실선)과 같은 길이·기울기·직교성을 갖는
+        선분으로 잡힌다 (07-10 실측: 오검출 길이 최대 156px > 진짜 정지선 148px).
+        기하만으로는 구분할 수 없다. 실선은 선분 위가 빽빽하고 이어붙인 점선은 구멍이
+        많으므로, 선분을 따라 샘플링해 mask 가 켜진 비율로 가른다.
         """
+        x1, y1, x2, y2 = (float(v) for v in seg)
+        n = max(8, int(np.hypot(x2 - x1, y2 - y1)))
+        xs = np.linspace(x1, x2, n)
+        ys = np.linspace(y1, y2, n)
+        h, w = mask.shape[:2]
+        xi = np.clip(np.rint(xs).astype(np.int32), 0, w - 1)
+        yi = np.clip(np.rint(ys).astype(np.int32), 0, h - 1)
+        # 두께 1px 오차를 허용: 위/아래 한 픽셀도 함께 본다.
+        hit = (mask[yi, xi] > 0)
+        hit |= (mask[np.clip(yi - 1, 0, h - 1), xi] > 0)
+        hit |= (mask[np.clip(yi + 1, 0, h - 1), xi] > 0)
+        return float(np.mean(hit))
+
+    def _lane_heading_excluding(self, seg, fallback):
+        """정지선 후보 선분 seg 의 픽셀을 뺀 뒤 차선 주축 a_h = dx/dy 를 잰다.
+
+        정지선은 track 에서 세로 차선과 한 성분이라 제거되지 않고, 가까워질수록
+        차선 피팅을 통째로 끌어당긴다 (07-10 실측: 한 번의 통과 중 a_h 가
+        +2.50 -> -1.57 로 부호까지 뒤집혀, 진짜 정지선이 직교오차 59~73° 로 거절됐다).
+        후보를 하나 지우고 남은 픽셀로 재면 순환 없이 풀린다:
+          - 진짜 정지선을 지우면 남는 건 차선 -> a_h 정확 -> 직각 -> 채택
+          - 차선 선분을 지우면 남는 것도 차선 -> 그 선분은 a_h 와 평행 -> 거절
+        """
+        pts = self._crossline_track_pts
+        if pts is None:
+            return fallback
+        ys, xs = pts
+        if xs.size < 150:
+            return fallback
+        x1, y1, x2, y2 = seg
+        dx, dy = float(x2 - x1), float(y2 - y1)
+        seg_len = float(np.hypot(dx, dy))
+        if seg_len < 1e-6:
+            return fallback
+        # 점-직선 거리 = |cross((p - p1), dir)| / |dir|
+        dist = np.abs((xs - x1) * dy - (ys - y1) * dx) / seg_len
+        keep = dist > float(self.crossline_exclude_px)
+        if int(keep.sum()) < 150:
+            return fallback
+        try:
+            a = float(np.polyfit(ys[keep].astype(np.float64),
+                                 xs[keep].astype(np.float64), 1)[0])
+        except Exception:
+            return fallback
+        return float(np.clip(a, -2.5, 2.5))
+
+    def _detect_crossline(self, ymask):
+        """노란 '가로선'(정지선) 감지 — HoughLinesP + 차선 직교성 게이트.
+
+        07-10 실측으로 옛 방식(연결성분의 컬럼평균에 최소제곱 직선 피팅 + 잔차
+        인라이어 비율)이 구조적으로 실패함을 확인했다. 정지선은 양끝에서 세로 노란
+        차선과 T 자로 붙어 한 성분이 되는데, 그 차선 픽셀이 컬럼평균을 통째로 끌어당겨
+        진짜 정지선 앞 313프레임에서 inlier 가 0.05 까지 떨어져 100% 미검출이었다.
+        (반대로 비스듬히 누운 '차선' 자체는 잘 맞는 직선이라 항상 채택 -> 회전교차로
+         오진입.) 두꺼운 컬럼을 빼는 우회로는 임계가 거리에 종속돼 무너졌다.
+
+        Hough 변환은 오염 픽셀을 미리 지울 필요가 없다 — 투표로 직선을 찾고 나머지는
+        그냥 표를 못 얻는다. 실측: 정지선 앞 30/30 프레임 검출(옛 방식 최적값 28/30,
+        적응형 0/30).
+
+        판정: 길이 >= crossline_min_width_ratio × w 인 선분 중,
+              차선과 직교( |slope + a_h| <= crossline_perp_tol )하는 것이 하나라도 있으면 True.
+
+        직교성이 왜 차선을 원리적으로 배제하는가:
+          차선 주축을 dx/dy = a_h 라 하면 차선 방향은 (a_h, 1), 정지선 방향은 (1, slope).
+          직교 조건 a_h + slope = 0 => 정지선의 slope = -a_h.
+          반면 '차선'을 선분으로 뽑으면 그 slope = 1/a_h 이므로
+            perp_err = |1/a_h + a_h| = |(1 + a_h^2)/a_h| >= 2   (산술-기하 평균, 등호는 |a_h|=1)
+          부호와 무관하게 항상 2 이상이라 tol 0.35 로는 절대 통과하지 못한다.
+        """
+        self.last_crossline_cands = []
         h_m, w_m = ymask.shape[:2]
         y1 = int(h_m * self.crossline_roi_top_ratio)
         y2 = int(h_m * self.crossline_roi_bottom_ratio)
@@ -288,42 +451,63 @@ class LaneDetector:
         cross_roi = ymask[y1:y2, :]
         if cv2.countNonZero(cross_roi) < int(self.crossline_min_area_px):
             return False
-        num, labels, stats, _ = cv2.connectedComponentsWithStats(cross_roi, connectivity=8)
+
         min_len = float(w_m) * float(self.crossline_min_width_ratio)
-        for i in range(1, num):
-            if stats[i, cv2.CC_STAT_AREA] < int(self.crossline_min_area_px):
+        lines = cv2.HoughLinesP(cross_roi, 1, np.pi / 180.0,
+                                threshold=int(self.crossline_hough_thresh),
+                                minLineLength=int(min_len),
+                                maxLineGap=int(self.crossline_hough_max_gap))
+        if lines is None or len(lines) == 0:
+            return False
+        # OpenCV 버전에 따라 (N,1,4) 또는 (N,4) 로 온다.
+        lines = np.asarray(lines).reshape(-1, 4)
+
+        # BEV 는 가로/세로 스케일이 달라(sx/sy = r) 지면의 직각이 영상에서 직각이 아니다.
+        # 07-10 실측(진짜 정지선 11프레임): r^2 = 3.63, 변동계수 0.08 로 상수 확인.
+        # 지면 방향으로 되돌린 뒤 직교를 본다: (dx, dy)_bev -> (dx/r, dy)_ground.
+        r = max(1e-3, float(self.crossline_bev_aspect))
+        tol_deg = float(self.crossline_perp_tol_deg)
+        cos_max = float(np.sin(np.radians(tol_deg))) if tol_deg > 0.0 else 1.0
+        fallback_ah = float(self._lane_heading)
+        found = False
+        for seg in lines:
+            x1, yy1, x2, yy2 = seg
+            dx = float(x2) - float(x1)
+            dy = float(yy2) - float(yy1)
+            length = float(np.hypot(dx, dy))
+            if length < min_len:
                 continue
-            ys, xs = np.nonzero(labels == i)
-            xspan = int(xs.max() - xs.min())
-            if xspan < 4:          # 세로 줄무늬(가로 퍼짐 없음)는 fit 무의미
+            # 이 후보를 지우고 남은 픽셀로 차선 방향을 잰다 (순환 회피).
+            ah = self._lane_heading_excluding(seg, fallback_ah)
+            lane_g = (ah / r, 1.0)
+            lane_norm = float(np.hypot(*lane_g))
+            # 지면 공간에서의 |cos(차선, 선분)|. 0 = 직교(정지선), 1 = 평행(차선).
+            seg_g = (dx / r, dy)
+            seg_norm = float(np.hypot(*seg_g))
+            if seg_norm < 1e-6:
                 continue
-            # 컬럼별 평균 y 로 주축 기울기 추정 (수평 기준). 정지선이 양끝에서
-            # 세로 차선과 붙어 한 성분이 돼도, 컬럼 평균은 대부분 정지선 위라 강건.
-            cols = xs - xs.min()
-            cnt = np.bincount(cols)
-            ysum = np.bincount(cols, weights=ys.astype(np.float64))
-            valid = cnt > 0
-            xcols = np.nonzero(valid)[0].astype(np.float64)
-            ymean = ysum[valid] / cnt[valid]
-            if xcols.size < 4:
-                continue
-            slope, intercept = np.polyfit(xcols, ymean, 1)
-            angle_deg = float(np.degrees(np.arctan(abs(float(slope)))))
-            # 주축 길이 = 가로 스팬 / cos(기울기): 대각선이라 창에 짧게 걸려도
-            # 실제 선 길이로 평가된다 (bbox 폭 기준의 구조적 실패 회피).
-            axis_len = float(xspan) * float(np.hypot(1.0, float(slope)))
-            if angle_deg > float(self.crossline_max_angle_deg) or axis_len < min_len:
-                continue
-            # 직선성 검사: 원근 워프는 직선을 직선으로 보존하므로 정지선은 비스듬히
-            # 접근해도 BEV 에서 항상 곧다. 반면 갈림길의 곡선 실선/점선 호는 먼
-            # 구간이 수평으로 누워 각도·길이를 통과해도 휘어 있다 -> 선형 피팅
-            # 잔차의 인라이어 비율로 걸러낸다. 정지선 양끝에 세로 차선이 붙어
-            # 국소 이상치가 생기는 경우(L자 병합)는 비율 기준이라 통과한다.
-            resid = np.abs(ymean - (slope * xcols + intercept))
-            inlier = float(np.mean(resid <= float(self.crossline_max_resid_px)))
-            if inlier >= float(self.crossline_min_inlier_frac):
-                return True
-        return False
+            perp_cos = abs(lane_g[0] * seg_g[0] + lane_g[1] * seg_g[1]) / (lane_norm * seg_norm)
+            # 실선 판정: 점선을 이어붙인 선분은 구멍이 많아 여기서 탈락한다.
+            solidity = self._segment_solidity(cross_roi, seg)
+            ok = (perp_cos <= cos_max
+                  and solidity >= float(self.crossline_min_solidity))
+            slope = (dy / dx) if abs(dx) > 1e-6 else float('inf')
+            if ok:
+                verdict = 'ACCEPT'
+            elif perp_cos > cos_max:
+                verdict = 'reject_perp'
+            else:
+                verdict = 'reject_dashed'
+            self.last_crossline_cands.append(
+                (round(slope, 3) if np.isfinite(slope) else 'vert',
+                 round(float(np.degrees(np.arcsin(min(1.0, perp_cos)))), 1),
+                 round(length, 1), round(solidity, 3), verdict,
+                 round(ah, 3), round(perp_cos, 3)))
+            if ok:
+                found = True
+                if not self.crossline_debug_all:
+                    break                    # 진단이 필요 없으면 첫 채택에서 종료
+        return found
 
     def process(self, bgr, draw_debug=True):
         h, w = bgr.shape[:2]
@@ -352,10 +536,13 @@ class LaneDetector:
         track = clean
         if (self.follow_yellow and self.course == 'in'
                 and ymask is not None and wmask is not None):
+            if self.drive_mode == 'ROUNDABOUT':
+                self._ra_seen = True
             if not self._following_yellow:
                 if yellow_ratio >= self.follow_yellow_ratio:
                     self._following_yellow = True
                     self._yellow_exit_count = 0
+                    self._oneline_used = False   # 새 래치 -> 1L 1회 사용권 리셋
             elif self.drive_mode != 'ROUNDABOUT':
                 # WHITE 복귀 = "노랑이 사실상 사라짐" AND "흰 우세" 가 연속 N프레임.
                 # 노랑이 조금이라도(진입문턱×frac 이상) 보이는 동안엔 절대 안 풀림 ->
@@ -370,6 +557,7 @@ class LaneDetector:
                     if self._yellow_exit_count >= int(self.follow_yellow_exit_frames):
                         self._following_yellow = False
                         self._yellow_exit_count = 0
+                        self._oneline_left = 0   # 래치 해제 -> 병합 모드도 종료
                 else:
                     self._yellow_exit_count = 0
             else:
@@ -384,6 +572,14 @@ class LaneDetector:
                 # 연속 충족 시에만 — 실선이 막 걸친 순간의 급전환/차선 소실 방지.
                 if self.filter_yellow_dashes:
                     if cv2.countNonZero(solid) < int(self.yellow_dash_fallback_px):
+                        if not self._dash_fallback_on:
+                            # 안쪽 실선 소실 '순간' = 1L 무장 시점 (__init__ 주석 참고).
+                            # RA 이전 + DRIVE + 이번 래치에서 미사용일 때만.
+                            if (not self._oneline_used and not self._ra_seen
+                                    and self.drive_mode == 'DRIVE'
+                                    and self.entry_oneline_frames > 0):
+                                self._oneline_left = int(self.entry_oneline_frames)
+                                self._oneline_used = True
                         self._dash_fallback_on = True
                         self._solid_ok_count = 0
                     elif self._dash_fallback_on:
@@ -410,16 +606,77 @@ class LaneDetector:
         else:
             self._following_yellow = False
             self._yellow_exit_count = 0
+            self._oneline_left = 0
             self._yellow_dash_cx = None
             self._dash_fallback_on = False
             self._solid_ok_count = 0
+
+        # 차선 주축 기울기 a_h = dx/dy 를 갱신한다 (다음 프레임의 정지선 직교 게이트용).
+        # track 은 추종 대상(흰 or 노란 실선)이라 정지선 성분이 대부분 빠져 있어,
+        # 정지선을 밟는 순간에도 '차선 방향'을 준다.
+        #
+        # 07-10 실측: track '전체'에 직선을 피팅하면 링의 휜 실선에서는 국소 접선이 아니라
+        # 곡선 전체의 평균 기울기가 나와, 정지선 앞에서 a_h=-0.59 (정답 +0.18 근처) 로
+        # 부호까지 뒤집혔다. 그 탓에 진짜 정지선이 직교오차 38~44° 로 전량 거절됐다.
+        # => 정지선 스캔 창과 '같은 행 범위'에서만 재서 국소 접선을 얻는다.
+        th = track.shape[0]
+        wy1 = int(th * self.crossline_roi_top_ratio)
+        wy2 = int(th * self.crossline_roi_bottom_ratio)
+        band = track[wy1:wy2, :] if wy2 > wy1 else track
+        ys_lh, xs_lh = np.nonzero(band)
+        # 다음 프레임의 '후보 배제 후 헤딩' 계산용으로 창 안 track 픽셀을 보관한다.
+        self._crossline_track_pts = (ys_lh, xs_lh) if xs_lh.size >= 150 else None
+        if xs_lh.size < 150:                 # 창 안이 비면 전체로 폴백
+            ys_lh, xs_lh = np.nonzero(track)
+        if xs_lh.size >= 150:
+            raw_ah = float(np.clip(
+                np.polyfit(ys_lh.astype(np.float64), xs_lh.astype(np.float64), 1)[0],
+                -2.5, 2.5))
+            # 정지선은 track 에서 완전히 제거되지 않아(차선과 한 성분) 밟는 순간 피팅을
+            # 끌어당긴다. 07-10 실측: a_h 가 60ms 만에 +1.09 -> -1.05 로 부호까지 뒤집혔다.
+            # 정지선은 1초 안팎의 과도 현상이므로 EMA 로 차선 헤딩을 유지한다.
+            a = float(self.lane_heading_alpha)
+            self._lane_heading = (a * raw_ah + (1.0 - a) * self._lane_heading
+                                  if self._lane_heading_init else raw_ah)
+            self._lane_heading_init = True
+
+        # 재획득 우측 고정 모드 갱신 (직전 프레임 결과 기준; __init__ 주석 참고):
+        # 합류부 창 안에서 직전 프레임이 소실이었으면 -> 이번에 잡히는 단선은
+        # "소실에서 재획득한 선" = 구조상 우측 경계. nl=2 로 복원되면 해제.
+        if self.drive_mode == 'ROUNDABOUT' and self.merge_zone:
+            if not self._prev_found:
+                self._reacq_right_active = True
+            elif self._prev_nl == 2:
+                self._reacq_right_active = False
+            # _prev_nl == 1 인 동안은 유지 (재획득한 그 선을 계속 추적 중)
+        else:
+            self._reacq_right_active = False
 
         # (1) multi-band look-ahead: ROI 를 가로 band 들(가까움..멂)로 나누고 각각에서
         # 차선 중심을 찾는다. 가까운 band 는 조향에, 먼 band 는 커브 선행 감지에 쓴다.
         roi_h = track.shape[0]
         band_h = max(1, roi_h // self.num_bands)
         band_windows = []   # guided 모드 탐색 창, 디버그 오버레이용
-        if self.use_guided_band:
+        oneline = (self._oneline_left > 0 and self._following_yellow)
+        if oneline:
+            # 진입 병합(1L) 모드: 좌/우 분할 없이 밴드의 노란 픽셀 전체 평균 = 선 하나,
+            # 항상 우측(바깥) 경계로 분류 -> 중심 = 선 - 반차폭 (__init__ 주석 참고)
+            self._oneline_left -= 1
+            bands = []
+            near_lanes = 0
+            half = (self._lane_width / 2.0) if self._lane_width > 0 \
+                else (w * self.single_line_offset)
+            for i in range(self.num_bands):
+                y1 = roi_h - i * band_h
+                y0 = max(0, roi_h - (i + 1) * band_h)
+                if y1 - y0 < 2:
+                    continue
+                line = self._mean_x(track[y0:y1, :], 0)
+                if line is not None:
+                    bands.append((line - half, float(self.num_bands - i), i))
+                    if i == 0:
+                        near_lanes = 1
+        elif self.use_guided_band:
             bands, near_lanes, band_windows = self._guided_bands(track, w, roi_h, band_h)
         else:
             bands = []   # (center_x, weight, band_index)  band 0 = 가장 가까움 (ROI 하단)
@@ -459,6 +716,16 @@ class LaneDetector:
                     nw = max(0.0, 1.0 - lw)
                 if nw + lw > 0.0:
                     lane_center = (nw * near_cx + lw * la_cx) / (nw + lw)
+            # 최종 중심 연속성 가드: 프레임당 이동을 반 차폭 x 비율로 제한.
+            # nl=2(두 경계가 다 보이는 정상 두-선 추종)는 중점을 신뢰하고 가드를
+            # 건너뛴다 (07-11 팀 결정 — 분기 목의 병적 nl=2 는 진입 병합(1L) 모드가
+            # 분할 자체를 없애 원천 차단하므로, 가드는 단선/소실 쪽만 지킨다).
+            if (self.center_jump_max_ratio > 0.0 and self._prev_center is not None
+                    and self._lane_width > 0 and near_lanes != 2):
+                j = self.center_jump_max_ratio * (self._lane_width / 2.0)
+                d = lane_center - self._prev_center
+                if abs(d) > j:
+                    lane_center = self._prev_center + (j if d > 0 else -j)
 
         raw_offset = float(max(-1.0, min(1.0, (lane_center - mid) / (w / 2.0))))
         # 헤어핀 헤딩 보정: FOLLOW-Y 주행(DRIVE) 중 track 주축이 수직에서 크게
@@ -483,6 +750,10 @@ class LaneDetector:
 
         junction = self._detect_junction(clean, w)
         fork = self._detect_fork(clean, w)
+
+        # 다음 프레임의 "소실->재획득" 전이 판정용 직전 상태 저장
+        self._prev_found = bool(lane_found)
+        self._prev_nl = int(num_lanes)
 
         # 디버그 이미지는 웹 대시보드용일 뿐 주행에 안 쓰인다. 프레임을 띄엄띄엄
         # (lane_node 의 debug_hz) 보낼 때 그리기+인코딩을 통째로 건너뛰어 보드 부하를 던다.
@@ -520,7 +791,15 @@ class LaneDetector:
         line = lx if lx is not None else rx
         if line is None:
             return None, 0
-        # FOLLOW-Y 단선 + 점선 힌트: 어느 탐색 반쪽에서 잡혔는지(화면/분할점 기준)
+        # 합류부 재획득 단선 수기 보정 (매뉴얼 §7 확정 규칙, 07-11 사용자 지정 조건):
+        # 합류부 창 안 + "소실(0)->단선(1) 재획득" 상황에서만 — 재획득 단선을 연속성
+        # 분류가 좌측 경계로 오분류하면 중심이 선 오른쪽에 놓여 바깥으로 밀린다
+        # (run22~24 3연속 언더스티어 서명). 재획득 선은 구조상 바깥(우측) 경계다
+        # -> 우측 경계 고정, 중심 = 선 - 반차폭. 연속 추적 중이던 단선은 기존 로직.
+        # (run25 폐기 교훈: RA 전체/전 단선 적용은 과범위 — 링 추종을 오염시킴)
+        if (self.drive_mode == 'ROUNDABOUT' and self.merge_zone
+                and self._reacq_right_active):
+            return line - half, 1
         # 대신 "점선의 반대편 경계"라는 코스 구조로 좌/우를 정한다. 오른쪽 실선이
         # 차 왼쪽에 보여도 (점선이 그보다 더 왼쪽에 있으면) 오른쪽 경계로 맞게
         # 분류돼 중심을 실선의 왼쪽(-half)에 둔다.
@@ -528,6 +807,19 @@ class LaneDetector:
             if line < self._yellow_dash_cx:
                 return line + half, 1   # 실선이 점선보다 왼쪽 = 왼쪽 경계
             return line - half, 1       # 실선이 점선보다 오른쪽 = 오른쪽 경계
+        # 시간 연속성 분류: 화면 반쪽 기준(아래 폴백)은 단선이 화면 중앙을 넘나드는
+        # 커브에서 프레임마다 좌/우가 뒤집혀 중심이 ±half 로 널뛴다.
+        # 07-11 실주행 실측: off 가 -0.53 <-> +0.07 로 요동, steer +0.81 <-> -0.50
+        # -> 차가 차선 밖으로 튕겨나가 완전 소실 (자율주행 첫 시도 2회 연속 이 원인).
+        # 차선 중심은 한 프레임(50ms)에 반 차선폭을 점프할 수 없으므로, 직전 프레임
+        # 중심에 더 가까운 해석을 고른다. 출발선에서 두 선으로 정확한 중심을 잡고
+        # 시작하므로 단선 전환 순간에도 올바른 분류가 연속적으로 이어진다.
+        if self._prev_center is not None:
+            cand_left = line + half      # 이 선이 왼쪽 경계일 때의 중심
+            cand_right = line - half     # 이 선이 오른쪽 경계일 때의 중심
+            if abs(cand_left - self._prev_center) <= abs(cand_right - self._prev_center):
+                return cand_left, 1
+            return cand_right, 1
         if lx is not None:
             return lx + half, 1
         return rx - half, 1
@@ -671,9 +963,9 @@ class LaneDetector:
         """좌/우 갈림길(fork) 구간 감지.
 
         분기에서는 도로가 두 브랜치로 갈라져, BEV 상단 스캔밴드의 세로 라인 군집이
-        늘어난다(한 차선=좌·우 2군집 -> 분기=각 브랜치의 안/바깥선으로 3~4군집). 또는
-        가장 바깥 두 라인 간격(span)이 한 차선보다 훨씬 넓어진다. 둘 중 하나면 분기로 본다.
-        컬럼별 세로픽셀 수를 세어, '라인' 컬럼의 연속 런(run) 개수와 바깥 span 으로 판정한다.
+        늘어난다(한 차선=좌·우 2군집 -> 분기=각 브랜치의 안/바깥선으로 3~4군집).
+        컬럼별 세로픽셀 수를 세어 '라인' 컬럼의 연속 런(run) 개수로 판정한다.
+        바깥 span 폴백은 fork_span_ratio>0 일 때만 쓰며, 기본 비활성이다(위 주석 참조).
         decision 의 turn_latch 해제(도로 재수렴 = fork False) 기준으로만 쓰인다."""
         h_m = mask.shape[0]
         y1 = int(h_m * self.fork_scan_top_ratio)
@@ -689,9 +981,13 @@ class LaneDetector:
         groups = int(np.count_nonzero(np.diff(col_on.astype(np.int8)) == 1))
         if col_on[0]:
             groups += 1
+        if groups >= self.fork_min_groups:
+            return True
+        if self.fork_span_ratio <= 0.0:
+            return False
         on_idx = np.nonzero(col_on)[0]
         span = float(on_idx[-1] - on_idx[0])
-        return bool(groups >= self.fork_min_groups or span >= self.fork_span_ratio * w)
+        return bool(span >= self.fork_span_ratio * w)
 
     def _mean_x(self, half_mask, x_offset, min_pixels=None):
         # min_pixels=None 이면 기존 threshold 를 유지; guided 창은 좁아서
@@ -734,6 +1030,8 @@ class LaneDetector:
         follow_tag = ''
         if self.follow_yellow and self.course == 'in':
             follow_tag = '  FOLLOW-Y' if self._following_yellow else '  FOLLOW-W'
+            if self._oneline_left > 0:
+                follow_tag += '[1L]'   # 진입 병합 모드 활성 (남은 프레임 있음)
         mode = (f"BEV {'ON' if self.use_birdeye else 'OFF'}  "
                 f"GUIDED {'ON' if self.use_guided_band else 'OFF'}  "
                 f"LA {'ON' if self.use_lookahead_control else 'OFF'}"
