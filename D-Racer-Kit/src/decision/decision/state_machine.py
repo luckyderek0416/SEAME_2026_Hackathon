@@ -68,6 +68,11 @@ class RaceStateMachine:
         self.roundabout_done = False  # 이미 회전을 완료함 (재진입 금지)
         self.enter_acc = 0.0          # 진입 감지용 지속 커브 누적기
         self.circle_t = 0.0           # 현재 회전에서 보낸 시간
+        # 속도 스케일 (07-12 run55 실증): yaw_proxy/블랭크는 시간 기반이라 빠른 랩일수록
+        # 작아짐 — 진짜 정지선 yaw 가 run53 3.87 / run54 4.16 / run55 3.21 로 밴드 간
+        # 이동, 가짜 최대 3.15 와 겹쳐 절대 임계 불가. G->RA 접근 소요시간(race_t)이
+        # 그 런의 속도 밴드를 대표하므로 그 비율로 게이트 임계들을 스케일한다.
+        self._speed_scale = 1.0       # RA 진입 시 확정: clamp(race_t/ra_ref_drive_s)
         self.yaw_proxy = 0.0          # IMU 없는 헤딩 추정치 (조향 적분)
         self._entry_votes = 0         # 마지막 회전교차로 진입 투표 수 (디버그/로그)
         self._exit_votes = 0          # 마지막 회전교차로 탈출 투표 수 (디버그/로그)
@@ -197,13 +202,18 @@ class RaceStateMachine:
         self.pid.reset()
         self.circle_t = 0.0
         self.yaw_proxy = 0.0
+        # 속도 스케일 확정 (기준 run54 = 20.5s 밴드에서 절대값 3.6/18.5 가 실측 정합).
+        # 초록불 없이 진입한 비정상 경로(race_t~0)는 클램프 하한이 흡수.
+        ref = max(1e-3, float(self.cfg.get('ra_ref_drive_s', 20.5)))
+        self._speed_scale = float(min(1.3, max(0.6, self.race_t / ref)))
         # 게이트(가로선) 카운터: 진입 정지선 재카운트를 3중으로 차단 —
         #  ① 블랭크: gate_blank_s(기본 min_loop 연동) 동안 카운트 금지
         #  ② 재무장(arm): 가로선이 gate_rearm_s 이상 "연속으로 꺼져" 있어야
         #     다음 상승엣지를 셀 수 있음 (한두 프레임 깜빡임으로는 무장 안 됨)
         #  ③ 지속: gate_sustain_s 연속 ON 이어야 카운트 (blip 배제)
         self._gate_count = 0
-        self._gate_cd = float(self.cfg.get('gate_blank_s', self.cfg['min_loop_time_s']))
+        self._gate_cd = (float(self.cfg.get('gate_blank_s', self.cfg['min_loop_time_s']))
+                         * self._speed_scale)
         self._gate_armed = False
         self._gate_off_t = 0.0
         self._gate_on_t = 0.0
@@ -441,7 +451,8 @@ class RaceStateMachine:
             # 연속 ON 요구. 링 중간 '진짜 직각 실선'은 이미지로 구분 불가 — 유일한
             # 차이는 링 위 '위치'(yaw_proxy) -> yaw_gate_min 전에는 게이트 비무장.
             # 주의: yaw 는 속도 의존 (run55 실증 — 빠른 랩에서 진짜 선이 임계 미달).
-            yaw_ok = self.yaw_proxy >= self.cfg.get('yaw_gate_min', 0.0)
+            yaw_ok = (self.yaw_proxy
+                      >= self.cfg.get('yaw_gate_min', 0.0) * self._speed_scale)
             if (self._gate_on_t >= self.cfg.get('gate_sustain_s', 0.25)
                     and self._gate_cd <= 0.0 and self._gate_armed and yaw_ok):
                 self._gate_count += 1
@@ -455,7 +466,7 @@ class RaceStateMachine:
             # 주 탈출 = 게이트 카운트. 백업 = 세 가지 추정치(yaw proxy, 시간, 노란
             # 가로선 재등장) 중 >= lap_votes_needed 개 동의.
             # 편향은 늦게 나가는 쪽으로, 절대 일찍 나가지 않는다.
-            if self.circle_t >= self.cfg['min_loop_time_s']:
+            if self.circle_t >= self.cfg['min_loop_time_s'] * self._speed_scale:
                 # 주(PRIMARY) 탈출: 출구 게이트를 충분히 통과함 -> 출구 브랜치로 락온
                 # (표지판 갈림길과 같은 메커니즘). 그러면 차선 추종이 링에 다시 붙는
                 # 대신 개구부 밖으로 조향한다. turn_latch 는 fork_dir 로 perception 에
@@ -471,13 +482,16 @@ class RaceStateMachine:
                 # FAILSAFE: 게이트 실패 대비 3중 2 표결 백업 (junction 표는 오검출로
                 # 제외). 주 탈출과 동일하게 출구측 락온 — 락온 없인 FOLLOW-Y 가 링을
                 # 무한 순환. 링 중간에 걸려도 시드 밀기는 무해.
-                yaw_done = self.yaw_proxy >= self.cfg['yaw_lap_threshold']
-                time_done = self.circle_t >= self.cfg['nominal_loop_time_s']
+                yaw_done = (self.yaw_proxy
+                            >= self.cfg['yaw_lap_threshold'] * self._speed_scale)
+                time_done = (self.circle_t
+                             >= self.cfg['nominal_loop_time_s'] * self._speed_scale)
                 # 가로선 표도 게이트와 같은 재등장 규율 적용: 재무장(_gate_armed,
                 # 0.5s 이상 사라졌다 다시 나타남) 상태에서 보일 때만 인정한다.
                 # 진입선이 시야에 계속 남아 있는 것(정차/저속 통과)은 표가 아니다.
                 cross_done = (bool(lane.yellow_crossline) and self._gate_armed
-                              and self.yaw_proxy >= self.cfg.get('yaw_gate_min', 0.0))
+                              and self.yaw_proxy >= self.cfg.get('yaw_gate_min', 0.0)
+                              * self._speed_scale)
                 votes = int(yaw_done) + int(time_done) + int(cross_done)
                 self._exit_votes = votes
                 if votes >= self.cfg['lap_votes_needed']:

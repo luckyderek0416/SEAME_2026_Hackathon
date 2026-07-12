@@ -168,13 +168,19 @@ class DecisionNode(Node):
         # 링 안 직각 실선 오인 조기 탈출 -> 17s 까지 블랭크 (진짜 탈출 ~20s+ 무지장).
         # 주의: 시간 기반이라 속도 밴드에 민감 — run55 고속 랩(20.5s)에선 랩의 90%.
         self.declare_parameter('min_loop_time_s', 17.0)   # 이보다 빨리 한 바퀴 완료 불가 (절대 하한)
+        # 속도 스케일 기준: G->RA 접근 소요시간이 이 값일 때 스케일 1.0 (run54=20.5s 밴드,
+        # 절대 임계 3.6/18.5 가 실측 정합했던 밴드). 시간/적분 임계 전부에 s 를 곱한다 —
+        # run53(16.8s)/54(20.5)/55(15.0) 오프라인 재검산 전부 가짜 차단+진짜 통과.
+        self.declare_parameter('ra_ref_drive_s', 20.5)
         self.declare_parameter('max_loop_time_s', 30.0)   # 모든 추정치 실패 시 failsafe 탈출
         self.declare_parameter('crossline_cooldown_s', 2.0)  # 게이트 카운트 간 최소 간격 (재카운트 디바운스)
         # --- 탈출 failsafe 3-표결 (조향 적분 + 시간 + 가로선 재등장), IMU/마커 없음 ---
         # 07-11: yaw_proxy 부호 수정으로 이 표가 실제로 나올 수 있게 됨. 링 편향 0.225/s 만으로
         # ~6.0 은 27초, PID 포함 시 더 빨리 도달. 랩(~20초) 전에 time(15초)+yaw 2표가 모여
         # 조기 탈출(실격)하지 않도록, yaw 표는 랩 완주 이후에나 나오는 값으로 올려 둔다.
-        self.declare_parameter('yaw_lap_threshold', 9.0)   # 한 바퀴당 조향 적분값 (자율주행 실측으로 재캘리 예정)
+        # 완주 yaw 백업 표: 실측 발화 yaw/s = 4.16~4.72 (3런) -> 5.0 이면 정지선을
+        # 놓쳤을 때만 ~1-3s 뒤 time+yaw 2표로 강제 탈출 (9.0 은 도달 불가 죽은 표였음)
+        self.declare_parameter('yaw_lap_threshold', 5.0)
         self.declare_parameter('nominal_loop_time_s', 15.0) # 저속(0.16) 예상 한 바퀴 시간 (골든런 랩 19.7초 기반)
         self.declare_parameter('lap_votes_needed', 2)      # {yaw, time, crossline} 중 탈출에 필요한 표 수
         # 노란색이 회전교차로 진입을 게이트한다 (회전교차로는 노란색, 외곽 루프는 흰색)
@@ -265,6 +271,7 @@ class DecisionNode(Node):
             'reacq_arm_s': float(g('reacq_arm_s').value),
             'ra_blind_bias': float(g('ra_blind_bias').value),
             'min_loop_time_s': float(g('min_loop_time_s').value),
+            'ra_ref_drive_s': float(g('ra_ref_drive_s').value),
             'max_loop_time_s': float(g('max_loop_time_s').value),
             'crossline_cooldown_s': float(g('crossline_cooldown_s').value),
             'yaw_lap_threshold': float(g('yaw_lap_threshold').value),
@@ -304,6 +311,7 @@ class DecisionNode(Node):
             'entry_lock_release_s', 'entry_steer_bias',   # 진입 락온 시간 / 진입 피드포워드
             'exit_lock_release_s', 'exit_steer_bias',     # 탈출 락 시간 / 탈출 피드포워드
             'gate_blank_s', 'gate_rearm_s', 'gate_sustain_s', 'yaw_gate_min',
+            'ra_ref_drive_s',                     # 속도 스케일 기준 (G->RA 소요시간)
             'crossline_cooldown_s',               # 게이트 카운트 간 최소 간격
             # 아래 넷은 전부 '트랙에서 캘리브레이션할 것' 으로 남아있던 값이다.
             # 링을 실제 속도로 돌려 실측해야 하므로 주행 중 변경 가능해야 한다.
@@ -548,6 +556,7 @@ class DecisionNode(Node):
             f'fork={int(self.lane.fork)} '
             f'yr={self.lane.yellow_ratio:.2f} '
             f'entryV={self.sm._entry_votes} exitV={self.sm._exit_votes} gate={self.sm._gate_count} '
+            f'sc={self.sm._speed_scale:.2f} '
             f'forkDet={self._last_fork_dir} forkFix={self.confirmed_fork_direction} '
             f'forkConf={self.fork_sign_confidence:.2f} latch={self.sm.turn_latch}'
         )
