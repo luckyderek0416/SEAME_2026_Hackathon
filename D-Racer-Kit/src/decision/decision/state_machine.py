@@ -509,7 +509,7 @@ class RaceStateMachine:
                     return steer, self.cfg['slow_throttle'], self.state.value
 
             # 최후 failsafe: 모든 추정치가 실패하면 강제 탈출 (역시 출구측 락온)
-            if self.circle_t >= self.cfg['max_loop_time_s']:
+            if self.circle_t >= self.cfg['max_loop_time_s'] * self._speed_scale:
                 self.turn_latch = self.cfg['roundabout_exit_side']
                 self.turn_latch_age = 0.0
                 self._fork_seen = False
