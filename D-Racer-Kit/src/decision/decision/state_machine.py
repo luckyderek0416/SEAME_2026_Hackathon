@@ -73,6 +73,10 @@ class RaceStateMachine:
         self._exit_votes = 0          # 마지막 회전교차로 탈출 투표 수 (디버그/로그)
         self._entry_lock_active = False  # 진입측 락온이 걸려 있는 동안 True (one-shot)
         self._exit_lock_t = 0.0          # 탈출 락 남은 시간(초) — RA 탈출 순간 장전
+        # DRIVE 소실 폴백용: 최근 조향의 EMA (07-12 run47 v47.6 실증 — 탈출로
+        # 노랑->흰 전환부에서 소실 시 '직진' 폴백이 커브를 뚫고 이탈. 소실 중에는
+        # 직전 조향 경향을 유지하고, 소실이 길어지면 서서히 중앙으로 감쇠).
+        self._steer_hold = None
         self._gate_armed = False      # 가로선이 충분히 꺼진 뒤에만 다음 카운트 무장
         self._gate_off_t = 0.0        # 가로선 연속 OFF 시간 (재무장 판정용)
         self._gate_on_t = 0.0         # 가로선 연속 ON 시간 (지속 필터: blip 배제)
@@ -105,11 +109,28 @@ class RaceStateMachine:
             target = (lane.offset + self._branch_bias(lane)
                       + self._curve_bias(lane))
         else:
-            target = 0.0  # 차선 놓침: 직진하며 재획득을 기다린다
+            # 차선 놓침 (07-12 개정): DRIVE 에선 직진 대신 '직전 조향 EMA'를
+            # 유지한다 — 커브 중 소실 시 직진 폴백이 코스를 뚫고 나가는 문제
+            # (run47 v47.6 탈출로 전환부 이탈) 대응. 소실이 길어지면 3초 시정수로
+            # 중앙에 수렴 (무한 원돌기 방지). 직선에선 EMA ~= 중앙이라 기존과 동일.
+            # RA 는 기존 경로 유지 (ra_blind_bias 가 전담 — 여기서 hold 를 쓰면
+            # 블라인드 호와 중복 가산이 된다).
+            if self.state == State.DRIVE and self._steer_hold is not None:
+                center = self.cfg['steer_center']
+                self._steer_hold += (center - self._steer_hold) * min(1.0, dt / 3.0)
+                return float(self._steer_hold)
+            target = 0.0  # (DRIVE 외 상태) 직진하며 재획득을 기다린다
         correction = self.pid.update(target, dt)
         # steer_scale 은 [-1,1] 보정값을 키트의 조향 범위로 매핑한다.
         # 차가 반대 방향으로 조향하면 이 값의 부호를 뒤집을 것.
-        return float(self.cfg['steer_center'] + correction * self.cfg['steer_scale'])
+        steer = float(self.cfg['steer_center'] + correction * self.cfg['steer_scale'])
+        if lane.lane_found:
+            # 소실 폴백용 EMA 갱신 (과도 스파이크 완화를 위해 ±0.30 클램프)
+            c = self.cfg['steer_center']
+            s = max(c - 0.30, min(c + 0.30, steer))
+            self._steer_hold = (s if self._steer_hold is None
+                                else 0.3 * s + 0.7 * self._steer_hold)
+        return steer
 
     def _turn_bias(self):
         # fork 편향은 주행 중에만 적용; ROUNDABOUT 등에서 남아 있는 stale latch 가

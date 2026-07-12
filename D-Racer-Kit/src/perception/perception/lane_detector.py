@@ -249,9 +249,32 @@ class LaneDetector:
         # 07-11 run17: 배터리 열화로 실효 속도가 떨어지자 2초(40) 창이 회전 미완 상태로
         # 만료 -> 인계 직후 쐐기(nl=2 중점, 가드 스킵)에 격추. 속도 편차 흡수를 위해 4초로.
         self.entry_oneline_frames = 80   # ~4s@20fps. 0=off
+        # 1L 창에서 사용할 하단(가까운) 밴드 수 (07-12 run40 디버그 프레임 실증):
+        # 전체 밴드 평균은 시야 상단에 들어온 링의 원거리 호들까지 노란 질량으로
+        # 흡수해 평균이 왼쪽으로 오염됨 -> 목표 = 평균-반차폭이 화면 좌단에 박혀
+        # 급좌 다이브 (off -0.75, 인코스 안쪽 이탈 반복). 가까운 밴드에는 진입
+        # 점선만 있으므로 하단 N개로 제한하면 원인(카메라 피치/환경)과 무관하게
+        # 오염이 구조적으로 차단된다.
+        self.oneline_near_bands = 2
         self._oneline_left = 0
         self._oneline_used = False       # 이번 래치에서 이미 무장했는지
         self._ra_seen = False            # ROUNDABOUT 을 겪은 뒤에는 재무장 안 함
+        # 개구부 1L 창 (07-12, run27~29 영상+텔레메트리 실증 / IMG_4129 설계):
+        # RA 진입·해제 '전이 엣지'에서 위 1L 기계를 재무장한다. 개구부의 두 점선
+        # 열이 nl=2 로 잡히면 중점이 열 사이 쐐기(도로 밖)를 겨냥 — 분기 진입
+        # 쐐기(run9)와 동일 메커니즘, 최근 5회 통과 중 4회 이탈 (run29 v39 프레임).
+        # 1L 은 노란 질량 전체 = 우측(바깥) 경계 하나로 봐서 쐐기가 원천 차단됨.
+        # 진입 창 = 빨간 점선(개구부→링), 해제 창 = 파란 점선(링→탈출로).
+        # 07-12 run31 A/B 뒤 사용자 결정: 전이 창 2개는 0(off), 대신 아래
+        # ra_opening_oneline_frames(실선 소실 트리거)로 랩 종료 개구부를 덮는다.
+        self.ra_entry_oneline_frames = 100   # ~5s@20fps. RA 진입 전이. 0=off
+        self.ra_exit_oneline_frames = 60     # ~3s@20fps. RA->DRIVE 해제 전이. 0=off
+        self._prev_drive_mode = ''
+        # (미사용 — 07-12 run32 로 폐기) 개구부 1L 실선 소실 트리거. 링 중간에서
+        # 실선이 FOV 를 벗어나는 순간에도 오발했고, 노란 질량 극소 상태의
+        # "전체평균-반차폭" 추적이 안쪽 나선(양성 피드백)이 됨 (off -0.65, 섬 안
+        # 완전 이탈). 대체 = "RA 점선 폴백 금지" (process() 의 sel 결정부 주석).
+        self.ra_opening_oneline_frames = 0   # 0=off (폐기)
         # YELLOW 추종 중 점선(dash) 무시: 조향용 track 마스크에서 세로 길이가 짧은
         # 노란 성분(점선 dash, 그리고 가로 정지선)을 제거해 "실선만" 추종한다.
         # raw ymask 는 yellow_ratio/crossline/Y모드 진입판정에 그대로 쓰이므로 무관.
@@ -587,6 +610,9 @@ class LaneDetector:
                         if self._solid_ok_count >= int(self.dash_fallback_exit_frames):
                             self._dash_fallback_on = False
                             self._solid_ok_count = 0
+                    # (07-12 시도/원복 이력) RA 중 점선 폴백 금지(실선만)를 run33 에
+                    # 시험 -> 진입 구간(RA+2~4s)에서 개구부 건너편 먼 실선을 잡고
+                    # 직진 이탈. 사용자 결정으로 원래 동작(점선 폴백 허용) 복원.
                     sel = ymask if self._dash_fallback_on else solid
                 else:
                     sel = ymask
@@ -652,6 +678,19 @@ class LaneDetector:
         else:
             self._reacq_right_active = False
 
+        # 개구부 1L 재무장 (모드 전이 엣지 — __init__ 의 ra_*_oneline_frames 주석 참고).
+        # RA 진입 시엔 Y-latch 가 이미 켜져 있고 RA 동안 강제 유지되므로 즉시 발효,
+        # 해제 창은 Y-latch 가 흰 복귀로 풀리는 순간 _oneline_left=0 으로 자연 종료된다.
+        if self.drive_mode != self._prev_drive_mode:
+            if (self.drive_mode == 'ROUNDABOUT'
+                    and int(self.ra_entry_oneline_frames) > 0):
+                self._oneline_left = int(self.ra_entry_oneline_frames)
+            elif (self._prev_drive_mode == 'ROUNDABOUT'
+                    and self.drive_mode == 'DRIVE'
+                    and int(self.ra_exit_oneline_frames) > 0):
+                self._oneline_left = int(self.ra_exit_oneline_frames)
+            self._prev_drive_mode = self.drive_mode
+
         # (1) multi-band look-ahead: ROI 를 가로 band 들(가까움..멂)로 나누고 각각에서
         # 차선 중심을 찾는다. 가까운 band 는 조향에, 먼 band 는 커브 선행 감지에 쓴다.
         roi_h = track.shape[0]
@@ -666,12 +705,23 @@ class LaneDetector:
             near_lanes = 0
             half = (self._lane_width / 2.0) if self._lane_width > 0 \
                 else (w * self.single_line_offset)
-            for i in range(self.num_bands):
+            # 하단(가까운) oneline_near_bands 개만 사용 — 원거리 호 오염 차단
+            # (__init__ 주석, 07-12 run40 실증)
+            for i in range(min(int(self.oneline_near_bands), self.num_bands)):
                 y1 = roi_h - i * band_h
                 y0 = max(0, roi_h - (i + 1) * band_h)
                 if y1 - y0 < 2:
                     continue
-                line = self._mean_x(track[y0:y1, :], 0)
+                # 선 위치 = 전체평균이 아니라 '최우측 클러스터'(x 85퍼센타일).
+                # 07-12 run41 프레임 실증: 접근로 안쪽 실선이 가로로 누워 들어오면
+                # 높이 기준 실선 판정을 통과 못 해 1L 이 실선이 보이는 채로 무장되고
+                # (run14 수정이 기하에 뚫림), 전체평균이 실선+점선 사이로 끌려
+                # 목표 = 평균-반차폭이 실선 왼쪽(코너 안) -> off -0.86 다이브.
+                # 최우측 질량 = 바깥 점선이므로 P85 - 반차폭 = 올바른 차선 중앙.
+                # 점선만 보이는 정상 1L 은 P85 ~= 평균 (동작 거의 동일).
+                xs = np.nonzero(track[y0:y1, :])[1]
+                line = (float(np.percentile(xs, 85))
+                        if xs.size >= self.min_pixels else None)
                 if line is not None:
                     bands.append((line - half, float(self.num_bands - i), i))
                     if i == 0:
@@ -741,15 +791,25 @@ class LaneDetector:
                 a_h = max(-2.5, min(2.5, a_h))
                 raw_offset = float(max(-1.0, min(
                     1.0, raw_offset - float(self.yellow_heading_gain) * a_h)))
+        junction = self._detect_junction(clean, w)
+        fork = self._detect_fork(clean, w)
+        # 개구부 fk 소실 규칙 (07-12 run37 실측): RA+5s 무장(merge_zone) 이후
+        # 갈림길 서명(fork) 프레임은 차선 소실로 취급한다. 개구부의 두 점선 열이
+        # 벌어지는 부챗살 = fork 검출기의 서명 그 자체 — nl=2 중점이 열 사이
+        # 틈(도로 밖)을 겨냥하는 쐐기 추종(랩 종료 이탈 5전 5패)을 프레임 단위로
+        # 차단하고, decision 의 ra_blind_bias(0.41 링 호)가 접선 헤딩을 유지한 채
+        # 개구부를 건너게 한다. 재획득 시 기존 0->1 규칙이 이어받는다.
+        # 실측 근거 (run31/37): 링 순항(RA+5~11s) fk 레벨 0% (오발 없음),
+        # 이탈 직전 쐐기 구간 38~63% 점화. EMA 갱신 전에 차단해 오염 방지.
+        if self.drive_mode == 'ROUNDABOUT' and self.merge_zone and fork:
+            lane_found = False
+            num_lanes = 0
         # (5) 시간축 스무딩(EMA)으로 프레임 간 조향 떨림을 줄인다.
         if lane_found:
             self._offset_ema = (self.smooth_alpha * raw_offset
                                 + (1.0 - self.smooth_alpha) * self._offset_ema)
             self._prev_center = lane_center   # 다음 프레임을 위한 guide 시드
         offset = float(self._offset_ema)
-
-        junction = self._detect_junction(clean, w)
-        fork = self._detect_fork(clean, w)
 
         # 다음 프레임의 "소실->재획득" 전이 판정용 직전 상태 저장
         self._prev_found = bool(lane_found)

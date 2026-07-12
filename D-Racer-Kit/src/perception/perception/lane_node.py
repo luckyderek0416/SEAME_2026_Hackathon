@@ -159,6 +159,18 @@ class LaneNode(Node):
         # (중심 = 선 - 반차폭). ~2s@20fps. 0=off. 래치당 1회.
         # 상세 근거는 lane_detector.__init__ 주석 (run9~11 쐐기 + run14 조기무장 실측).
         self.declare_parameter('entry_oneline_frames', 80)   # 07-11 run17: 저속에서 2s 미완 만료 -> 4s
+        # 1L 창에서 쓰는 하단 밴드 수 (07-12 run40: 원거리 링 호가 전체평균을 좌로
+        # 오염 -> 급좌 다이브. 하단 밴드에는 진입 점선만 있어 구조적 차단)
+        self.declare_parameter('oneline_near_bands', 2)
+        # 개구부 1L 창 (07-12): RA 진입/해제 '전이 엣지'에서 1L 재무장. 개구부 두 점선
+        # 열의 nl=2 쐐기 차단 (run27~29 이탈 4회, 영상 실증). lane_detector 주석 참고.
+        # 07-12 run31 A/B: 사용자 요청으로 일단 0(off) = 원래 동작. run30 실측은
+        # "창이 덮은 0~5s 는 통과, 창 종료 후 8.1s 이탈" — 재활성 시 진입 160 권장.
+        self.declare_parameter('ra_entry_oneline_frames', 0)     # 0=off. 재활성 시 160(~8s)
+        self.declare_parameter('ra_exit_oneline_frames', 0)      # 0=off. 재활성 시 60(~3s)
+        # (미사용 — 07-12 run32 폐기: 링 중간 오발 -> 안쪽 나선. 대체 = RA 점선 폴백
+        # 금지, lane_detector sel 결정부 주석 참고)
+        self.declare_parameter('ra_opening_oneline_frames', 0)   # 0=off (폐기)
         self.declare_parameter('course', 'in')                      # 'in' 일 때만 색상 추종 활성 (launch 전달)
         # 차선 폭 초기값(px, BEV 워프 기준). 0=학습대기. EMA 학습은 그대로 계속 미세보정.
         # 192 = 실측 차선폭 350mm 를 BEV 캘리로 변환한 값((0.80-0.20)*320px). 단선 구간
@@ -266,6 +278,10 @@ class LaneNode(Node):
         self.detector.yellow_heading_gain = float(gp('yellow_heading_gain').value)
         self.detector.center_jump_max_ratio = float(gp('center_jump_max_ratio').value)
         self.detector.entry_oneline_frames = int(gp('entry_oneline_frames').value)
+        self.detector.oneline_near_bands = int(gp('oneline_near_bands').value)
+        self.detector.ra_entry_oneline_frames = int(gp('ra_entry_oneline_frames').value)
+        self.detector.ra_exit_oneline_frames = int(gp('ra_exit_oneline_frames').value)
+        self.detector.ra_opening_oneline_frames = int(gp('ra_opening_oneline_frames').value)
 
         self.pub = self.create_publisher(LaneState, self.lane_topic, 10)
         self.debug_pub = None
