@@ -394,11 +394,18 @@ class RaceStateMachine:
             curve = abs(getattr(lane, 'curvature', 0.0))
             throttle = self.cfg['drive_throttle'] * (1.0 - self.cfg['curve_slow'] * curve)
             throttle = max(self.cfg['slow_throttle'], throttle)
-            # 노란 구간(DRIVE[Y] = 회전교차로 접근/갈림길)은 검출·조향이 가장 어려운
-            # 구간이라 상한을 slow_throttle 로 캡 (07-12 사용자 확정: 전용 변수
-            # yellow_drive_throttle 폐지, 링/코너와 같은 저속 하한으로 통일).
+            # 저속 구간(DRIVE[Y])도 흰 구간과 같은 곡률 감속 (07-12 사용자 설계):
+            # 기본 slow_drive_throttle(0.18) -> 곡률 따라 하한 slow_throttle(0.16).
+            # 미검출 프레임은 곡률이 0 으로 읽혀 튀므로 하한 고정 (블라인드 가속
+            # = run62 진입 이탈 재발 경로 차단).
             if lane.yellow_ratio >= self.cfg.get('yellow_slow_ratio', 0.03):
-                throttle = min(throttle, self.cfg['slow_throttle'])
+                if lane.lane_found:
+                    y_thr = (self.cfg.get('slow_drive_throttle', 0.18)
+                             * (1.0 - self.cfg['curve_slow'] * curve))
+                    y_thr = max(self.cfg['slow_throttle'], y_thr)
+                else:
+                    y_thr = self.cfg['slow_throttle']
+                throttle = min(throttle, y_thr)
             # 빨간 도로(장애물 구간)가 보이기 시작하면 저속주행. 마커 앞에서 제동 거리를
             # 줄여 정지 성공률을 높인다. 이 구간은 직선이라 curve_slow 로는 감속되지 않는다.
             if in_red_zone:
@@ -529,7 +536,16 @@ class RaceStateMachine:
                 self._fork_seen = False
                 self.roundabout_done = True
                 self._enter(State.DRIVE)
-            return steer, self.cfg['slow_throttle'], self.state.value
+            # 링 순항도 같은 곡률 감속 (기본 slow_drive -> 하한 slow). 링 곡률이
+            # 상시 높아 대개 하한에 붙지만, 미검출/블라인드 프레임은 명시적 하한.
+            if lane.lane_found:
+                r_curve = abs(getattr(lane, 'curvature', 0.0))
+                r_thr = (self.cfg.get('slow_drive_throttle', 0.18)
+                         * (1.0 - self.cfg['curve_slow'] * r_curve))
+                r_thr = max(self.cfg['slow_throttle'], r_thr)
+            else:
+                r_thr = self.cfg['slow_throttle']
+            return steer, r_thr, self.state.value
 
         # ----- FINISH -----
         if self.state == State.FINISH:
