@@ -63,12 +63,12 @@ class DecisionNode(Node):
         # 배터리가 닳으면 두 임계 모두 올라간다 -> 반쯤 닳은 상태에서 재검증할 것.
         self.declare_parameter('drive_throttle', 0.19)   # 흰 구간 순항 (07-11 오후: 팩 열화로 전 구간 +0.01)   # 1602us: DRIVE 기본(=직선 최고 속도).
                                                          # curve_slow/steer_slow 가 여기서 깎는다.
-        # 하한 실측 (run60/61/62, PWM 틱 단위): 틱323(0.155)=링 3% / 틱324(0.16)=14%
-        # / 틱325(0.17+)=진입 즉사. 1틱=스로틀 0.0098 — 틱 경계 안 넘는 변경은 무효.
-        self.declare_parameter('slow_throttle', 0.155)    # run60 복원: 전 구간 하한 (틱 323)
-        self.declare_parameter('yellow_throttle', 0.155)  # run60 복원(07-13): 노랑/링 상시 틱 323 (base=floor 로 사실상 상수)
-        # 노란 구간(DRIVE[Y]) 판정 문턱 — 노랑이 이 비율 이상이면 slow_throttle 캡
-        # (07-12: 전용 변수 yellow_drive_throttle 폐지, slow 로 통일 — 사용자 확정)
+        self.declare_parameter('slow_throttle', 0.165)
+        # 노란 구간(DRIVE[Y]) 전용 상한: 접근/갈림길에서 저속·정밀 주행 (0=기능 off).
+        # 07-12 run47 실증 + 사용자 확정: 노란 구간은 0.165 고정. (0.17 이던 시절에도
+        # 커브 감속이 하한 0.165 로 깎아 링에선 사실상 0.165 였음 — 카메라 재캘리 후
+        # 곡률 추정이 정확해지며 상시 하한 도달. 변동 요소를 없애고 상수로 못 박는다.)
+        self.declare_parameter('yellow_drive_throttle', 0.165)
         self.declare_parameter('yellow_slow_ratio', 0.03)   # 노란 구간 판정 문턱 (FOLLOW-Y 와 동일 값 유지 — 07-11 run8 후 0.03 복원에 동기화)   # 1587us: ROUNDABOUT 주행 + 감속 바닥.
                                                          # 유지는 되지만 정지에서 출발은 불가.
         self.declare_parameter('stop_throttle', 0.0)     # 1500us: 중립
@@ -168,14 +168,17 @@ class DecisionNode(Node):
         # 링 안 직각 실선 오인 조기 탈출 -> 17s 까지 블랭크 (진짜 탈출 ~20s+ 무지장).
         # 주의: 시간 기반이라 속도 밴드에 민감 — run55 고속 랩(20.5s)에선 랩의 90%.
         self.declare_parameter('min_loop_time_s', 17.0)   # 이보다 빨리 한 바퀴 완료 불가 (절대 하한)
-        # 속도 스케일 기준: G->RA 접근 소요시간이 이 값일 때 스케일 1.0.
-        # 주의 — 이 상수는 '접근 구간 스로틀 설정'에 묶인다: 접근이 빨라지면 G->RA 가
-        # 줄어 s 가 추락, yaw 게이트가 가짜 대역(2.1~3.15)까지 내려가 오발한다
-        # (run64 실증: yellow 0.185 승격 후 11.5s -> s=0.6 -> 가짜 yaw 2.2 조기탈출).
-        # drive/yellow_throttle 재튜닝 시 반드시 재캘리할 것.
-        # 07-12 재캘리: drive 0.19 / yellow 0.185 접근 기준 11.5s (run64).
+        # 속도 스케일 기준: G->RA 접근 소요시간이 이 값일 때 스케일 1.0 (run54=20.5s 밴드,
+        # 절대 임계 3.6/18.5 가 실측 정합했던 밴드). 시간/적분 임계 전부에 s 를 곱한다 —
+        # run53(16.8s)/54(20.5)/55(15.0) 오프라인 재검산 전부 가짜 차단+진짜 통과.
         self.declare_parameter('ra_ref_drive_s', 20.5)
-        self.declare_parameter('max_loop_time_s', 33.0)   # 모든 추정치 실패 시 failsafe 탈출 (run60 랩 28.2s + 스케일 여유)
+        # 스로틀 동적 보정 (G->Y래치 소요시간 -> 순항 스로틀 가산). gain 0=off.
+        self.declare_parameter('throttle_ref_latch_s', 4.6)   # 적정 속도 기준 (run53/54/59 실측 4.4~4.7)
+        self.declare_parameter('throttle_adapt_gain', 0.06)   # 보정 = gain x (실측/기준 - 1)
+        self.declare_parameter('throttle_adapt_max', 0.015)   # 보정 절대 상한 (안전 클램프)
+        self.declare_parameter('y_latch_ratio', 0.02)         # 래치 감지 yr 문턱 (perception 과 동일값 권장)
+        self.declare_parameter('y_latch_frames', 10)          # 래치 감지 연속 틱
+        self.declare_parameter('max_loop_time_s', 30.0)   # 모든 추정치 실패 시 failsafe 탈출
         self.declare_parameter('crossline_cooldown_s', 2.0)  # 게이트 카운트 간 최소 간격 (재카운트 디바운스)
         # --- 탈출 failsafe 3-표결 (조향 적분 + 시간 + 가로선 재등장), IMU/마커 없음 ---
         # 07-11: yaw_proxy 부호 수정으로 이 표가 실제로 나올 수 있게 됨. 링 편향 0.225/s 만으로
@@ -183,7 +186,7 @@ class DecisionNode(Node):
         # 조기 탈출(실격)하지 않도록, yaw 표는 랩 완주 이후에나 나오는 값으로 올려 둔다.
         # 완주 yaw 백업 표: 실측 발화 yaw/s = 4.16~4.72 (3런) -> 5.0 이면 정지선을
         # 놓쳤을 때만 ~1-3s 뒤 time+yaw 2표로 강제 탈출 (9.0 은 도달 불가 죽은 표였음)
-        self.declare_parameter('yaw_lap_threshold', 5.0)   # run60 복원 (완주 yaw ~4 영역대 백업)
+        self.declare_parameter('yaw_lap_threshold', 5.0)
         self.declare_parameter('nominal_loop_time_s', 15.0) # 저속(0.16) 예상 한 바퀴 시간 (골든런 랩 19.7초 기반)
         self.declare_parameter('lap_votes_needed', 2)      # {yaw, time, crossline} 중 탈출에 필요한 표 수
         # 노란색이 회전교차로 진입을 게이트한다 (회전교차로는 노란색, 외곽 루프는 흰색)
@@ -192,7 +195,7 @@ class DecisionNode(Node):
         # --- 회전교차로 진입/탈출 = 갈림길과 동일한 브랜치 락온 ---
         # 진입: 가로선 첫 감지 -> RA on + 진입측 one-shot 락온(링 순환 방향).
         # 탈출: 링을 돌며 가로선 상승엣지를 세고, 도달 시 출구 브랜치로 락온.
-        self.declare_parameter('roundabout_exit_gates', 2)   # 군집 카운트: 아래 입구(1) -> 우리 입구(2)=탈출 (07-13)
+        self.declare_parameter('roundabout_exit_gates', 1)   # 진입 후 가로선을 이 횟수 더 만나면 탈출
                                                              # (진입 가로선은 블랭크+재무장으로 제외; 1=한 바퀴)
         self.declare_parameter('roundabout_exit_side', '')   # 출구 브랜치 side; '' 이면 race_dir 파생
         self.declare_parameter('entry_lock_release_s', 3.0)  # 진입측 락온 강제 해제 시간 (07-11 오후: 저속 대응 2->3s)
@@ -206,19 +209,16 @@ class DecisionNode(Node):
         # RA 진입 후 게이트 카운트 금지 시간(진입선 오카운트 방어). 길어서 손해는
         # "한 바퀴 더"뿐(과회전 허용), 짧으면 조기 탈출=실격 위험 -> 길게 잡는다.
         # 단, 실측 한 바퀴 시간보다는 반드시 짧아야 함 (트랙에서 라이브 조정).
-        # 07-13 군집 카운트 전환: 블랭크는 진입선 잔상(실측 최장 RA+6.2)만 덮으면 됨.
-        self.declare_parameter('gate_blank_s', 7.0)
+        self.declare_parameter('gate_blank_s', 17.0)
         self.declare_parameter('gate_rearm_s', 0.5)          # 가로선이 이 시간 연속 OFF 여야 다음 카운트 무장
-        self.declare_parameter('gate_cluster_gap_s', 1.8)    # 이 간격 미만 목격은 같은 군집 (입구 2조각 실측 1.3~1.6s 병합)
-        self.declare_parameter('gate_cluster_on_s', 0.18)    # 군집 누적 ON 카운트 문턱 (35% 지점 약피처 max 0.16 배제 / 입구 min 0.21 통과)
+        self.declare_parameter('gate_sustain_s', 0.25)       # 가로선이 이 시간 연속 ON 이어야 게이트 카운트 (blip 배제)
         # 이 조향적분 전에는 탈출 게이트 잠금 (링 중간 가짜선 차단).
         # 07-12 재배치 4.2 -> 3.6 (사용자 승인, B안): 4.2 는 진짜 탈출선 실측
         # (4.12~4.28)과 여유 2%뿐이라 손 개입/빠른 랩에서 yaw 가 모자라 불발 —
         # run29 진짜 3연타 3.68~3.81 불발, run31 진짜 3.65 불발 -> 둘 다 페일세이프
         # 강제 탈출 후 이탈. 가짜 실선 실측 최대 3.11 (run31 2.57~2.65) 이라
         # 3.6 은 가짜/진짜 사이 균형점 (여유 각각 ~0.5).
-        # 07-13 군집 카운트 전환 후: 위치 판별은 군집 순서가 담당, yaw 는 위생 하한만.
-        self.declare_parameter('yaw_gate_min', 1.0)
+        self.declare_parameter('yaw_gate_min', 3.6)
 
         g = self.get_parameter
         race_dir = str(g('race_dir').value).lower()
@@ -246,7 +246,7 @@ class DecisionNode(Node):
             'curve_steer_bias': float(g('curve_steer_bias').value),
             'drive_throttle': float(g('drive_throttle').value),
             'slow_throttle': float(g('slow_throttle').value),
-            'yellow_throttle': float(g('yellow_throttle').value),
+            'yellow_drive_throttle': float(g('yellow_drive_throttle').value),
             'yellow_slow_ratio': float(g('yellow_slow_ratio').value),
             'stop_throttle': float(g('stop_throttle').value),
             'curve_slow': float(g('curve_slow').value),
@@ -278,6 +278,11 @@ class DecisionNode(Node):
             'ra_blind_bias': float(g('ra_blind_bias').value),
             'min_loop_time_s': float(g('min_loop_time_s').value),
             'ra_ref_drive_s': float(g('ra_ref_drive_s').value),
+            'throttle_ref_latch_s': float(g('throttle_ref_latch_s').value),
+            'throttle_adapt_gain': float(g('throttle_adapt_gain').value),
+            'throttle_adapt_max': float(g('throttle_adapt_max').value),
+            'y_latch_ratio': float(g('y_latch_ratio').value),
+            'y_latch_frames': int(g('y_latch_frames').value),
             'max_loop_time_s': float(g('max_loop_time_s').value),
             'crossline_cooldown_s': float(g('crossline_cooldown_s').value),
             'yaw_lap_threshold': float(g('yaw_lap_threshold').value),
@@ -293,8 +298,7 @@ class DecisionNode(Node):
             'exit_lock_release_s': float(g('exit_lock_release_s').value),
             'entry_steer_bias': float(g('entry_steer_bias').value),
             'gate_blank_s': float(g('gate_blank_s').value),
-            'gate_cluster_gap_s': float(g('gate_cluster_gap_s').value),
-            'gate_cluster_on_s': float(g('gate_cluster_on_s').value),
+            'gate_sustain_s': float(g('gate_sustain_s').value),
             'yaw_gate_min': float(g('yaw_gate_min').value),
             'gate_rearm_s': float(g('gate_rearm_s').value),
         }
@@ -305,8 +309,8 @@ class DecisionNode(Node):
         # state_machine 이 매 step 마다 self.sm.cfg 에서 읽는 값들만 라이브 변경 가능.
         # (steer_center/steer_scale 는 _lane_steer 에서 매번 cfg 를 읽으므로 즉시 반영됨)
         self.live_tunable = {
-            'drive_throttle', 'slow_throttle', 'yellow_throttle', 'stop_throttle', 'curve_slow',
-            'yellow_slow_ratio',
+            'drive_throttle', 'slow_throttle', 'stop_throttle', 'curve_slow',
+            'yellow_drive_throttle', 'yellow_slow_ratio',
             'steer_center', 'steer_scale', 'steer_left_gain',
             'kp', 'ki', 'kd',   # PID 게인 (조향 세기) 트랙에서 라이브 튜닝
             'max_steering_delta', 'steer_slow',   # look-ahead 보조 (rate limit / 조향 감속)
@@ -317,9 +321,9 @@ class DecisionNode(Node):
             'enter_max_curvature',                # 곡선 구간 크로스라인 오인식 차단
             'entry_lock_release_s', 'entry_steer_bias',   # 진입 락온 시간 / 진입 피드포워드
             'exit_lock_release_s', 'exit_steer_bias',     # 탈출 락 시간 / 탈출 피드포워드
-            'gate_blank_s', 'gate_rearm_s', 'yaw_gate_min',
-            'gate_cluster_gap_s', 'gate_cluster_on_s',
+            'gate_blank_s', 'gate_rearm_s', 'gate_sustain_s', 'yaw_gate_min',
             'ra_ref_drive_s',                     # 속도 스케일 기준 (G->RA 소요시간)
+            'throttle_ref_latch_s', 'throttle_adapt_gain', 'throttle_adapt_max',
             'crossline_cooldown_s',               # 게이트 카운트 간 최소 간격
             # 아래 넷은 전부 '트랙에서 캘리브레이션할 것' 으로 남아있던 값이다.
             # 링을 실제 속도로 돌려 실측해야 하므로 주행 중 변경 가능해야 한다.
@@ -378,6 +382,7 @@ class DecisionNode(Node):
         self.merge_pub = self.create_publisher(Bool, '/decision/merge_zone', 10)
 
         self.dt = 1.0 / float(g('control_hz').value)
+        self._last_thr_adj = 0.0
         self.timer = self.create_timer(self.dt, self.on_timer)
         self.get_logger().info(f"decision_node up. course={cfg['course']}")
 
@@ -476,13 +481,13 @@ class DecisionNode(Node):
         # 표결로 확정된 갈림길 방향을 상태머신에 전달(step 전). None 이면 무편향.
         self.sm.confirmed_fork_direction = self.confirmed_fork_direction
         steer, throttle, state = self.sm.step(self.lane, self.aruco, self.dets, self.dt)
-        # 탈출 직후 저속 캡 (07-12 run60/61 A/B): 탈출 직후엔 perception 은 [Y]
-        # 래치인데 decision 의 노랑 캡은 순간 yr 판정이라 코리도를 놓치면 yr~0
-        # -> drive(0.19)로 튀어 스윙 과회전 (run61 v44 수직 관통). 탈출 락 창
-        # 동안 slow_throttle 로 캡해 [Y] 저속을 보장한다 (사용자 확정).
-        if (float(getattr(self.sm, '_exit_lock_t', 0.0)) > 0.0
-                and throttle > 0.05):
-            throttle = min(throttle, float(self.sm.cfg['slow_throttle']))
+        # 스로틀 동적 보정 적용 (순항 값에만 — 정지/중립은 제외). 킥/램프 상류.
+        adj = float(getattr(self.sm, 'throttle_adj', 0.0))
+        if adj != 0.0 and throttle > 0.05:
+            throttle = throttle + adj
+        if adj != self._last_thr_adj:
+            self.get_logger().info(f'throttle_adj -> {adj:+.3f} (G->latch 실측 기반)')
+            self._last_thr_adj = adj
         # 래치된 방향을 perception 에 publish -> lane_node 가 브랜치 선택(guide 시드)에 사용.
         # 표지판이 시야에서 사라진 뒤에도 latch 가 유지되는 동안(갈림길 통과 전) 계속
         # 그 브랜치를 좇게 하려고, confirmed 가 아니라 sm.turn_latch 를 보낸다.
@@ -519,7 +524,8 @@ class DecisionNode(Node):
         ss = float(cfg.get('steer_slow', 0.0))
         if ss > 0.0 and throttle > 0.0:
             cut = max(0.0, 1.0 - ss * min(1.0, abs(steer - float(cfg['steer_center']))))
-            throttle = max(min(throttle, float(cfg['slow_throttle'])), throttle * cut)
+            throttle = max(min(throttle, float(cfg['slow_throttle']) + adj),
+                           throttle * cut)
 
         # ----- 저전압 가드: 전압이 무너지면 스스로 부하를 줄인다 -----
         # 배터리 전압이 낮을 때 모터 돌입 전류가 겹치면 보드가 리셋/행에 빠진다.
@@ -539,7 +545,11 @@ class DecisionNode(Node):
         # 적용해야 램프가 킥 값까지 올라간다.
         # In 코스에서 정지->출발이 일어나는 지점: 초록불 출발, 빨간 도로의 ArUco 해제 후.
         # 둘 다 목표가 drive_throttle 이고 그 값이 곧 출발 임계라 킥 없이는 여유가 없다.
+        # 킥에도 동적 보정 가산 ("각 스로틀 값에 +/-"). 첫 출발 킥은 래치 전이라
+        # adj=0 이고, ArUco 재출발 킥부터 보정이 반영된다.
         kick = float(cfg.get('start_kick_throttle', 0.0))
+        if kick > 0.0:
+            kick = kick + adj
         kick_s = float(cfg.get('start_kick_s', 0.0))
         if kick > 0.0 and kick_s > 0.0:
             if throttle > 0.0 and self._prev_throttle <= 1e-3:

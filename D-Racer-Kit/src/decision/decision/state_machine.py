@@ -73,6 +73,9 @@ class RaceStateMachine:
         # 이동, 가짜 최대 3.15 와 겹쳐 절대 임계 불가. G->RA 접근 소요시간(race_t)이
         # 그 런의 속도 밴드를 대표하므로 그 비율로 게이트 임계들을 스케일한다.
         self._speed_scale = 1.0       # RA 진입 시 확정: clamp(race_t/ra_ref_drive_s)
+        self._y_run = 0               # Y래치 감지 연속 카운터 (스로틀 보정용)
+        self._latch_seen = False      # 런당 1회
+        self.throttle_adj = 0.0       # 순항 스로틀 가산 보정 (decision_node 가 적용)
         self.yaw_proxy = 0.0          # IMU 없는 헤딩 추정치 (조향 적분)
         self._entry_votes = 0         # 마지막 회전교차로 진입 투표 수 (디버그/로그)
         self._exit_votes = 0          # 마지막 회전교차로 탈출 투표 수 (디버그/로그)
@@ -84,9 +87,7 @@ class RaceStateMachine:
         self._steer_hold = None
         self._gate_armed = False      # 가로선이 충분히 꺼진 뒤에만 다음 카운트 무장
         self._gate_off_t = 0.0        # 가로선 연속 OFF 시간 (재무장 판정용)
-        self._gate_on_t = 0.0         # 가로선 연속 ON 시간 (표결 진단용)
-        self._gate_cluster_on = 0.0   # 현재 군집 누적 ON (gap-merge)
-        self._gate_cluster_counted = False
+        self._gate_on_t = 0.0         # 가로선 연속 ON 시간 (지속 필터: blip 배제)
         # 브랜치 락온 탈출용 게이트 통과 카운터 (노란 가로선 or 점선 개구부의
         # 상승엣지 = 게이트 1회 통과). roundabout_exit_gates 회 도달 시 출구 브랜치로 락온.
         self._gate_count = 0          # 이번 회전에서 센 게이트 통과 횟수
@@ -214,12 +215,8 @@ class RaceStateMachine:
         #     다음 상승엣지를 셀 수 있음 (한두 프레임 깜빡임으로는 무장 안 됨)
         #  ③ 지속: gate_sustain_s 연속 ON 이어야 카운트 (blip 배제)
         self._gate_count = 0
-        self._gate_cluster_on = 0.0
-        self._gate_cluster_counted = False
-        # 블랭크는 스케일하지 않는다 (07-13): 임무가 '진입선 잔상'(실측 최장 6.2s,
-        # 링 속도와 무관하게 상한이 안정)만 덮는 것으로 축소됨. 스케일 버전은
-        # 빠른 접근에서 잔상을 놓쳤다 (run65/66 시뮬 검산).
-        self._gate_cd = float(self.cfg.get('gate_blank_s', self.cfg['min_loop_time_s']))
+        self._gate_cd = (float(self.cfg.get('gate_blank_s', self.cfg['min_loop_time_s']))
+                         * self._speed_scale)
         self._gate_armed = False
         self._gate_off_t = 0.0
         self._gate_on_t = 0.0
@@ -261,6 +258,24 @@ class RaceStateMachine:
 
         if self.state not in (State.WAIT_GREEN, State.DONE):
             self.race_t += dt   # 출발 후 경과 시간 (FINISH 게이트용)
+        # 스로틀 동적 보정 (07-12): 같은 스로틀도 팩 상태로 런마다 속도가 널뜀
+        # (run56 부족/run57~58 과속, 전부 0.19~0.21). G->Y래치(분기 노랑 첫 지속
+        # 감지) 소요시간으로 이 런의 속도를 측정해 이후 순항 스로틀에 보정을
+        # 가산한다. 실측: 적정 4.4~4.7s / 과속 3.2~3.6s — 신호가 킥 과도구간을
+        # 포함해 속도차를 ~3배 압축하므로 게인이 큼 (run57 역산 0.04~0.07).
+        if (self.state == State.DRIVE and not self.roundabout_done
+                and not self._latch_seen):
+            if lane.yellow_ratio >= self.cfg.get('y_latch_ratio', 0.02):
+                self._y_run += 1
+                if self._y_run >= int(self.cfg.get('y_latch_frames', 10)):
+                    self._latch_seen = True
+                    ref = max(1e-3, float(self.cfg.get('throttle_ref_latch_s', 4.6)))
+                    dev = self.race_t / ref - 1.0
+                    lim = float(self.cfg.get('throttle_adapt_max', 0.015))
+                    self.throttle_adj = float(min(lim, max(-lim,
+                        float(self.cfg.get('throttle_adapt_gain', 0.06)) * dev)))
+            else:
+                self._y_run = 0
 
         # 갈림길: 표결 확정(confirmed_fork_direction) = 도착 -> 방향 latch, 해제는
         # 기하(fork 켜졌다 꺼짐 = 재수렴). fork_hold_s 는 failsafe 상한으로만.
@@ -379,18 +394,12 @@ class RaceStateMachine:
             curve = abs(getattr(lane, 'curvature', 0.0))
             throttle = self.cfg['drive_throttle'] * (1.0 - self.cfg['curve_slow'] * curve)
             throttle = max(self.cfg['slow_throttle'], throttle)
-            # 저속 구간(DRIVE[Y])도 흰 구간과 같은 곡률 감속 (07-12 사용자 설계):
-            # 기본 yellow_throttle(0.18) -> 곡률 따라 하한 slow_throttle(0.16).
-            # 미검출 프레임은 곡률이 0 으로 읽혀 튀므로 하한 고정 (블라인드 가속
-            # = run62 진입 이탈 재발 경로 차단).
-            if lane.yellow_ratio >= self.cfg.get('yellow_slow_ratio', 0.03):
-                if lane.lane_found:
-                    y_thr = (self.cfg.get('yellow_throttle', 0.18)
-                             * (1.0 - self.cfg['curve_slow'] * curve))
-                    y_thr = max(self.cfg['slow_throttle'], y_thr)
-                else:
-                    y_thr = self.cfg['slow_throttle']
-                throttle = min(throttle, y_thr)
+            # 노란 구간(DRIVE[Y] = 회전교차로 접근/갈림길)은 검출·조향이 가장 어려운
+            # 구간이라 상한을 따로 둔다 (07-11: 노란 접근에서의 요동·이탈이 반복돼
+            # 흰 구간과 속도를 분리). yellow_ratio 는 FOLLOW-Y 전환과 같은 문턱을 쓴다.
+            ydt = self.cfg.get('yellow_drive_throttle', 0.0)
+            if ydt > 0.0 and lane.yellow_ratio >= self.cfg.get('yellow_slow_ratio', 0.03):
+                throttle = min(throttle, ydt)
             # 빨간 도로(장애물 구간)가 보이기 시작하면 저속주행. 마커 앞에서 제동 거리를
             # 줄여 정지 성공률을 높인다. 이 구간은 직선이라 curve_slow 로는 감속되지 않는다.
             if in_red_zone:
@@ -443,41 +452,34 @@ class RaceStateMachine:
                     self._fork_seen = False
                     self._entry_lock_active = False
 
-            # (2b) 게이트 = 정지선 '군집' 카운터 (07-13 전환): 링 위 가로선 순서는
-            # 물리적으로 고정 — 진입 잔상(블랭크 ~7s 가 흡수) -> 아래쪽 입구(군집#1)
-            # -> 우리 입구(군집#2 = 탈출). 속도/밴드/스로틀과 무관한 위치 불변량.
-            # 시간·yaw 프록시 캘리의 연쇄 실패(run55/64/65/66/68) 대체.
-            # 군집 정의: 목격 사이 간격 < gate_cluster_gap_s 면 같은 군집으로 병합
-            # (고속에서 목격이 0.1s 파편으로 쪼개지는 것 대응 — run66 실측),
-            # 군집 누적 ON gate_cluster_on_s 도달 순간 1회 카운트.
+            # (2b) 브랜치 락온 탈출용 게이트 통과 카운터. 노란 가로선(진입 때 만난
+            # 그 정지선)의 상승엣지를 세되, 진입선 재카운트를 3중 차단한다:
+            # 블랭크(gate_blank_s) + 재무장(가로선이 gate_rearm_s 이상 연속 OFF 여야
+            # 다음 엣지 유효 — 한두 프레임 깜빡임은 무장 실패) + 카운트 후 재무장 해제.
+            # 링을 돌아 같은 가로선을 roundabout_exit_gates(기본 1)번 더 만나면 탈출.
             if self._gate_cd > 0.0:
                 self._gate_cd = max(0.0, self._gate_cd - dt)
-                # 블랭크/쿨다운 중엔 군집 누적도 억제 — 잔상 군집이 블랭크 너머로
-                # 이월돼 해제 직후 카운트되는 것 방지 (run65 시뮬 검산에서 발견)
-                self._gate_cluster_on = 0.0
             gate_now = bool(lane.yellow_crossline)
             if gate_now:
                 self._gate_off_t = 0.0
                 self._gate_on_t += dt
-                self._gate_cluster_on += dt
             else:
                 self._gate_on_t = 0.0
                 self._gate_off_t += dt
                 if self._gate_off_t >= self.cfg.get('gate_rearm_s', 0.5):
                     self._gate_armed = True
-                if self._gate_off_t >= self.cfg.get('gate_cluster_gap_s', 1.2):
-                    self._gate_cluster_on = 0.0        # 군집 종료
-                    self._gate_cluster_counted = False
-            # yaw 하한은 순수 위생 체크로 강등 (1.0 = "조금이라도 돌았다").
+            # blip 대응: 1~2프레임 가짜 정지선이 조기 탈출 유발 -> gate_sustain_s
+            # 연속 ON 요구. 링 중간 '진짜 직각 실선'은 이미지로 구분 불가 — 유일한
+            # 차이는 링 위 '위치'(yaw_proxy) -> yaw_gate_min 전에는 게이트 비무장.
+            # 주의: yaw 는 속도 의존 (run55 실증 — 빠른 랩에서 진짜 선이 임계 미달).
             yaw_ok = (self.yaw_proxy
                       >= self.cfg.get('yaw_gate_min', 0.0) * self._speed_scale)
-            if (not self._gate_cluster_counted
-                    and self._gate_cluster_on >= self.cfg.get('gate_cluster_on_s', 0.15)
+            if (self._gate_on_t >= self.cfg.get('gate_sustain_s', 0.25)
                     and self._gate_cd <= 0.0 and self._gate_armed and yaw_ok):
                 self._gate_count += 1
-                self._gate_cluster_counted = True
                 self._gate_cd = self.cfg.get('crossline_cooldown_s', 2.0)
                 self._gate_armed = False
+                self._gate_on_t = 0.0
 
             # ----- 바퀴 수 판정 -----
             # 절대 하한: min_loop_time 전에는 절대 탈출하지 않는다 (한 바퀴 미달은
@@ -508,11 +510,7 @@ class RaceStateMachine:
                 # 가로선 표도 게이트와 같은 재등장 규율 적용: 재무장(_gate_armed,
                 # 0.5s 이상 사라졌다 다시 나타남) 상태에서 보일 때만 인정한다.
                 # 진입선이 시야에 계속 남아 있는 것(정차/저속 통과)은 표가 아니다.
-                # cross 표는 '아래쪽 입구를 이미 세었을 때'만 유효 — 군집 이력 없이
-                # 첫 가로선에 표를 주면 run64/68 류 오발이 표결 경로로 재발한다.
                 cross_done = (bool(lane.yellow_crossline) and self._gate_armed
-                              and self._gate_count
-                              >= int(self.cfg['roundabout_exit_gates']) - 1
                               and self.yaw_proxy >= self.cfg.get('yaw_gate_min', 0.0)
                               * self._speed_scale)
                 votes = int(yaw_done) + int(time_done) + int(cross_done)
@@ -526,22 +524,13 @@ class RaceStateMachine:
                     return steer, self.cfg['slow_throttle'], self.state.value
 
             # 최후 failsafe: 모든 추정치가 실패하면 강제 탈출 (역시 출구측 락온)
-            if self.circle_t >= self.cfg['max_loop_time_s'] * self._speed_scale:
+            if self.circle_t >= self.cfg['max_loop_time_s']:
                 self.turn_latch = self.cfg['roundabout_exit_side']
                 self.turn_latch_age = 0.0
                 self._fork_seen = False
                 self.roundabout_done = True
                 self._enter(State.DRIVE)
-            # 링 순항도 같은 곡률 감속 (기본 slow_drive -> 하한 slow). 링 곡률이
-            # 상시 높아 대개 하한에 붙지만, 미검출/블라인드 프레임은 명시적 하한.
-            if lane.lane_found:
-                r_curve = abs(getattr(lane, 'curvature', 0.0))
-                r_thr = (self.cfg.get('yellow_throttle', 0.18)
-                         * (1.0 - self.cfg['curve_slow'] * r_curve))
-                r_thr = max(self.cfg['slow_throttle'], r_thr)
-            else:
-                r_thr = self.cfg['slow_throttle']
-            return steer, r_thr, self.state.value
+            return steer, self.cfg['slow_throttle'], self.state.value
 
         # ----- FINISH -----
         if self.state == State.FINISH:
