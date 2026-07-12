@@ -316,6 +316,71 @@ class LaneDetector:
         self._reacq_right_active = False
         self._prev_found = False   # 직전 프레임 lane_found
         self._prev_nl = 0          # 직전 프레임 num_lanes
+        # --- 슬라이딩 윈도우(SW) 코리도 추적 (07-12 설계; RA 진입/탈출 전이 창 전용) ---
+        # 동기: 하드코딩 호(entry/exit_steer_bias, ra_blind_bias)는 시간 기반 개루프라
+        # 배터리 상태(실효 속도)에 따라 런마다 다른 호를 그린다 — run47 통과/run48
+        # 실패가 같은 코드였던 이유. 전이 창 동안 "기대 곡률 방향과 일치하는 선"을
+        # 상자 체인으로 물고 2차 피팅해 위치 기반 폐루프로 승격한다.
+        #   진입 창: DRIVE->RA 엣지 무장. 좌향 선만 유효(우향 = 반대 가지 배제).
+        #            링 초반 확률 구간(RA+2~7s, run48 이탈)까지 덮도록 길게 잡는다.
+        #   탈출 창: RA->DRIVE 엣지 무장. 우향 선만 유효(좌향 = 링 잔류선 배제).
+        #            탈출로가 펴지면(직선 연속 K프레임) 조기 해제 — 직선화된 정상
+        #            차선을 방향 게이트가 계속 거부하는 것 방지.
+        # 안전 계약: 유효 피팅(락) 프레임만 밴드 리스트를 대체하고, 실패 프레임은
+        # 그 프레임의 기존(run47) 결과를 그대로 통과시킨다. 바이어스/블라인드 호는
+        # 삭제가 아니라 폴백으로 강등 — 창이 0(기본)이면 전 경로 무변경.
+        # 입력은 dash 필터 '상류'에서 분기: 탈출 코리도 좌측 경계가 점선이라
+        # (07-12 사진 실측) sel(실선 필터 후)을 먹으면 경계가 지워져 있다.
+        # 진입은 병합 사선(점선)이 코리도를 가로지르는 노이즈라 solid 가 기본.
+        # 정지선 오염은 가로줄 행 제거(sw_cross_row_frac)로 차단.
+        self.sw_entry_frames = 0        # RA 진입 창 길이(프레임). 0=off. 권장 140(~7s@20fps)
+        self.sw_exit_frames = 0         # RA 탈출 창 길이(프레임). 0=off. 권장 60(~3s)
+        self.sw_entry_input = 'solid'   # 진입 창 입력: 'solid'(dash 제거) | 'raw'
+        self.sw_exit_input = 'raw'      # 탈출 창 입력: 점선이 좌측 경계라 raw 필수
+        self.sw_num_boxes = 9           # 상자 개수 (ROI 세로 분할)
+        self.sw_box_margin = 30         # 상자 반폭(px)
+        self.sw_max_shift = 20          # 상자당 중심 이동 상한(px) — 누운 실선 끌림/반대 가지 점프 차단
+        self.sw_min_box_px = 8          # 상자 '적중' 최소 픽셀
+        self.sw_min_boxes = 3           # 유효 피팅 최소 적중 상자 수 (2상자 노이즈로 곡선 금지)
+        self.sw_min_pixels = 50         # 유효 피팅 최소 총 픽셀 (run32 소량질량 나선 차단)
+        self.sw_wrongdir_px = 8.0       # 방향 게이트: 기대 반대 방향 기욺이 이 px 넘으면 기각
+        self.sw_max_resid_px = 12.0     # 피팅 평균 잔차 상한(px)
+        self.sw_peak_min_px = 40        # 시드 히스토그램 피크 최소 질량(세로 합)
+        self.sw_max_peaks = 3           # 프레임당 시도할 피크 시드 수
+        self.sw_cross_row_frac = 0.45   # 이 비율 이상 켜진 가로줄(정지선) 행을 입력에서 제거
+        self.sw_side_default = -1       # 단선 분류 폴백: -1=우측 경계(중심=선-half; reacq 규칙과 동일 근거)
+        self.sw_exit_straight_k = 5     # 탈출 조기 해제: '직선' 연속 프레임 수
+        self.sw_exit_straight_px = 8.0  # |기욺| 이 미만이면 '직선'
+        self._sw_left = 0               # 남은 창 프레임 (0=창 밖)
+        self._sw_dir = 0                # 기대 곡률 방향: -1=좌향(진입) +1=우향(탈출) 0=비활성
+        self._sw_prev_fit = None        # 직전 유효 피팅 (a,b,c) — 다음 프레임 시드 연속성
+        self._sw_straight = 0           # 탈출 직선 연속 카운터
+        self.sw_exit_wsteady_k = 20     # 흰 인계 종결자: 흰 추종 연속 K프레임 -> 창 종료 (0=off)
+        # 탈출 방향 게이트 적용 프레임 (07-12 run53 리플레이 실증): 탈출로는
+        # 우커브(게이트 직후) -> 좌굽이(병합 꼬리) 2단계 기하라, 우향 게이트를
+        # 창 내내 걸면 병합 꼬리를 전부 기각한다. 게이트의 임무(링 잔류 좌향선
+        # 배제)는 초반이면 끝나므로 이 프레임 수 이후엔 방향 게이트를 해제한다.
+        self.sw_exit_gate_frames = 40   # ~2s@20fps
+        # 탈출 개방 구간 (07-12 run54 실증): 발화 순간 차는 링 접선 방향(탈출로의
+        # 우측)을 보고 있어 코리도 경계가 BEV 에서 '좌향'으로 들어온다 — +1 게이트가
+        # 코리도 자체를 기각해 맹목 표류(run54 이탈). 발화 직후 이 프레임 수 동안:
+        #   ① 방향 게이트 해제 (코리도 좌향 허용)
+        #   ② 시드 히스토그램을 하단 절반 -> 전체 높이 (코리도가 정지선 너머
+        #      = 상단 절반에만 있는 프레임에서도 시드 확보)
+        #   ③ 대신 |기욺| 절대 상한(sw_open_max_lean_px)으로 정지선 대각선 기각
+        #      — BEV 에서 비스듬한 정지선은 행 제거(cross_row_frac)를 통과하고
+        #      기욺 -102~-148px 로 피팅된다 (run54 EX+0~0.8 실측). 코리도는
+        #      그보다 완만하므로 절대 상한이 둘을 가른다.
+        self.sw_exit_open_frames = 30   # 개방 구간 길이. 0=off(기존 동작과 동일)
+        self.sw_open_max_lean_px = 90.0 # 개방 구간 |기욺| 상한 (정지선 대각선 실측 102+)
+        self._sw_open = False           # 이번 프레임이 개방 구간인지
+        self._sw_len = 0                # 무장 시점의 창 길이 (age 계산용)
+        self._sw_gate_dir = 0           # 이번 프레임의 방향 게이트 (0=게이트 없음)
+        self._sw_wsteady = 0            # 흰 인계 연속 카운터
+        self._sw_last_lean = 0.0        # 마지막 락 프레임의 기욺(top_x - bottom_x, px)
+        self._sw_locked_dbg = False     # 디버그 표기용: 이번 프레임 락 여부
+        self._sw_boxes_dbg = []         # 디버그 오버레이용 채택 체인 상자
+        self._sw_fit_dbg = []           # 디버그 오버레이용 피팅 곡선 [(x,y),...] 리스트
 
     def _build_mask(self, roi):
         """(lane_mask, white_mask, yellow_mask, yellow_ratio, yellow_offset,
@@ -689,6 +754,23 @@ class LaneDetector:
                     and self.drive_mode == 'DRIVE'
                     and int(self.ra_exit_oneline_frames) > 0):
                 self._oneline_left = int(self.ra_exit_oneline_frames)
+            # SW 코리도 창 무장 (같은 전이 엣지; __init__ 의 sw_* 주석 참고).
+            # 시계가 아니라 상태 전환 이벤트 기준이라 런별 속도 차에 시작점이 안 밀린다.
+            if (self.drive_mode == 'ROUNDABOUT'
+                    and int(self.sw_entry_frames) > 0):
+                self._sw_left = int(self.sw_entry_frames)
+                self._sw_len = self._sw_left
+                self._sw_dir = -1            # 진입 = 좌향 기대
+                self._sw_prev_fit = None     # 직전 직선 주행 피팅 잔재 유입 방지
+                self._sw_straight = 0
+            elif (self._prev_drive_mode == 'ROUNDABOUT'
+                    and self.drive_mode == 'DRIVE'
+                    and int(self.sw_exit_frames) > 0):
+                self._sw_left = int(self.sw_exit_frames)
+                self._sw_len = self._sw_left
+                self._sw_dir = +1            # 탈출 = 우향 기대 (초반 한정, gate_frames 주석)
+                self._sw_prev_fit = None
+                self._sw_straight = 0
             self._prev_drive_mode = self.drive_mode
 
         # (1) multi-band look-ahead: ROI 를 가로 band 들(가까움..멂)로 나누고 각각에서
@@ -741,6 +823,91 @@ class LaneDetector:
                     bands.append((cx, float(self.num_bands - i), i))  # 가까울수록 -> 가중치 큼
                     if i == 0:
                         near_lanes = nlanes
+
+        # SW 코리도 추적 시도 (__init__ 의 sw_* 주석 참고). 기존 밴드 파이프라인은
+        # 위에서 '항상' 먼저 돌았다 — 폭 학습/래치/폴백 상태기계가 평소처럼 갱신돼,
+        # 창 종료 순간 run47 로직이 신선한 상태를 이어받는다(이음새 없는 복귀).
+        # 유효 락 프레임만 밴드 리스트를 대체하고, 실패 프레임은 이 프레임의 기존
+        # 결과(bands/near_lanes)를 그대로 통과시킨다 = 최악의 경우 현재와 동일.
+        sw_locked = False
+        self._sw_locked_dbg = False
+        # 디버그 오버레이는 매 프레임 무조건 비운다 — src 미가용 프레임(창 활성 중
+        # Y-latch 해제 등)에서 마지막 락 프레임의 곡선이 고착 표시되던 것 방지
+        # (07-12 검증 리뷰 확정). 락 프레임에서 _sw_corridor_bands 가 재채움.
+        self._sw_boxes_dbg = []
+        self._sw_fit_dbg = []
+        # 라이브 킬스위치 (07-12 검증 리뷰): 창은 무장 시점에 _sw_left 로 래치되므로
+        # 주행 중 `ros2 param set /lane_node sw_entry_frames 0` 만으로는 안 풀렸다.
+        # 0=off 규약 일관성 + "끄면 즉시 run47 복귀" 보장을 위해 매 프레임 확인.
+        if self._sw_left > 0:
+            live = (self.sw_entry_frames if self._sw_dir < 0
+                    else self.sw_exit_frames)
+            if int(live) <= 0:
+                self._sw_left = 0
+        if self._sw_left > 0:
+            self._sw_left -= 1
+            src = None
+            # 탈출 창은 Y래치 해제 후에도 노란 입력을 유지한다 (07-12 run53 실증):
+            # 탈출로 점선 꼬리가 yr 0.016->0.001 로 1초 만에 꺼져 래치가 풀리는데,
+            # 그 꼬리가 좌향 병합 굽이를 가리키는 마지막 방향 정보다. 래치 해제와
+            # 함께 SW 가 눈을 감으면 해제 시점 헤딩 그대로 직진 -> 흰 차선을
+            # 비스듬히 가로질러 표류 (EX+14~30, 13s 소실). SW 는 50px 급 꼬리도
+            # 체인으로 물 수 있으므로 꼬리 소진까지 추적해 헤딩을 정렬하고,
+            # 꼬리가 끝나면 락이 자연 실패 -> 흰 추종 인계 (아래 wsteady 종결자).
+            if ymask is not None and (self._following_yellow
+                                      or self._sw_dir > 0):
+                mode_in = (self.sw_entry_input if self._sw_dir < 0
+                           else self.sw_exit_input)
+                sw_src = (self._filter_yellow_dashes(ymask)
+                          if str(mode_in) == 'solid' else ymask)
+                src = (cv2.morphologyEx(sw_src, cv2.MORPH_OPEN, k)
+                       if use_morph else sw_src)
+            if src is not None:
+                self._sw_gate_dir = self._sw_dir
+                self._sw_open = False
+                if self._sw_dir > 0:
+                    age = self._sw_len - self._sw_left
+                    if age <= int(self.sw_exit_open_frames):
+                        # 개방 구간 (run54): 좌향 코리도 허용, 정지선은
+                        # _sw_corridor_bands 의 |기욺| 절대 상한이 기각
+                        self._sw_gate_dir = 0
+                        self._sw_open = True
+                    elif age > int(self.sw_exit_gate_frames):
+                        self._sw_gate_dir = 0   # 링 배제 임무 종료 -> 방향 게이트 해제
+                sw = self._sw_corridor_bands(src, w, roi_h, band_h)
+                if sw is not None:
+                    bands, near_lanes, sw_boxes = sw
+                    band_windows = list(band_windows) + sw_boxes
+                    sw_locked = True
+                    self._sw_locked_dbg = True
+            # 탈출 창 조기 해제: 락된 선이 K프레임 '연속' 직선(코리도 통과 완료
+            # 신호)이면 창을 닫는다. 비락/곡선 프레임 모두 카운터 리셋 — 흩어진
+            # 직선 락의 누적으로 곡선 한복판에서 조기 폐쇄되는 것 방지
+            # (07-12 검증 리뷰). 해제가 늦어도 무해: 직선은 방향 게이트를 통과한다.
+            if self._sw_dir > 0:
+                if (sw_locked and abs(self._sw_last_lean)
+                        <= float(self.sw_exit_straight_px)):
+                    self._sw_straight += 1
+                    if self._sw_straight >= int(self.sw_exit_straight_k):
+                        self._sw_left = 0
+                else:
+                    self._sw_straight = 0
+                # 흰 인계 종결자 (07-12): Y래치 해제 후, SW 락 없이 흰 추종이
+                # K프레임 연속 성립하면 창을 닫는다. 병합 완료 후 흰 구간에서
+                # 잔여 노란 노이즈(≤400px)가 뒤늦게 유령 락을 만드는 것 방지.
+                # 0=off.
+                if not self._following_yellow:
+                    if sw_locked:
+                        self._sw_wsteady = 0
+                    elif bands:
+                        self._sw_wsteady += 1
+                        if (int(self.sw_exit_wsteady_k) > 0 and self._sw_wsteady
+                                >= int(self.sw_exit_wsteady_k)):
+                            self._sw_left = 0
+                else:
+                    self._sw_wsteady = 0
+        else:
+            self._sw_dir = 0
 
         mid = w / 2.0
         near_cx, la_cx = None, None
@@ -801,7 +968,11 @@ class LaneDetector:
         # 개구부를 건너게 한다. 재획득 시 기존 0->1 규칙이 이어받는다.
         # 실측 근거 (run31/37): 링 순항(RA+5~11s) fk 레벨 0% (오발 없음),
         # 이탈 직전 쐐기 구간 38~63% 점화. EMA 갱신 전에 차단해 오염 방지.
-        if self.drive_mode == 'ROUNDABOUT' and self.merge_zone and fork:
+        # 07-12 SW: 유효 코리도 락 프레임은 눈 감기에서 제외 — fk-blind 는 "잘못
+        # 볼 바에 안 본다"인데, 락은 방향 게이트를 통과한 검증된 시야이므로 락이
+        # 있으면 그것이 우선한다. SW 창 밖(sw_locked 항상 False)에선 기존과 동일.
+        if (self.drive_mode == 'ROUNDABOUT' and self.merge_zone and fork
+                and not sw_locked):
             lane_found = False
             num_lanes = 0
         # (5) 시간축 스무딩(EMA)으로 프레임 간 조향 떨림을 줄인다.
@@ -945,6 +1116,237 @@ class LaneDetector:
         cx, nlanes = self._combine_lr(lx, rx, w)
         return x0, x1, cx, nlanes
 
+    # ---------- 슬라이딩 윈도우(SW) 코리도 추적 (RA 진입/탈출 전이 창 전용) ----------
+    def _sw_corridor_bands(self, src, w, roi_h, band_h):
+        """상자 체인 + 2차 피팅으로 코리도 경계선을 추적해 밴드 리스트를 합성한다.
+
+        반환: (bands, near_lanes, debug_boxes) 또는 None(락 실패 -> 호출측이
+        기존 결과를 그대로 통과 = 폴백). bands 는 기존 [(cx, weight, i), ...]
+        형식이라 하류(가중평균/곡률/점프가드/EMA)가 무변경으로 이어받는다.
+
+        단계 (07-12 설계 논의 그대로):
+          1) 정지선 오염 차단: 가로로 sw_cross_row_frac*w 이상 켜진 행 제거
+          2) 시드: 직전 유효 피팅의 하단 교점(연속성) + 하단 절반 히스토그램 피크들
+          3) 시드마다 상자 체인: 상자당 이동 상한(sw_max_shift)으로 누운 실선
+             끌림/반대 가지 점프 차단, 빈 상자는 직전 추세 유지(점선 틈 통과)
+          4) 2차 피팅 + 유효성 게이트: 최소 적중 상자/총 픽셀(run32 소량질량
+             나선 차단), 평균 잔차 상한, 방향 게이트(기대 반대 기욺 기각 —
+             진입=우향 기각, 탈출=좌향(링 잔류선) 기각)
+          5) 게이트 통과 피팅이 2개고 간격이 차폭 근처면 두 경계 -> 중점(nl=2),
+             1개면 기존 _combine_lr 과 같은 연속성 규칙으로 좌/우 경계 분류
+             (직전 중심에 가까운 해석; 폴백 sw_side_default = 우측 경계,
+             reacq 0->1 규칙과 같은 구조 근거)
+          6) 관측 y범위 밖은 외삽하지 않고 클램프 (소량 픽셀 2차식 폭주 방지)
+        """
+        self._sw_boxes_dbg = []
+        self._sw_fit_dbg = []
+        m = src.copy()
+        # (1) 정지선(가로줄) 행 제거
+        row_on = np.count_nonzero(m, axis=1)
+        m[row_on > int(w * float(self.sw_cross_row_frac)), :] = 0
+        nb = max(3, int(self.sw_num_boxes))
+        bh = max(2, roi_h // nb)
+        margin = max(4, int(self.sw_box_margin))
+        half = ((self._lane_width / 2.0) if self._lane_width > 0
+                else (w * self.single_line_offset))
+
+        # (2) 시드 수집: 직전 피팅 우선, 다음 하단 히스토그램 피크(질량 순)
+        seeds = []
+        if self._sw_prev_fit is not None:
+            pa, pb, pc = self._sw_prev_fit
+            yb = float(roi_h - 1)
+            seeds.append(pa * yb * yb + pb * yb + pc)
+        # 개방 구간엔 전체 높이 — 코리도가 정지선 너머(상단)에만 있는 프레임 대응
+        seed_top = 0 if self._sw_open else roi_h // 2
+        hist = np.count_nonzero(m[seed_top:, :], axis=0)
+        col_on = np.nonzero(hist >= 2)[0]
+        if col_on.size:
+            splits = np.nonzero(np.diff(col_on) > 8)[0]
+            peaks = []
+            for g in np.split(col_on, splits + 1):
+                mass = int(hist[g].sum())
+                if mass >= int(self.sw_peak_min_px):
+                    peaks.append((mass, float((g * hist[g]).sum()) / mass))
+            peaks.sort(reverse=True)
+            seeds += [cx for _, cx in peaks[:max(1, int(self.sw_max_peaks))]]
+        if not seeds:
+            return None
+
+        # (3) 상자 체인
+        def chain(seed_x):
+            x = float(seed_x)
+            trend = 0.0
+            pxs, pys, hit = [], [], 0
+            boxes = []
+            for i in range(nb):
+                y1 = roi_h - i * bh
+                y0 = max(0, y1 - bh)
+                if y1 - y0 < 2:
+                    break
+                x0 = int(max(0, x - margin))
+                x1 = int(min(w, x + margin))
+                if x1 - x0 < 4:
+                    break
+                ys_w, xs_w = np.nonzero(m[y0:y1, x0:x1])
+                cx = None
+                # max(1, ..) 클램프: 라이브로 0 을 넣으면 빈 상자 mean() 이 NaN 을
+                # 만들어 체인이 오염된다 (07-12 검증 리뷰 — 실차에서 노드 사망 경로)
+                if xs_w.size >= max(1, int(self.sw_min_box_px)):
+                    raw_cx = float(xs_w.mean()) + x0
+                    trend = float(np.clip(raw_cx - x, -float(self.sw_max_shift),
+                                          float(self.sw_max_shift)))
+                    x += trend
+                    cx = x
+                    pxs.append(xs_w.astype(np.float64) + x0)
+                    pys.append(ys_w.astype(np.float64) + y0)
+                    hit += 1
+                else:
+                    x += trend   # 점선 틈/짧은 소실: 직전 추세로 계속 위로
+                boxes.append((x0, y0, x1, y1, cx))
+                if x < -margin or x > w + margin:
+                    break
+            return pxs, pys, hit, boxes
+
+        # (4) 피팅 + 게이트
+        def fit_chain(pxs, pys, hit):
+            # max(1, ..) + 빈 리스트 가드: 라이브로 sw_min_boxes=0 을 넣으면 빈
+            # 체인이 게이트를 통과해 np.concatenate([]) ValueError 로 노드가
+            # 죽는다 (07-12 검증 리뷰 — 실차 주행 중 인지 상실 경로).
+            if hit < max(1, int(self.sw_min_boxes)) or not pxs:
+                return None
+            xs = np.concatenate(pxs)
+            ys = np.concatenate(pys)
+            if xs.size < int(self.sw_min_pixels):
+                return None
+            y_lo, y_hi = float(ys.min()), float(ys.max())
+            if (y_hi - y_lo) < 2.0 * bh:
+                return None
+            try:
+                a, b, c = np.polyfit(ys, xs, 2)
+            except Exception:
+                return None
+            pred = a * ys * ys + b * ys + c
+            resid = float(np.mean(np.abs(pred - xs)))
+            if resid > float(self.sw_max_resid_px):
+                return None
+            x_top = a * y_lo * y_lo + b * y_lo + c
+            x_bot = a * y_hi * y_hi + b * y_hi + c
+            lean = float(x_top - x_bot)   # 음수 = 좌향(위로 갈수록 왼쪽)
+            # 방향 게이트: 기대 '반대' 방향 기욺만 기각한다 (직선은 통과 —
+            # 진입 초반의 곧은 접근로 선, 탈출 후반의 펴진 탈출로 선이 대상).
+            if lean * float(self._sw_gate_dir) < -float(self.sw_wrongdir_px):
+                return None
+            # 개방 구간: 방향 게이트 대신 절대 기욺 상한 — BEV 를 비스듬히
+            # 가로지르는 정지선(실측 |lean| 102~148)을 기각, 코리도는 통과
+            if self._sw_open and abs(lean) > float(self.sw_open_max_lean_px):
+                return None
+            return {'abc': (float(a), float(b), float(c)),
+                    'y_lo': y_lo, 'y_hi': y_hi, 'resid': resid,
+                    'lean': lean, 'x_bot': float(x_bot)}
+
+        fits = []
+        for s in seeds:
+            pxs, pys, hit, boxes = chain(s)
+            f = fit_chain(pxs, pys, hit)
+            if f is None:
+                continue
+            # 중복 제거: 하단 교점이 기존 채택과 사실상 같은 선이면 잔차 좋은 쪽만
+            dup = False
+            for prev in fits:
+                if abs(prev['x_bot'] - f['x_bot']) < 0.3 * half:
+                    dup = True
+                    if f['resid'] < prev['resid']:
+                        prev.update(f)
+                        prev['boxes'] = boxes
+                    break
+            if not dup:
+                f['boxes'] = boxes
+                fits.append(f)
+        if not fits:
+            return None
+
+        def ev(f, y):
+            a, b, c = f['abc']
+            yc = min(max(y, f['y_lo']), f['y_hi'])   # (6) 외삽 금지: 스팬 클램프
+            return a * yc * yc + b * yc + c
+
+        # (5) 코리도 해석: 두 경계(pair) 우선, 아니면 단선 + 연속성 분류
+        fits.sort(key=lambda f: f['x_bot'])
+        pair = None
+        for i in range(len(fits) - 1):
+            for j in range(i + 1, len(fits)):
+                sep = fits[j]['x_bot'] - fits[i]['x_bot']
+                if 0.7 * (2.0 * half) <= sep <= 1.4 * (2.0 * half):
+                    pair = (fits[i], fits[j])
+                    break
+            if pair:
+                break
+
+        bands = []
+        chosen = []
+        if pair:
+            fl, fr = pair
+            chosen = [fl, fr]
+            y_min = min(fl['y_lo'], fr['y_lo'])
+            y_max = max(fl['y_hi'], fr['y_hi'])
+            for i in range(self.num_bands):
+                yc = roi_h - (i + 0.5) * band_h
+                if yc < y_min - band_h or yc > y_max + band_h:
+                    continue
+                bands.append(((ev(fl, yc) + ev(fr, yc)) / 2.0,
+                              float(self.num_bands - i), i))
+            near_lanes = 2
+            best = fl if fl['resid'] <= fr['resid'] else fr
+        else:
+            best = min(fits, key=lambda f: f['resid'])
+            chosen = [best]
+            # 좌/우 분류 우선순위를 _combine_lr 과 일치시킨다 (07-12 검증 리뷰):
+            # 재획득 우측고정 > 점선 힌트 > 직전 중심 연속성 > 구조 기본값.
+            # merge_zone 재획득 구간은 진입 창 꼬리(RA+5~7s)와 겹칠 수 있는데,
+            # 블라인드 뒤의 stale _prev_center 연속성만으로는 재획득 선을 좌측
+            # 경계로 오분류해 바깥으로 밀리는 run22~24 서명이 SW 프레임에서
+            # 재발한다. 점선 힌트는 추적선이 점선 자체일 때(하단 교점이 점선
+            # 무게중심과 사실상 같은 위치) 무의미하므로 이격 조건을 건다.
+            if self._sw_dir > 0 and not self._following_yellow:
+                # 탈출 점선 꼬리 (Y래치 해제 후): 구조상 우측(바깥) 경계 고정 —
+                # 병합 굽이는 좌향이고 남은 점선은 바깥선 (사용자 지정 설계,
+                # 진입 1L의 "점선=바깥" 구조 근거와 동일)
+                side = float(self.sw_side_default)
+            elif (self.drive_mode == 'ROUNDABOUT' and self.merge_zone
+                    and self._reacq_right_active):
+                side = -1.0                      # 재획득 선 = 구조상 우측(바깥) 경계
+            elif (self._yellow_dash_cx is not None
+                    and abs(best['x_bot'] - self._yellow_dash_cx) > 0.5 * half):
+                side = (1.0 if best['x_bot'] < self._yellow_dash_cx else -1.0)
+            elif self._prev_center is not None:
+                cand_l = best['x_bot'] + half    # 좌측 경계 해석의 중심
+                cand_r = best['x_bot'] - half    # 우측 경계 해석의 중심
+                side = (1.0 if abs(cand_l - self._prev_center)
+                        <= abs(cand_r - self._prev_center) else -1.0)
+            else:
+                side = float(self.sw_side_default)   # -1 = 추적선이 우측 경계
+            for i in range(self.num_bands):
+                yc = roi_h - (i + 0.5) * band_h
+                if yc < best['y_lo'] - band_h or yc > best['y_hi'] + band_h:
+                    continue
+                bands.append((ev(best, yc) + side * half,
+                              float(self.num_bands - i), i))
+            near_lanes = 1
+        if not bands:
+            return None
+
+        # 상태/디버그 갱신 (락 성공시에만 — 실패 프레임은 시드 연속성 유지)
+        self._sw_prev_fit = best['abc']
+        self._sw_last_lean = best['lean']
+        boxes_dbg = []
+        for f in chosen:
+            boxes_dbg += f.get('boxes', [])
+            self._sw_fit_dbg.append(
+                [(int(round(ev(f, y))), int(y))
+                 for y in range(int(f['y_lo']), int(f['y_hi']) + 1, 4)])
+        self._sw_boxes_dbg = boxes_dbg
+        return bands, near_lanes, boxes_dbg
+
     # ---------- bird-eye view (선택) ----------
     def invalidate_birdeye_cache(self):
         """원근 변환 행렬을 강제로 다시 만들게 한다 (src/dst 변경 후 호출)."""
@@ -1075,6 +1477,9 @@ class LaneDetector:
             cv2.rectangle(dbg, (int(x0), int(y0)), (int(x1) - 1, int(y1) - 1), (255, 0, 255), 1)
             if bcx is not None:
                 cv2.circle(dbg, (int(bcx), int((y0 + y1) / 2)), 2, (0, 165, 255), -1)
+        for poly in self._sw_fit_dbg:                                     # SW 코리도 피팅 곡선 (주황)
+            if len(poly) >= 2:
+                cv2.polylines(dbg, [np.int32(poly)], False, (0, 165, 255), 2)
         cx = int(max(0, min(dbg.shape[1] - 1, lane_center)))
         cv2.line(dbg, (cx, 0), (cx, dbg.shape[0]), (0, 0, 255), 2)        # 감지된 차선 중심 (빨강)
         cv2.line(dbg, (dbg.shape[1] // 2, 0), (dbg.shape[1] // 2, dbg.shape[0]), (0, 255, 0), 1)  # 이미지 중심 (초록)
@@ -1092,6 +1497,9 @@ class LaneDetector:
             follow_tag = '  FOLLOW-Y' if self._following_yellow else '  FOLLOW-W'
             if self._oneline_left > 0:
                 follow_tag += '[1L]'   # 진입 병합 모드 활성 (남은 프레임 있음)
+            if self._sw_left > 0 or self._sw_locked_dbg:
+                # SW 코리도 창 활성: +는 이번 프레임 락(밴드 대체), 없으면 폴백 통과
+                follow_tag += '[SW+]' if self._sw_locked_dbg else '[SW]'
         mode = (f"BEV {'ON' if self.use_birdeye else 'OFF'}  "
                 f"GUIDED {'ON' if self.use_guided_band else 'OFF'}  "
                 f"LA {'ON' if self.use_lookahead_control else 'OFF'}"

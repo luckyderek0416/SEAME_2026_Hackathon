@@ -171,6 +171,34 @@ class LaneNode(Node):
         # (미사용 — 07-12 run32 폐기: 링 중간 오발 -> 안쪽 나선. 대체 = RA 점선 폴백
         # 금지, lane_detector sel 결정부 주석 참고)
         self.declare_parameter('ra_opening_oneline_frames', 0)   # 0=off (폐기)
+        # --- 슬라이딩 윈도우(SW) 코리도 추적 (07-12 설계; RA 진입/탈출 전이 창 전용) ---
+        # 하드코딩 호(시간 기반 개루프)가 배터리별 속도 차로 런마다 다른 호를 그리는
+        # 문제(run47 통과/run48 실패, 같은 코드)의 위치 기반 폐루프 대체. 유효 락
+        # 프레임만 밴드를 대체하고 실패 프레임은 기존(run47) 경로 그대로 = 폴백 보장.
+        # 상세 설계/근거는 lane_detector.__init__ 의 sw_* 주석.
+        # 전부 라이브 변경 가능: ros2 param set /lane_node sw_entry_frames 140
+        self.declare_parameter('sw_entry_frames', 0)      # RA 진입 창(프레임). 0=off. 권장 140(~7s@20fps, 링 초반 확률구간 커버)
+        self.declare_parameter('sw_exit_frames', 0)       # RA 탈출 창. 0=off. 권장 60(~3s)
+        self.declare_parameter('sw_entry_input', 'solid') # 진입 입력: solid(병합 사선 제거) | raw
+        self.declare_parameter('sw_exit_input', 'raw')    # 탈출 입력: 좌측 경계가 점선 -> raw 필수
+        self.declare_parameter('sw_num_boxes', 9)         # 상자 개수
+        self.declare_parameter('sw_box_margin', 30)       # 상자 반폭(px)
+        self.declare_parameter('sw_max_shift', 20)        # 상자당 이동 상한(px)
+        self.declare_parameter('sw_min_box_px', 8)        # 상자 적중 최소 픽셀
+        self.declare_parameter('sw_min_boxes', 3)         # 유효 피팅 최소 적중 상자
+        self.declare_parameter('sw_min_pixels', 50)       # 유효 피팅 최소 총 픽셀
+        self.declare_parameter('sw_wrongdir_px', 8.0)     # 기대 반대 방향 기욺 기각 문턱(px)
+        self.declare_parameter('sw_max_resid_px', 12.0)   # 피팅 평균 잔차 상한(px)
+        self.declare_parameter('sw_peak_min_px', 40)      # 시드 피크 최소 질량
+        self.declare_parameter('sw_max_peaks', 3)         # 프레임당 피크 시드 수
+        self.declare_parameter('sw_cross_row_frac', 0.45) # 정지선 행 제거 문턱(가로 점유율)
+        self.declare_parameter('sw_side_default', -1)     # 단선 분류 폴백(-1=우측 경계)
+        self.declare_parameter('sw_exit_straight_k', 5)   # 탈출 조기해제 직선 연속 프레임
+        self.declare_parameter('sw_exit_wsteady_k', 20)   # 흰 인계 종결자 연속 프레임 (0=off)
+        self.declare_parameter('sw_exit_gate_frames', 40)  # 탈출 방향게이트 적용 프레임 (이후 해제)
+        self.declare_parameter('sw_exit_open_frames', 30)  # 탈출 개방 구간(발화 직후 좌향 코리도 허용). 0=off
+        self.declare_parameter('sw_open_max_lean_px', 90.0)  # 개방 구간 |기욺| 상한 (정지선 대각선 기각)
+        self.declare_parameter('sw_exit_straight_px', 8.0)  # 직선 판정 |기욺| 문턱(px)
         self.declare_parameter('course', 'in')                      # 'in' 일 때만 색상 추종 활성 (launch 전달)
         # 차선 폭 초기값(px, BEV 워프 기준). 0=학습대기. EMA 학습은 그대로 계속 미세보정.
         # 192 = 실측 차선폭 350mm 를 BEV 캘리로 변환한 값((0.80-0.20)*320px). 단선 구간
@@ -282,6 +310,28 @@ class LaneNode(Node):
         self.detector.ra_entry_oneline_frames = int(gp('ra_entry_oneline_frames').value)
         self.detector.ra_exit_oneline_frames = int(gp('ra_exit_oneline_frames').value)
         self.detector.ra_opening_oneline_frames = int(gp('ra_opening_oneline_frames').value)
+        self.detector.sw_entry_frames = int(gp('sw_entry_frames').value)
+        self.detector.sw_exit_frames = int(gp('sw_exit_frames').value)
+        self.detector.sw_entry_input = str(gp('sw_entry_input').value)
+        self.detector.sw_exit_input = str(gp('sw_exit_input').value)
+        self.detector.sw_num_boxes = int(gp('sw_num_boxes').value)
+        self.detector.sw_box_margin = int(gp('sw_box_margin').value)
+        self.detector.sw_max_shift = int(gp('sw_max_shift').value)
+        self.detector.sw_min_box_px = int(gp('sw_min_box_px').value)
+        self.detector.sw_min_boxes = int(gp('sw_min_boxes').value)
+        self.detector.sw_min_pixels = int(gp('sw_min_pixels').value)
+        self.detector.sw_wrongdir_px = float(gp('sw_wrongdir_px').value)
+        self.detector.sw_max_resid_px = float(gp('sw_max_resid_px').value)
+        self.detector.sw_peak_min_px = int(gp('sw_peak_min_px').value)
+        self.detector.sw_max_peaks = int(gp('sw_max_peaks').value)
+        self.detector.sw_cross_row_frac = float(gp('sw_cross_row_frac').value)
+        self.detector.sw_side_default = int(gp('sw_side_default').value)
+        self.detector.sw_exit_straight_k = int(gp('sw_exit_straight_k').value)
+        self.detector.sw_exit_wsteady_k = int(gp('sw_exit_wsteady_k').value)
+        self.detector.sw_exit_gate_frames = int(gp('sw_exit_gate_frames').value)
+        self.detector.sw_exit_open_frames = int(gp('sw_exit_open_frames').value)
+        self.detector.sw_open_max_lean_px = float(gp('sw_open_max_lean_px').value)
+        self.detector.sw_exit_straight_px = float(gp('sw_exit_straight_px').value)
 
         self.pub = self.create_publisher(LaneState, self.lane_topic, 10)
         self.debug_pub = None
