@@ -64,11 +64,8 @@ class DecisionNode(Node):
         self.declare_parameter('drive_throttle', 0.19)   # 흰 구간 순항 (07-11 오후: 팩 열화로 전 구간 +0.01)   # 1602us: DRIVE 기본(=직선 최고 속도).
                                                          # curve_slow/steer_slow 가 여기서 깎는다.
         self.declare_parameter('slow_throttle', 0.17)   # 07-12 run60 완주 후 사용자 확정: 0.165 는 코너 하한으로 과저속
-        # 노란 구간(DRIVE[Y]) 전용 상한: 접근/갈림길에서 저속·정밀 주행 (0=기능 off).
-        # 07-12 run47 실증 + 사용자 확정: 노란 구간은 0.165 고정. (0.17 이던 시절에도
-        # 커브 감속이 하한 0.165 로 깎아 링에선 사실상 0.165 였음 — 카메라 재캘리 후
-        # 곡률 추정이 정확해지며 상시 하한 도달. 변동 요소를 없애고 상수로 못 박는다.)
-        self.declare_parameter('yellow_drive_throttle', 0.165)
+        # 노란 구간(DRIVE[Y]) 판정 문턱 — 노랑이 이 비율 이상이면 slow_throttle 캡
+        # (07-12: 전용 변수 yellow_drive_throttle 폐지, slow 로 통일 — 사용자 확정)
         self.declare_parameter('yellow_slow_ratio', 0.03)   # 노란 구간 판정 문턱 (FOLLOW-Y 와 동일 값 유지 — 07-11 run8 후 0.03 복원에 동기화)   # 1587us: ROUNDABOUT 주행 + 감속 바닥.
                                                          # 유지는 되지만 정지에서 출발은 불가.
         self.declare_parameter('stop_throttle', 0.0)     # 1500us: 중립
@@ -247,7 +244,6 @@ class DecisionNode(Node):
             'curve_steer_bias': float(g('curve_steer_bias').value),
             'drive_throttle': float(g('drive_throttle').value),
             'slow_throttle': float(g('slow_throttle').value),
-            'yellow_drive_throttle': float(g('yellow_drive_throttle').value),
             'yellow_slow_ratio': float(g('yellow_slow_ratio').value),
             'stop_throttle': float(g('stop_throttle').value),
             'curve_slow': float(g('curve_slow').value),
@@ -312,7 +308,7 @@ class DecisionNode(Node):
         # (steer_center/steer_scale 는 _lane_steer 에서 매번 cfg 를 읽으므로 즉시 반영됨)
         self.live_tunable = {
             'drive_throttle', 'slow_throttle', 'stop_throttle', 'curve_slow',
-            'yellow_drive_throttle', 'yellow_slow_ratio',
+            'yellow_slow_ratio',
             'steer_center', 'steer_scale', 'steer_left_gain',
             'kp', 'ki', 'kd',   # PID 게인 (조향 세기) 트랙에서 라이브 튜닝
             'max_steering_delta', 'steer_slow',   # look-ahead 보조 (rate limit / 조향 감속)

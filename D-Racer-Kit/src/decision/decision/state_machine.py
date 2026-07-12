@@ -395,11 +395,10 @@ class RaceStateMachine:
             throttle = self.cfg['drive_throttle'] * (1.0 - self.cfg['curve_slow'] * curve)
             throttle = max(self.cfg['slow_throttle'], throttle)
             # 노란 구간(DRIVE[Y] = 회전교차로 접근/갈림길)은 검출·조향이 가장 어려운
-            # 구간이라 상한을 따로 둔다 (07-11: 노란 접근에서의 요동·이탈이 반복돼
-            # 흰 구간과 속도를 분리). yellow_ratio 는 FOLLOW-Y 전환과 같은 문턱을 쓴다.
-            ydt = self.cfg.get('yellow_drive_throttle', 0.0)
-            if ydt > 0.0 and lane.yellow_ratio >= self.cfg.get('yellow_slow_ratio', 0.03):
-                throttle = min(throttle, ydt)
+            # 구간이라 상한을 slow_throttle 로 캡 (07-12 사용자 확정: 전용 변수
+            # yellow_drive_throttle 폐지, 링/코너와 같은 저속 하한으로 통일).
+            if lane.yellow_ratio >= self.cfg.get('yellow_slow_ratio', 0.03):
+                throttle = min(throttle, self.cfg['slow_throttle'])
             # 빨간 도로(장애물 구간)가 보이기 시작하면 저속주행. 마커 앞에서 제동 거리를
             # 줄여 정지 성공률을 높인다. 이 구간은 직선이라 curve_slow 로는 감속되지 않는다.
             if in_red_zone:
