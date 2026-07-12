@@ -73,6 +73,9 @@ class RaceStateMachine:
         # 이동, 가짜 최대 3.15 와 겹쳐 절대 임계 불가. G->RA 접근 소요시간(race_t)이
         # 그 런의 속도 밴드를 대표하므로 그 비율로 게이트 임계들을 스케일한다.
         self._speed_scale = 1.0       # RA 진입 시 확정: clamp(race_t/ra_ref_drive_s)
+        self._y_run = 0               # Y래치 감지 연속 카운터 (스로틀 보정용)
+        self._latch_seen = False      # 런당 1회
+        self.throttle_adj = 0.0       # 순항 스로틀 가산 보정 (decision_node 가 적용)
         self.yaw_proxy = 0.0          # IMU 없는 헤딩 추정치 (조향 적분)
         self._entry_votes = 0         # 마지막 회전교차로 진입 투표 수 (디버그/로그)
         self._exit_votes = 0          # 마지막 회전교차로 탈출 투표 수 (디버그/로그)
@@ -255,6 +258,24 @@ class RaceStateMachine:
 
         if self.state not in (State.WAIT_GREEN, State.DONE):
             self.race_t += dt   # 출발 후 경과 시간 (FINISH 게이트용)
+        # 스로틀 동적 보정 (07-12): 같은 스로틀도 팩 상태로 런마다 속도가 널뜀
+        # (run56 부족/run57~58 과속, 전부 0.19~0.21). G->Y래치(분기 노랑 첫 지속
+        # 감지) 소요시간으로 이 런의 속도를 측정해 이후 순항 스로틀에 보정을
+        # 가산한다. 실측: 적정 4.4~4.7s / 과속 3.2~3.6s — 신호가 킥 과도구간을
+        # 포함해 속도차를 ~3배 압축하므로 게인이 큼 (run57 역산 0.04~0.07).
+        if (self.state == State.DRIVE and not self.roundabout_done
+                and not self._latch_seen):
+            if lane.yellow_ratio >= self.cfg.get('y_latch_ratio', 0.02):
+                self._y_run += 1
+                if self._y_run >= int(self.cfg.get('y_latch_frames', 10)):
+                    self._latch_seen = True
+                    ref = max(1e-3, float(self.cfg.get('throttle_ref_latch_s', 4.6)))
+                    dev = self.race_t / ref - 1.0
+                    lim = float(self.cfg.get('throttle_adapt_max', 0.015))
+                    self.throttle_adj = float(min(lim, max(-lim,
+                        float(self.cfg.get('throttle_adapt_gain', 0.06)) * dev)))
+            else:
+                self._y_run = 0
 
         # 갈림길: 표결 확정(confirmed_fork_direction) = 도착 -> 방향 latch, 해제는
         # 기하(fork 켜졌다 꺼짐 = 재수렴). fork_hold_s 는 failsafe 상한으로만.

@@ -122,6 +122,11 @@ class LaneNode(Node):
         self.declare_parameter('follow_yellow_exit_white_ratio', 1.0)  # 흰픽셀 > 이 배율*노란픽셀 (해제 조건 일부)
         self.declare_parameter('follow_yellow_exit_yellow_frac', 0.5)  # 해제 노랑문턱 = 진입문턱*이 비율 (노랑 보이면 유지)
         self.declare_parameter('follow_yellow_exit_frames', 10)        # 해제 조건 연속 프레임 (플리커 방지)
+        self.declare_parameter('follow_yellow_exit_frames_exit', 4)    # 탈출(SW)창 내 해제 연속 프레임 (0=전역값)
+        # 흰 인계 창 (run59 병합 관통 대응) — 상세는 lane_detector 주석
+        self.declare_parameter('w_align_frames', 60)    # 창 길이 (~3s). 0=off
+        self.declare_parameter('w_align_gain', 0.4)     # 헤딩 정렬 게인 (0=보정 off)
+        self.declare_parameter('w_align_min_px', 80)    # 점선 필터 폴백 문턱
         self.declare_parameter('filter_yellow_dashes', True)           # Y추종 중 점선/정지선 track 제외 (실선만)
         self.declare_parameter('yellow_solid_min_h_ratio', 0.30)       # "실선" 판정 최소 세로 비율
         self.declare_parameter('yellow_dash_fallback_px', 120)         # 실선 픽셀 이 미만이면 점선 포함 폴백
@@ -243,6 +248,10 @@ class LaneNode(Node):
         # 생성자 인자에 없는 튜닝들은 속성으로 직접 주입 (라이브 변경도 동일 경로)
         self.detector.follow_yellow_exit_yellow_frac = float(gp('follow_yellow_exit_yellow_frac').value)
         self.detector.follow_yellow_exit_frames = int(gp('follow_yellow_exit_frames').value)
+        self.detector.follow_yellow_exit_frames_exit = int(gp('follow_yellow_exit_frames_exit').value)
+        self.detector.w_align_frames = int(gp('w_align_frames').value)
+        self.detector.w_align_gain = float(gp('w_align_gain').value)
+        self.detector.w_align_min_px = int(gp('w_align_min_px').value)
         self.detector.crossline_min_area_px = int(gp('crossline_min_area_px').value)
         self.detector.crossline_perp_tol_deg = float(gp('crossline_perp_tol_deg').value)
         self.detector.crossline_bev_aspect = float(gp('crossline_bev_aspect').value)

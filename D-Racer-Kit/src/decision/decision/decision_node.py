@@ -172,6 +172,12 @@ class DecisionNode(Node):
         # 절대 임계 3.6/18.5 가 실측 정합했던 밴드). 시간/적분 임계 전부에 s 를 곱한다 —
         # run53(16.8s)/54(20.5)/55(15.0) 오프라인 재검산 전부 가짜 차단+진짜 통과.
         self.declare_parameter('ra_ref_drive_s', 20.5)
+        # 스로틀 동적 보정 (G->Y래치 소요시간 -> 순항 스로틀 가산). gain 0=off.
+        self.declare_parameter('throttle_ref_latch_s', 4.6)   # 적정 속도 기준 (run53/54/59 실측 4.4~4.7)
+        self.declare_parameter('throttle_adapt_gain', 0.06)   # 보정 = gain x (실측/기준 - 1)
+        self.declare_parameter('throttle_adapt_max', 0.015)   # 보정 절대 상한 (안전 클램프)
+        self.declare_parameter('y_latch_ratio', 0.02)         # 래치 감지 yr 문턱 (perception 과 동일값 권장)
+        self.declare_parameter('y_latch_frames', 10)          # 래치 감지 연속 틱
         self.declare_parameter('max_loop_time_s', 30.0)   # 모든 추정치 실패 시 failsafe 탈출
         self.declare_parameter('crossline_cooldown_s', 2.0)  # 게이트 카운트 간 최소 간격 (재카운트 디바운스)
         # --- 탈출 failsafe 3-표결 (조향 적분 + 시간 + 가로선 재등장), IMU/마커 없음 ---
@@ -272,6 +278,11 @@ class DecisionNode(Node):
             'ra_blind_bias': float(g('ra_blind_bias').value),
             'min_loop_time_s': float(g('min_loop_time_s').value),
             'ra_ref_drive_s': float(g('ra_ref_drive_s').value),
+            'throttle_ref_latch_s': float(g('throttle_ref_latch_s').value),
+            'throttle_adapt_gain': float(g('throttle_adapt_gain').value),
+            'throttle_adapt_max': float(g('throttle_adapt_max').value),
+            'y_latch_ratio': float(g('y_latch_ratio').value),
+            'y_latch_frames': int(g('y_latch_frames').value),
             'max_loop_time_s': float(g('max_loop_time_s').value),
             'crossline_cooldown_s': float(g('crossline_cooldown_s').value),
             'yaw_lap_threshold': float(g('yaw_lap_threshold').value),
@@ -312,6 +323,7 @@ class DecisionNode(Node):
             'exit_lock_release_s', 'exit_steer_bias',     # 탈출 락 시간 / 탈출 피드포워드
             'gate_blank_s', 'gate_rearm_s', 'gate_sustain_s', 'yaw_gate_min',
             'ra_ref_drive_s',                     # 속도 스케일 기준 (G->RA 소요시간)
+            'throttle_ref_latch_s', 'throttle_adapt_gain', 'throttle_adapt_max',
             'crossline_cooldown_s',               # 게이트 카운트 간 최소 간격
             # 아래 넷은 전부 '트랙에서 캘리브레이션할 것' 으로 남아있던 값이다.
             # 링을 실제 속도로 돌려 실측해야 하므로 주행 중 변경 가능해야 한다.
@@ -370,6 +382,7 @@ class DecisionNode(Node):
         self.merge_pub = self.create_publisher(Bool, '/decision/merge_zone', 10)
 
         self.dt = 1.0 / float(g('control_hz').value)
+        self._last_thr_adj = 0.0
         self.timer = self.create_timer(self.dt, self.on_timer)
         self.get_logger().info(f"decision_node up. course={cfg['course']}")
 
@@ -468,6 +481,13 @@ class DecisionNode(Node):
         # 표결로 확정된 갈림길 방향을 상태머신에 전달(step 전). None 이면 무편향.
         self.sm.confirmed_fork_direction = self.confirmed_fork_direction
         steer, throttle, state = self.sm.step(self.lane, self.aruco, self.dets, self.dt)
+        # 스로틀 동적 보정 적용 (순항 값에만 — 정지/중립은 제외). 킥/램프 상류.
+        adj = float(getattr(self.sm, 'throttle_adj', 0.0))
+        if adj != 0.0 and throttle > 0.05:
+            throttle = throttle + adj
+        if adj != self._last_thr_adj:
+            self.get_logger().info(f'throttle_adj -> {adj:+.3f} (G->latch 실측 기반)')
+            self._last_thr_adj = adj
         # 래치된 방향을 perception 에 publish -> lane_node 가 브랜치 선택(guide 시드)에 사용.
         # 표지판이 시야에서 사라진 뒤에도 latch 가 유지되는 동안(갈림길 통과 전) 계속
         # 그 브랜치를 좇게 하려고, confirmed 가 아니라 sm.turn_latch 를 보낸다.

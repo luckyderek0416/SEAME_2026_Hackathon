@@ -181,6 +181,18 @@ class LaneDetector:
         self.follow_yellow_exit_white_ratio = follow_yellow_exit_white_ratio
         self.follow_yellow_exit_yellow_frac = 0.5   # 해제 노랑 문턱 = 진입문턱 × 이 비율
         self.follow_yellow_exit_frames = 10         # 해제 조건 연속 프레임 수 (~0.3s@30fps)
+        # 탈출(SW 창) 중에는 해제를 빠르게 — run59: 해제가 늦어 흰 정렬 시작도 늦음. 0=전역값.
+        self.follow_yellow_exit_frames_exit = 4
+        # 흰 인계(핸드오버) 창 (07-12 run59 실증): RA 탈출 후 Y래치 해제 순간부터
+        # N프레임 동안 ① 흰 track 점선 제거 — 이 트랙 흰 도로는 양측 실선뿐, 점선은
+        # 합류부 개구부 표식이라 차선이 아님 ② 노란 꼬리를 track 에 유지 — 병합
+        # 코리도의 양변 = 노랑(안쪽)+흰 실선(바깥) -> nl=2 기하 유지 ③ 흰 track
+        # 주축 기울기로 조향 보정 — 사선 도달 시 offset~0 이라 PID 가 못 보는
+        # 헤딩 오차(run59 EX+7~10 45° 관통)를 선 방향으로 정렬.
+        self.w_align_frames = 60        # 창 길이 (~3s@20fps, run59 리플레이: 2s 는 사선 구간 전에 만료). 0=off
+        self.w_align_gain = 0.4         # 기울기 -> offset 보정 게인. 0=보정만 off
+        self.w_align_min_px = 80        # 점선 필터 결과 이 미만이면 raw 흰 폴백
+        self._w_align_left = 0
         self.course = course
         self._following_yellow = False   # 현재 YELLOW 모드인지 (프레임 간 유지)
         self._yellow_exit_count = 0      # 해제 조건 연속 카운터
@@ -494,10 +506,15 @@ class LaneDetector:
                 white_dom = wcount > self.follow_yellow_exit_white_ratio * max(1, ycount)
                 if yellow_gone and white_dom:
                     self._yellow_exit_count += 1
-                    if self._yellow_exit_count >= int(self.follow_yellow_exit_frames):
+                    eff_k = int(self.follow_yellow_exit_frames)
+                    if self._sw_dir > 0 and int(self.follow_yellow_exit_frames_exit) > 0:
+                        eff_k = int(self.follow_yellow_exit_frames_exit)
+                    if self._yellow_exit_count >= eff_k:
                         self._following_yellow = False
                         self._yellow_exit_count = 0
                         self._oneline_left = 0   # 래치 해제 -> 병합 모드도 종료
+                        if self._ra_seen and int(self.w_align_frames) > 0:
+                            self._w_align_left = int(self.w_align_frames)
                 else:
                     self._yellow_exit_count = 0
             else:
@@ -542,6 +559,12 @@ class LaneDetector:
                     self._yellow_dash_cx = None
             else:
                 sel = wmask
+                if self._w_align_left > 0:
+                    # 인계 창: 흰 점선(합류부 표식) 제거 + 노란 꼬리 유지
+                    wf = self._filter_yellow_dashes(wmask)
+                    if cv2.countNonZero(wf) >= int(self.w_align_min_px):
+                        sel = wf
+                    sel = cv2.bitwise_or(sel, ymask)
                 self._yellow_dash_cx = None
                 self._dash_fallback_on = False
                 self._solid_ok_count = 0
@@ -796,6 +819,14 @@ class LaneDetector:
                 a_h = max(-2.5, min(2.5, a_h))
                 raw_offset = float(max(-1.0, min(
                     1.0, raw_offset - float(self.yellow_heading_gain) * a_h)))
+        # 흰 인계 헤딩 정렬 (w_align 창): 사선 관통 프레임은 offset~0 이라 기울기
+        # (_lane_heading, track 주축 EMA)로만 관측된다. 선 방향으로 기수 정렬.
+        # 나란히 만나면 기울기~0 = 무작용.
+        if self._w_align_left > 0 and not self._following_yellow:
+            self._w_align_left -= 1
+            if lane_found and float(self.w_align_gain) > 0.0:
+                raw_offset = float(max(-1.0, min(
+                    1.0, raw_offset - float(self.w_align_gain) * self._lane_heading)))
         junction = self._detect_junction(clean, w)
         fork = self._detect_fork(clean, w)
         # 개구부 fk 소실 규칙: merge_zone 중 fork 서명 프레임 = 소실 취급 — 개구부
