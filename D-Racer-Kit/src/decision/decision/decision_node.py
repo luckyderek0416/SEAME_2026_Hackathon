@@ -195,7 +195,7 @@ class DecisionNode(Node):
         # --- 회전교차로 진입/탈출 = 갈림길과 동일한 브랜치 락온 ---
         # 진입: 가로선 첫 감지 -> RA on + 진입측 one-shot 락온(링 순환 방향).
         # 탈출: 링을 돌며 가로선 상승엣지를 세고, 도달 시 출구 브랜치로 락온.
-        self.declare_parameter('roundabout_exit_gates', 1)   # 진입 후 가로선을 이 횟수 더 만나면 탈출
+        self.declare_parameter('roundabout_exit_gates', 2)   # 군집 순서: 반대편 입구(1) -> 우리 입구(2)=탈출
                                                              # (진입 가로선은 블랭크+재무장으로 제외; 1=한 바퀴)
         self.declare_parameter('roundabout_exit_side', '')   # 출구 브랜치 side; '' 이면 race_dir 파생
         self.declare_parameter('entry_lock_release_s', 3.0)  # 진입측 락온 강제 해제 시간 (07-11 오후: 저속 대응 2->3s)
@@ -209,16 +209,17 @@ class DecisionNode(Node):
         # RA 진입 후 게이트 카운트 금지 시간(진입선 오카운트 방어). 길어서 손해는
         # "한 바퀴 더"뿐(과회전 허용), 짧으면 조기 탈출=실격 위험 -> 길게 잡는다.
         # 단, 실측 한 바퀴 시간보다는 반드시 짧아야 함 (트랙에서 라이브 조정).
-        self.declare_parameter('gate_blank_s', 17.0)
+        self.declare_parameter('gate_blank_s', 7.0)   # 잔상 '출생' 덮개 (군집 v2 — 무효 판정용, 무스케일)
         self.declare_parameter('gate_rearm_s', 0.5)          # 가로선이 이 시간 연속 OFF 여야 다음 카운트 무장
-        self.declare_parameter('gate_sustain_s', 0.25)       # 가로선이 이 시간 연속 ON 이어야 게이트 카운트 (blip 배제)
+        self.declare_parameter('gate_cluster_gap_s', 1.8)    # 목격 간격 이 미만 = 같은 군집 (파편/2조각 병합)
+        self.declare_parameter('gate_cluster_on_s', 0.18)    # 군집 누적 ON 카운트 문턱 (약피처 0.16 배제/입구 0.21 통과)
         # 이 조향적분 전에는 탈출 게이트 잠금 (링 중간 가짜선 차단).
         # 07-12 재배치 4.2 -> 3.6 (사용자 승인, B안): 4.2 는 진짜 탈출선 실측
         # (4.12~4.28)과 여유 2%뿐이라 손 개입/빠른 랩에서 yaw 가 모자라 불발 —
         # run29 진짜 3연타 3.68~3.81 불발, run31 진짜 3.65 불발 -> 둘 다 페일세이프
         # 강제 탈출 후 이탈. 가짜 실선 실측 최대 3.11 (run31 2.57~2.65) 이라
         # 3.6 은 가짜/진짜 사이 균형점 (여유 각각 ~0.5).
-        self.declare_parameter('yaw_gate_min', 3.6)
+        self.declare_parameter('yaw_gate_min', 1.0)   # 위생 하한 (위치 판별은 군집 순서가 담당)
 
         g = self.get_parameter
         race_dir = str(g('race_dir').value).lower()
@@ -298,7 +299,8 @@ class DecisionNode(Node):
             'exit_lock_release_s': float(g('exit_lock_release_s').value),
             'entry_steer_bias': float(g('entry_steer_bias').value),
             'gate_blank_s': float(g('gate_blank_s').value),
-            'gate_sustain_s': float(g('gate_sustain_s').value),
+            'gate_cluster_gap_s': float(g('gate_cluster_gap_s').value),
+            'gate_cluster_on_s': float(g('gate_cluster_on_s').value),
             'yaw_gate_min': float(g('yaw_gate_min').value),
             'gate_rearm_s': float(g('gate_rearm_s').value),
         }
@@ -321,7 +323,8 @@ class DecisionNode(Node):
             'enter_max_curvature',                # 곡선 구간 크로스라인 오인식 차단
             'entry_lock_release_s', 'entry_steer_bias',   # 진입 락온 시간 / 진입 피드포워드
             'exit_lock_release_s', 'exit_steer_bias',     # 탈출 락 시간 / 탈출 피드포워드
-            'gate_blank_s', 'gate_rearm_s', 'gate_sustain_s', 'yaw_gate_min',
+            'gate_blank_s', 'gate_rearm_s', 'yaw_gate_min',
+            'gate_cluster_gap_s', 'gate_cluster_on_s',
             'ra_ref_drive_s',                     # 속도 스케일 기준 (G->RA 소요시간)
             'throttle_ref_latch_s', 'throttle_adapt_gain', 'throttle_adapt_max',
             'crossline_cooldown_s',               # 게이트 카운트 간 최소 간격
