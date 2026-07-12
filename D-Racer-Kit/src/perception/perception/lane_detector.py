@@ -132,6 +132,12 @@ class LaneDetector:
         # 선분 위 픽셀 충실도 하한 (실측: 진짜 정지선 0.86~1.00 / 이어붙인 점선
         # 0.52~0.73). 링 안 '진짜 직각 실선'은 못 거름 — 상태머신 몫.
         self.crossline_min_solidity = 0.80
+        # SW 교차 게이트 (07-13 사용자 설계): SW 코리도 창이 락 중이면, 추적 피팅선을
+        # '수평으로 가로지르는' 선분만 정지선 후보로 인정 — 경로 밖 가로선(링 건너편
+        # 도로 선, ~30-35% 지점 약피처)을 원천 배제해 군집 카운트 신호를 청소한다.
+        # 피팅이 없으면(창 밖/락 실패) 기존 동작 폴백. 0=off.
+        self.crossline_sw_gate = 0
+        self.crossline_sw_margin = 40.0   # 피팅 x 대비 선분 스팬 여유(px)
         # True 면 첫 채택 후에도 모든 선분을 진단 목록에 남긴다 (임계 튜닝용).
         self.crossline_debug_all = False
         # 수직성 게이트: 지면 공간에서 |cos(차선, 선분)| <= sin(perp_tol_deg) 면 직교.
@@ -446,13 +452,26 @@ class LaneDetector:
             perp_cos = abs(lane_g[0] * seg_g[0] + lane_g[1] * seg_g[1]) / (lane_norm * seg_norm)
             # 실선 판정: 점선을 이어붙인 선분은 구멍이 많아 여기서 탈락한다.
             solidity = self._segment_solidity(cross_roi, seg)
+            # SW 교차 게이트: 추적 중인 코리도 선을 수평으로 걸치는 선분만 인정
+            sw_ok = True
+            if int(getattr(self, 'crossline_sw_gate', 0)) and self._sw_prev_fit is not None \
+                    and self._sw_left > 0:
+                pa, pb, pc = self._sw_prev_fit
+                y_mid = (float(yy1) + float(yy2)) / 2.0 + y1   # ROI 좌표로 복원
+                x_fit = pa * y_mid * y_mid + pb * y_mid + pc
+                mg = float(self.crossline_sw_margin)
+                sw_ok = (min(float(x1), float(x2)) - mg <= x_fit
+                         <= max(float(x1), float(x2)) + mg)
             ok = (perp_cos <= cos_max
-                  and solidity >= float(self.crossline_min_solidity))
+                  and solidity >= float(self.crossline_min_solidity)
+                  and sw_ok)
             slope = (dy / dx) if abs(dx) > 1e-6 else float('inf')
             if ok:
                 verdict = 'ACCEPT'
             elif perp_cos > cos_max:
                 verdict = 'reject_perp'
+            elif not sw_ok:
+                verdict = 'reject_sw'
             else:
                 verdict = 'reject_dashed'
             self.last_crossline_cands.append(

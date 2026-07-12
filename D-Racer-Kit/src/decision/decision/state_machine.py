@@ -535,9 +535,12 @@ class RaceStateMachine:
                 # 0.5s 이상 사라졌다 다시 나타남) 상태에서 보일 때만 인정한다.
                 # 진입선이 시야에 계속 남아 있는 것(정차/저속 통과)은 표가 아니다.
                 # cross 표는 '반대편 입구를 이미 세었고'(군집 이력) 현재 목격이
-                # 무효 군집이 아닐 때만 — 표결 경로의 오발(run64/68/72) 봉쇄.
+                # 무효 군집도, 방금 카운트된 그 군집도 아닐 때만 — 긴 군집 내부
+                # 공백(>=0.5s)에 재무장이 일어나면 자기 군집 꼬리가 count>=1 을
+                # 자충족해 표결 오발하던 것(run74 파란 꼬리 발화) 봉쇄.
                 cross_done = (bool(lane.yellow_crossline) and self._gate_armed
                               and not self._gate_cluster_void
+                              and not self._gate_cluster_counted
                               and self._gate_count
                               >= int(self.cfg['roundabout_exit_gates']) - 1
                               and self.yaw_proxy >= self.cfg.get('yaw_gate_min', 0.0)
