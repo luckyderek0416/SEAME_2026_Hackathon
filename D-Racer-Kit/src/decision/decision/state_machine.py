@@ -395,12 +395,12 @@ class RaceStateMachine:
             throttle = self.cfg['drive_throttle'] * (1.0 - self.cfg['curve_slow'] * curve)
             throttle = max(self.cfg['slow_throttle'], throttle)
             # 저속 구간(DRIVE[Y])도 흰 구간과 같은 곡률 감속 (07-12 사용자 설계):
-            # 기본 slow_drive_throttle(0.18) -> 곡률 따라 하한 slow_throttle(0.16).
+            # 기본 yellow_throttle(0.18) -> 곡률 따라 하한 slow_throttle(0.16).
             # 미검출 프레임은 곡률이 0 으로 읽혀 튀므로 하한 고정 (블라인드 가속
             # = run62 진입 이탈 재발 경로 차단).
             if lane.yellow_ratio >= self.cfg.get('yellow_slow_ratio', 0.03):
                 if lane.lane_found:
-                    y_thr = (self.cfg.get('slow_drive_throttle', 0.18)
+                    y_thr = (self.cfg.get('yellow_throttle', 0.18)
                              * (1.0 - self.cfg['curve_slow'] * curve))
                     y_thr = max(self.cfg['slow_throttle'], y_thr)
                 else:
@@ -540,7 +540,7 @@ class RaceStateMachine:
             # 상시 높아 대개 하한에 붙지만, 미검출/블라인드 프레임은 명시적 하한.
             if lane.lane_found:
                 r_curve = abs(getattr(lane, 'curvature', 0.0))
-                r_thr = (self.cfg.get('slow_drive_throttle', 0.18)
+                r_thr = (self.cfg.get('yellow_throttle', 0.18)
                          * (1.0 - self.cfg['curve_slow'] * r_curve))
                 r_thr = max(self.cfg['slow_throttle'], r_thr)
             else:
