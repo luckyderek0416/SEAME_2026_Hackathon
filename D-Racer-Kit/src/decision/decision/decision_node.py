@@ -120,7 +120,7 @@ class DecisionNode(Node):
         # 멀리서 빨간 도로가 '보이기 시작하는' 수준으로 낮게 잡을 것. 0 = 기능 off.
         self.declare_parameter('red_slow_ratio', 0.05)
         self.declare_parameter('marker_area_trigger', 0.02)
-        self.declare_parameter('marker_clear_frames', 5)
+        self.declare_parameter('marker_clear_frames', 8)   # run80: 정지중 검출 깜빡임 흡수 + 제거 후 ~0.8s 재출발
         self.declare_parameter('fork_bias', 0.2)    # (미사용 — 07-11 방안1: 조향 경로에서 제거, 탈출 락으로 대체)
         self.declare_parameter('fork_hold_s', 8.0)  # latch failsafe: fork 신호가 계속 켜져 있어도 이 시간 지나면 해제(초)
         # ----- 갈림길 표지판 방향 표결 (decision_node 로컬; on_dets 에서 사용) -----
@@ -212,7 +212,7 @@ class DecisionNode(Node):
         self.declare_parameter('gate_blank_s', 7.0)   # 잔상 '출생' 덮개 (군집 v2 — 무효 판정용, 무스케일)
         self.declare_parameter('gate_rearm_s', 0.5)          # 가로선이 이 시간 연속 OFF 여야 다음 카운트 무장
         self.declare_parameter('gate_cluster_gap_s', 1.8)    # 목격 간격 이 미만 = 같은 군집 (파편/2조각 병합)
-        self.declare_parameter('gate_cluster_on_s', 0.18)    # 군집 누적 ON 카운트 문턱 (약피처 0.16 배제/입구 0.21 통과)
+        self.declare_parameter('gate_cluster_on_s', 0.25)    # 군집 누적 ON 카운트 문턱 (run76 약피처 0.19 배제, 실선 0.5+ 통과)
         # 이 조향적분 전에는 탈출 게이트 잠금 (링 중간 가짜선 차단).
         # 07-12 재배치 4.2 -> 3.6 (사용자 승인, B안): 4.2 는 진짜 탈출선 실측
         # (4.12~4.28)과 여유 2%뿐이라 손 개입/빠른 랩에서 yaw 가 모자라 불발 —

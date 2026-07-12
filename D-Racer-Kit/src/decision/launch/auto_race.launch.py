@@ -76,7 +76,7 @@ def generate_launch_description():
                                           "Flips roundabout turn + junction side together."),
         # 동적 장애물 마커. 마커 사진 기준 최선의 추정: 4X4_50, 검정 바탕에 흰색.
         # 실제 보드에 tools/identify_aruco.py 로 확인하고 다르면 여기서 override 할 것.
-        DeclareLaunchArgument('aruco_dict', default_value='DICT_4X4_50'),
+        DeclareLaunchArgument('aruco_dict', default_value='DICT_6X6_50'),
         DeclareLaunchArgument('aruco_inverted', default_value='true'),
         # 07-10: 배터리 표시는 주행에 불필요하고(저전압 보호는 undervolt_*=0 으로 비활성)
         # i2c-3 마스터를 하나 줄이려고 기본 OFF. 필요하면 use_battery:=true.
