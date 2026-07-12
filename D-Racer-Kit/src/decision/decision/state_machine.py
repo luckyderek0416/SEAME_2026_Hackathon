@@ -84,7 +84,9 @@ class RaceStateMachine:
         self._steer_hold = None
         self._gate_armed = False      # 가로선이 충분히 꺼진 뒤에만 다음 카운트 무장
         self._gate_off_t = 0.0        # 가로선 연속 OFF 시간 (재무장 판정용)
-        self._gate_on_t = 0.0         # 가로선 연속 ON 시간 (지속 필터: blip 배제)
+        self._gate_on_t = 0.0         # 가로선 연속 ON 시간 (표결 진단용)
+        self._gate_cluster_on = 0.0   # 현재 군집 누적 ON (gap-merge)
+        self._gate_cluster_counted = False
         # 브랜치 락온 탈출용 게이트 통과 카운터 (노란 가로선 or 점선 개구부의
         # 상승엣지 = 게이트 1회 통과). roundabout_exit_gates 회 도달 시 출구 브랜치로 락온.
         self._gate_count = 0          # 이번 회전에서 센 게이트 통과 횟수
@@ -212,8 +214,12 @@ class RaceStateMachine:
         #     다음 상승엣지를 셀 수 있음 (한두 프레임 깜빡임으로는 무장 안 됨)
         #  ③ 지속: gate_sustain_s 연속 ON 이어야 카운트 (blip 배제)
         self._gate_count = 0
-        self._gate_cd = (float(self.cfg.get('gate_blank_s', self.cfg['min_loop_time_s']))
-                         * self._speed_scale)
+        self._gate_cluster_on = 0.0
+        self._gate_cluster_counted = False
+        # 블랭크는 스케일하지 않는다 (07-13): 임무가 '진입선 잔상'(실측 최장 6.2s,
+        # 링 속도와 무관하게 상한이 안정)만 덮는 것으로 축소됨. 스케일 버전은
+        # 빠른 접근에서 잔상을 놓쳤다 (run65/66 시뮬 검산).
+        self._gate_cd = float(self.cfg.get('gate_blank_s', self.cfg['min_loop_time_s']))
         self._gate_armed = False
         self._gate_off_t = 0.0
         self._gate_on_t = 0.0
@@ -437,34 +443,41 @@ class RaceStateMachine:
                     self._fork_seen = False
                     self._entry_lock_active = False
 
-            # (2b) 브랜치 락온 탈출용 게이트 통과 카운터. 노란 가로선(진입 때 만난
-            # 그 정지선)의 상승엣지를 세되, 진입선 재카운트를 3중 차단한다:
-            # 블랭크(gate_blank_s) + 재무장(가로선이 gate_rearm_s 이상 연속 OFF 여야
-            # 다음 엣지 유효 — 한두 프레임 깜빡임은 무장 실패) + 카운트 후 재무장 해제.
-            # 링을 돌아 같은 가로선을 roundabout_exit_gates(기본 1)번 더 만나면 탈출.
+            # (2b) 게이트 = 정지선 '군집' 카운터 (07-13 전환): 링 위 가로선 순서는
+            # 물리적으로 고정 — 진입 잔상(블랭크 ~7s 가 흡수) -> 아래쪽 입구(군집#1)
+            # -> 우리 입구(군집#2 = 탈출). 속도/밴드/스로틀과 무관한 위치 불변량.
+            # 시간·yaw 프록시 캘리의 연쇄 실패(run55/64/65/66/68) 대체.
+            # 군집 정의: 목격 사이 간격 < gate_cluster_gap_s 면 같은 군집으로 병합
+            # (고속에서 목격이 0.1s 파편으로 쪼개지는 것 대응 — run66 실측),
+            # 군집 누적 ON gate_cluster_on_s 도달 순간 1회 카운트.
             if self._gate_cd > 0.0:
                 self._gate_cd = max(0.0, self._gate_cd - dt)
+                # 블랭크/쿨다운 중엔 군집 누적도 억제 — 잔상 군집이 블랭크 너머로
+                # 이월돼 해제 직후 카운트되는 것 방지 (run65 시뮬 검산에서 발견)
+                self._gate_cluster_on = 0.0
             gate_now = bool(lane.yellow_crossline)
             if gate_now:
                 self._gate_off_t = 0.0
                 self._gate_on_t += dt
+                self._gate_cluster_on += dt
             else:
                 self._gate_on_t = 0.0
                 self._gate_off_t += dt
                 if self._gate_off_t >= self.cfg.get('gate_rearm_s', 0.5):
                     self._gate_armed = True
-            # blip 대응: 1~2프레임 가짜 정지선이 조기 탈출 유발 -> gate_sustain_s
-            # 연속 ON 요구. 링 중간 '진짜 직각 실선'은 이미지로 구분 불가 — 유일한
-            # 차이는 링 위 '위치'(yaw_proxy) -> yaw_gate_min 전에는 게이트 비무장.
-            # 주의: yaw 는 속도 의존 (run55 실증 — 빠른 랩에서 진짜 선이 임계 미달).
+                if self._gate_off_t >= self.cfg.get('gate_cluster_gap_s', 1.2):
+                    self._gate_cluster_on = 0.0        # 군집 종료
+                    self._gate_cluster_counted = False
+            # yaw 하한은 순수 위생 체크로 강등 (1.0 = "조금이라도 돌았다").
             yaw_ok = (self.yaw_proxy
                       >= self.cfg.get('yaw_gate_min', 0.0) * self._speed_scale)
-            if (self._gate_on_t >= self.cfg.get('gate_sustain_s', 0.25)
+            if (not self._gate_cluster_counted
+                    and self._gate_cluster_on >= self.cfg.get('gate_cluster_on_s', 0.15)
                     and self._gate_cd <= 0.0 and self._gate_armed and yaw_ok):
                 self._gate_count += 1
+                self._gate_cluster_counted = True
                 self._gate_cd = self.cfg.get('crossline_cooldown_s', 2.0)
                 self._gate_armed = False
-                self._gate_on_t = 0.0
 
             # ----- 바퀴 수 판정 -----
             # 절대 하한: min_loop_time 전에는 절대 탈출하지 않는다 (한 바퀴 미달은
@@ -495,7 +508,11 @@ class RaceStateMachine:
                 # 가로선 표도 게이트와 같은 재등장 규율 적용: 재무장(_gate_armed,
                 # 0.5s 이상 사라졌다 다시 나타남) 상태에서 보일 때만 인정한다.
                 # 진입선이 시야에 계속 남아 있는 것(정차/저속 통과)은 표가 아니다.
+                # cross 표는 '아래쪽 입구를 이미 세었을 때'만 유효 — 군집 이력 없이
+                # 첫 가로선에 표를 주면 run64/68 류 오발이 표결 경로로 재발한다.
                 cross_done = (bool(lane.yellow_crossline) and self._gate_armed
+                              and self._gate_count
+                              >= int(self.cfg['roundabout_exit_gates']) - 1
                               and self.yaw_proxy >= self.cfg.get('yaw_gate_min', 0.0)
                               * self._speed_scale)
                 votes = int(yaw_done) + int(time_done) + int(cross_done)
