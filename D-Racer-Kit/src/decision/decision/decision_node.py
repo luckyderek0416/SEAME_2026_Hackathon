@@ -183,7 +183,7 @@ class DecisionNode(Node):
         # 조기 탈출(실격)하지 않도록, yaw 표는 랩 완주 이후에나 나오는 값으로 올려 둔다.
         # 완주 yaw 백업 표: 실측 발화 yaw/s = 4.16~4.72 (3런) -> 5.0 이면 정지선을
         # 놓쳤을 때만 ~1-3s 뒤 time+yaw 2표로 강제 탈출 (9.0 은 도달 불가 죽은 표였음)
-        self.declare_parameter('yaw_lap_threshold', 5.0)
+        self.declare_parameter('yaw_lap_threshold', 4.2)   # 완주 yaw ~3.4 영역대 백업 표 (run65 재캘리)
         self.declare_parameter('nominal_loop_time_s', 15.0) # 저속(0.16) 예상 한 바퀴 시간 (골든런 랩 19.7초 기반)
         self.declare_parameter('lap_votes_needed', 2)      # {yaw, time, crossline} 중 탈출에 필요한 표 수
         # 노란색이 회전교차로 진입을 게이트한다 (회전교차로는 노란색, 외곽 루프는 흰색)
@@ -206,7 +206,9 @@ class DecisionNode(Node):
         # RA 진입 후 게이트 카운트 금지 시간(진입선 오카운트 방어). 길어서 손해는
         # "한 바퀴 더"뿐(과회전 허용), 짧으면 조기 탈출=실격 위험 -> 길게 잡는다.
         # 단, 실측 한 바퀴 시간보다는 반드시 짧아야 함 (트랙에서 라이브 조정).
-        self.declare_parameter('gate_blank_s', 17.0)
+        # 07-12 run65 재캘리 (스로틀 개편 후 링 ~20s 랩 영역대): 가짜선 RA+12.7 커버
+        # + 진짜선 RA+19 전 해제. 스로틀 재튜닝 시 재캘리 필수.
+        self.declare_parameter('gate_blank_s', 15.5)
         self.declare_parameter('gate_rearm_s', 0.5)          # 가로선이 이 시간 연속 OFF 여야 다음 카운트 무장
         self.declare_parameter('gate_sustain_s', 0.25)       # 가로선이 이 시간 연속 ON 이어야 게이트 카운트 (blip 배제)
         # 이 조향적분 전에는 탈출 게이트 잠금 (링 중간 가짜선 차단).
@@ -215,7 +217,9 @@ class DecisionNode(Node):
         # run29 진짜 3연타 3.68~3.81 불발, run31 진짜 3.65 불발 -> 둘 다 페일세이프
         # 강제 탈출 후 이탈. 가짜 실선 실측 최대 3.11 (run31 2.57~2.65) 이라
         # 3.6 은 가짜/진짜 사이 균형점 (여유 각각 ~0.5).
-        self.declare_parameter('yaw_gate_min', 3.6)
+        # 07-12 run65 재캘리: 링 ~20s 영역대 실측 가짜 yaw 2.04 / 진짜 3.10~3.37
+        # -> 2.4 (실효 x스케일). 링 속도(스로틀) 바뀌면 재캘리 필수.
+        self.declare_parameter('yaw_gate_min', 2.4)
 
         g = self.get_parameter
         race_dir = str(g('race_dir').value).lower()
