@@ -524,7 +524,8 @@ class DecisionNode(Node):
         ss = float(cfg.get('steer_slow', 0.0))
         if ss > 0.0 and throttle > 0.0:
             cut = max(0.0, 1.0 - ss * min(1.0, abs(steer - float(cfg['steer_center']))))
-            throttle = max(min(throttle, float(cfg['slow_throttle'])), throttle * cut)
+            throttle = max(min(throttle, float(cfg['slow_throttle']) + adj),
+                           throttle * cut)
 
         # ----- 저전압 가드: 전압이 무너지면 스스로 부하를 줄인다 -----
         # 배터리 전압이 낮을 때 모터 돌입 전류가 겹치면 보드가 리셋/행에 빠진다.
@@ -544,7 +545,11 @@ class DecisionNode(Node):
         # 적용해야 램프가 킥 값까지 올라간다.
         # In 코스에서 정지->출발이 일어나는 지점: 초록불 출발, 빨간 도로의 ArUco 해제 후.
         # 둘 다 목표가 drive_throttle 이고 그 값이 곧 출발 임계라 킥 없이는 여유가 없다.
+        # 킥에도 동적 보정 가산 ("각 스로틀 값에 +/-"). 첫 출발 킥은 래치 전이라
+        # adj=0 이고, ArUco 재출발 킥부터 보정이 반영된다.
         kick = float(cfg.get('start_kick_throttle', 0.0))
+        if kick > 0.0:
+            kick = kick + adj
         kick_s = float(cfg.get('start_kick_s', 0.0))
         if kick > 0.0 and kick_s > 0.0:
             if throttle > 0.0 and self._prev_throttle <= 1e-3:
