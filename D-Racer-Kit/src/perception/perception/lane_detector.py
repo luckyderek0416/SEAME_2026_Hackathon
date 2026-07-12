@@ -36,7 +36,7 @@ class LaneDetector:
                  lookahead_band_index=-1, adaptive_lookahead=False,
                  curve_lookahead_weight=0.4, curve_lookahead_thresh=0.25,
                  crossline_roi_top_ratio=0.40, crossline_roi_bottom_ratio=0.95,
-                 crossline_min_width_ratio=0.20, crossline_min_rows=4,
+                 crossline_min_width_ratio=0.20,
                  fork_scan_top_ratio=0.0, fork_scan_bottom_ratio=0.5,
                  fork_col_min_ratio=0.15, fork_min_groups=3, fork_span_ratio=0.0,
                  fork_seed_px=90,
@@ -133,15 +133,7 @@ class LaneDetector:
         self.crossline_roi_top_ratio = crossline_roi_top_ratio       # 스캔 창 상단 (ROI 높이의 0..1)
         self.crossline_roi_bottom_ratio = crossline_roi_bottom_ratio # 스캔 창 하단
         self.crossline_min_width_ratio = crossline_min_width_ratio   # 성분의 가로 스팬 최소 비율 (w 기준)
-        self.crossline_min_rows = crossline_min_rows                 # (미사용; 옛 행-스캔 버전 하위호환)
-        self.crossline_max_angle_deg = 50.0   # 주축이 수평에서 이 각도 이내면 가로선 (대각선 허용)
         self.crossline_min_area_px = 60       # 성분 최소 픽셀 수 (노이즈/점선 dash 필터)
-        # 직선성 검사 (곡선 실선의 수평 구간 오인 방지): 선형 피팅 잔차가
-        # max_resid_px 이하인 컬럼 비율이 min_inlier_frac 이상이어야 정지선.
-        # (구 컬럼평균 피팅 잔여 파라미터 — Hough 방식에서 미사용, 하위호환용)
-        self.crossline_max_resid_px = 2.5
-        self.crossline_min_inlier_frac = 0.75
-        self.crossline_max_col_px = 0
         # HoughLinesP: 누적 투표 임계 / 같은 직선으로 이어붙일 최대 간격(px).
         self.crossline_hough_thresh = 25
         # 07-10 실측: gap<=8 이면 진짜 정지선(실선)도 마스크의 작은 구멍 때문에 이어지지
@@ -179,7 +171,6 @@ class LaneDetector:
         # 직전 프레임 track 의 crossline 창 픽셀 (ys, xs). _detect_crossline 이
         # _build_mask 안에서 track 보다 먼저 호출되므로 1프레임 지연값을 쓴다.
         self._crossline_track_pts = None
-        self.crossline_perp_tol = 0.35   # (구 절대값 임계 — 미사용, 하위호환)
         # 직전 프레임의 차선 주축 기울기(dx/dy). _detect_crossline 은 track 이 만들어지기
         # 전에 호출되므로 1프레임 지연값을 쓴다 (20Hz 에서 50ms, 무시 가능).
         self._lane_heading = 0.0
@@ -265,16 +256,12 @@ class LaneDetector:
         # 쐐기(run9)와 동일 메커니즘, 최근 5회 통과 중 4회 이탈 (run29 v39 프레임).
         # 1L 은 노란 질량 전체 = 우측(바깥) 경계 하나로 봐서 쐐기가 원천 차단됨.
         # 진입 창 = 빨간 점선(개구부→링), 해제 창 = 파란 점선(링→탈출로).
-        # 07-12 run31 A/B 뒤 사용자 결정: 전이 창 2개는 0(off), 대신 아래
-        # ra_opening_oneline_frames(실선 소실 트리거)로 랩 종료 개구부를 덮는다.
+        # 07-12 run31 A/B 뒤 사용자 결정: 전이 창 2개는 0(off). (대체안이던
+        # '실선 소실 트리거' 개구부 1L 은 run32 오발 — 링 중간 실선 FOV 이탈에도
+        # 발동, off -0.65 안쪽 나선 — 로 폐기, 코드 제거됨.)
         self.ra_entry_oneline_frames = 100   # ~5s@20fps. RA 진입 전이. 0=off
         self.ra_exit_oneline_frames = 60     # ~3s@20fps. RA->DRIVE 해제 전이. 0=off
         self._prev_drive_mode = ''
-        # (미사용 — 07-12 run32 로 폐기) 개구부 1L 실선 소실 트리거. 링 중간에서
-        # 실선이 FOV 를 벗어나는 순간에도 오발했고, 노란 질량 극소 상태의
-        # "전체평균-반차폭" 추적이 안쪽 나선(양성 피드백)이 됨 (off -0.65, 섬 안
-        # 완전 이탈). 대체 = "RA 점선 폴백 금지" (process() 의 sel 결정부 주석).
-        self.ra_opening_oneline_frames = 0   # 0=off (폐기)
         # YELLOW 추종 중 점선(dash) 무시: 조향용 track 마스크에서 세로 길이가 짧은
         # 노란 성분(점선 dash, 그리고 가로 정지선)을 제거해 "실선만" 추종한다.
         # raw ymask 는 yellow_ratio/crossline/Y모드 진입판정에 그대로 쓰이므로 무관.
@@ -379,7 +366,6 @@ class LaneDetector:
         self._sw_wsteady = 0            # 흰 인계 연속 카운터
         self._sw_last_lean = 0.0        # 마지막 락 프레임의 기욺(top_x - bottom_x, px)
         self._sw_locked_dbg = False     # 디버그 표기용: 이번 프레임 락 여부
-        self._sw_boxes_dbg = []         # 디버그 오버레이용 채택 체인 상자
         self._sw_fit_dbg = []           # 디버그 오버레이용 피팅 곡선 [(x,y),...] 리스트
 
     def _build_mask(self, roi):
@@ -521,7 +507,7 @@ class LaneDetector:
         적응형 0/30).
 
         판정: 길이 >= crossline_min_width_ratio × w 인 선분 중,
-              차선과 직교( |slope + a_h| <= crossline_perp_tol )하는 것이 하나라도 있으면 True.
+              차선과 직교(각도 게이트 crossline_perp_tol_deg)하는 것이 하나라도 있으면 True.
 
         직교성이 왜 차선을 원리적으로 배제하는가:
           차선 주축을 dx/dy = a_h 라 하면 차선 방향은 (a_h, 1), 정지선 방향은 (1, slope).
@@ -834,7 +820,6 @@ class LaneDetector:
         # 디버그 오버레이는 매 프레임 무조건 비운다 — src 미가용 프레임(창 활성 중
         # Y-latch 해제 등)에서 마지막 락 프레임의 곡선이 고착 표시되던 것 방지
         # (07-12 검증 리뷰 확정). 락 프레임에서 _sw_corridor_bands 가 재채움.
-        self._sw_boxes_dbg = []
         self._sw_fit_dbg = []
         # 라이브 킬스위치 (07-12 검증 리뷰): 창은 무장 시점에 _sw_left 로 래치되므로
         # 주행 중 `ros2 param set /lane_node sw_entry_frames 0` 만으로는 안 풀렸다.
@@ -1138,7 +1123,6 @@ class LaneDetector:
              reacq 0->1 규칙과 같은 구조 근거)
           6) 관측 y범위 밖은 외삽하지 않고 클램프 (소량 픽셀 2차식 폭주 방지)
         """
-        self._sw_boxes_dbg = []
         self._sw_fit_dbg = []
         m = src.copy()
         # (1) 정지선(가로줄) 행 제거
@@ -1344,7 +1328,6 @@ class LaneDetector:
             self._sw_fit_dbg.append(
                 [(int(round(ev(f, y))), int(y))
                  for y in range(int(f['y_lo']), int(f['y_hi']) + 1, 4)])
-        self._sw_boxes_dbg = boxes_dbg
         return bands, near_lanes, boxes_dbg
 
     # ---------- bird-eye view (선택) ----------

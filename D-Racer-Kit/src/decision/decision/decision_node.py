@@ -130,7 +130,6 @@ class DecisionNode(Node):
         self.declare_parameter('fork_vote_clear_s', 1.0)    # 표지판 끊긴 뒤 표결 초기화까지(떨림방지창; 홀드 아님)
 
         # ----- 회전교차로 (junction 카운트, IMU 없음) -----
-        self.declare_parameter('enter_curvature', 0.45)   # (미사용) 진입이 가로선 단독 트리거로 바뀜
         self.declare_parameter('enter_sustain_s', 0.2)
         self.declare_parameter('ra_min_drive_s', 7.5)    # 출발 후 이 시간 전엔 RA 진입 금지 (입구 오진입 차단)
                                                          # 07-11 run12: 1L 진입 성공으로 진짜 정지선 도착이 9.3s 로
@@ -169,13 +168,6 @@ class DecisionNode(Node):
         # 이 값은 진입이 망가져 바깥으로 밀리던 시절의 보정 -> 진입 정상화로 0 으로.
         # 링에서 다시 '바깥' 이탈이 나오면 -0.05 부터 소량 재도입할 것 (부호 반전 금지).
         self.declare_parameter('circle_steer_bias', 0.0)  # 링 유지 편향 (0=off)
-        # (미사용 — 07-12 이벤트 기반 재획득 규칙으로 대체) 합류부 yaw 위치창 +
-        # 하드 오버라이드. yaw = 편차x시간이라 런별 속도 차로 창 위치가 밀리는
-        # 문제로 폐기. 이력 보존용으로만 남김: 창 [2.45,3.6] = image2 두 마크,
-        # 고정 조향 0.44 = 0.26 + 0.18 (run22 가산식 붕괴 -> run23 하드 전환).
-        self.declare_parameter('merge_steer_bias', -0.18)
-        self.declare_parameter('merge_yaw_lo', 2.45)
-        self.declare_parameter('merge_yaw_hi', 3.6)
         # 재획득 규칙 무장 지연 (07-12): RA 진입 후 이 시간이 지나면 perception 의
         # "nl 0->1 재획득 = 우측(바깥) 경계" 분류를 무장 (/decision/merge_zone).
         # 실측 (런19~26, RA 에피소드 8개): 진입 잔재 전이는 전부 <2.6s, 합류부 0->1 은
@@ -283,7 +275,6 @@ class DecisionNode(Node):
             'marker_clear_frames': int(g('marker_clear_frames').value),
             'fork_bias': float(g('fork_bias').value),
             'fork_hold_s': float(g('fork_hold_s').value),
-            'enter_curvature': float(g('enter_curvature').value),
             'enter_sustain_s': float(g('enter_sustain_s').value),
             'ra_min_drive_s': float(g('ra_min_drive_s').value),
             'enter_max_curvature': float(g('enter_max_curvature').value),
@@ -291,9 +282,6 @@ class DecisionNode(Node):
             'branch_bias': float(g('branch_bias').value),
             'branch_yellow_min': float(g('branch_yellow_min').value),
             'circle_steer_bias': float(g('circle_steer_bias').value),
-            'merge_steer_bias': float(g('merge_steer_bias').value),
-            'merge_yaw_lo': float(g('merge_yaw_lo').value),
-            'merge_yaw_hi': float(g('merge_yaw_hi').value),
             'reacq_arm_s': float(g('reacq_arm_s').value),
             'ra_blind_bias': float(g('ra_blind_bias').value),
             'min_loop_time_s': float(g('min_loop_time_s').value),
@@ -347,7 +335,6 @@ class DecisionNode(Node):
             'light_min_area',                     # 신호등 bbox 최소 면적 (오검출 필터)
             'conf_threshold',                     # YOLO confidence 문턱 (현장 조정)
             'circle_steer_bias',                  # 회전교차로 링 유지 편향 세기
-            'merge_steer_bias', 'merge_yaw_lo', 'merge_yaw_hi',   # (미사용 07-12) 구 yaw 위치창
             'reacq_arm_s',                        # 재획득 규칙 무장 지연 (RA 진입 후 초)
             'ra_blind_bias',                      # RA 맹목 폴백 (소실 시 링 호)
             'curve_steer_bias',                   # DRIVE 급커브 feed-forward 편향

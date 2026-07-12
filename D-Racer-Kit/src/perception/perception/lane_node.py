@@ -36,7 +36,6 @@ class LaneNode(Node):
         self.declare_parameter('crossline_bev_aspect', 1.91)
         self.declare_parameter('lane_heading_alpha', 0.2)
         self.declare_parameter('crossline_exclude_px', 6.0)  # 후보 선분 배제 반경(px)
-        self.declare_parameter('crossline_perp_tol', 0.35)   # (구 절대값 — 미사용)
         # HoughLinesP 파라미터 (정지선 선분 검출).
         self.declare_parameter('crossline_hough_thresh', 25)    # 누적 투표 임계
         self.declare_parameter('crossline_hough_max_gap', 10)   # 선분 이어붙이기 최대 간격(px). 8 이하면 진짜 정지선도 못 잇는다
@@ -112,11 +111,7 @@ class LaneNode(Node):
         self.declare_parameter('crossline_roi_top_ratio', 0.40)     # 스캔 창 상단 (대각선 위해 넓힘)
         self.declare_parameter('crossline_roi_bottom_ratio', 0.95)  # 스캔 창 하단
         self.declare_parameter('crossline_min_width_ratio', 0.20)   # 성분 "주축 길이" 최소 비율 (w 기준)
-        self.declare_parameter('crossline_min_rows', 4)             # (미사용; 하위호환)
-        self.declare_parameter('crossline_max_angle_deg', 50.0)     # 수평 기준 허용 기울기 (대각선 정지선)
         self.declare_parameter('crossline_min_area_px', 60)         # 성분 최소 픽셀 (dash/노이즈 필터)
-        self.declare_parameter('crossline_max_resid_px', 2.5)       # 직선성: 피팅 잔차 허용 px
-        self.declare_parameter('crossline_min_inlier_frac', 0.75)   # 직선성: 인라이어 컬럼 비율
         # --- 좌/우 갈림길 (fork) 감지 + 브랜치 선택 ---
         self.declare_parameter('fork_topic', '/decision/fork_dir')  # decision 이 확정 방향 publish
         self.declare_parameter('state_topic', '/decision/state')    # decision 주행 모드 -> BEV 표시
@@ -168,9 +163,6 @@ class LaneNode(Node):
         # "창이 덮은 0~5s 는 통과, 창 종료 후 8.1s 이탈" — 재활성 시 진입 160 권장.
         self.declare_parameter('ra_entry_oneline_frames', 0)     # 0=off. 재활성 시 160(~8s)
         self.declare_parameter('ra_exit_oneline_frames', 0)      # 0=off. 재활성 시 60(~3s)
-        # (미사용 — 07-12 run32 폐기: 링 중간 오발 -> 안쪽 나선. 대체 = RA 점선 폴백
-        # 금지, lane_detector sel 결정부 주석 참고)
-        self.declare_parameter('ra_opening_oneline_frames', 0)   # 0=off (폐기)
         # --- 슬라이딩 윈도우(SW) 코리도 추적 (07-12 설계; RA 진입/탈출 전이 창 전용) ---
         # 하드코딩 호(시간 기반 개루프)가 배터리별 속도 차로 런마다 다른 호를 그리는
         # 문제(run47 통과/run48 실패, 같은 코드)의 위치 기반 폐루프 대체. 유효 락
@@ -270,7 +262,6 @@ class LaneNode(Node):
             crossline_roi_top_ratio=float(gp('crossline_roi_top_ratio').value),
             crossline_roi_bottom_ratio=float(gp('crossline_roi_bottom_ratio').value),
             crossline_min_width_ratio=float(gp('crossline_min_width_ratio').value),
-            crossline_min_rows=int(gp('crossline_min_rows').value),
             fork_scan_top_ratio=float(gp('fork_scan_top_ratio').value),
             fork_scan_bottom_ratio=float(gp('fork_scan_bottom_ratio').value),
             fork_col_min_ratio=float(gp('fork_col_min_ratio').value),
@@ -286,15 +277,11 @@ class LaneNode(Node):
         # 생성자 인자에 없는 튜닝들은 속성으로 직접 주입 (라이브 변경도 동일 경로)
         self.detector.follow_yellow_exit_yellow_frac = float(gp('follow_yellow_exit_yellow_frac').value)
         self.detector.follow_yellow_exit_frames = int(gp('follow_yellow_exit_frames').value)
-        self.detector.crossline_max_angle_deg = float(gp('crossline_max_angle_deg').value)
         self.detector.crossline_min_area_px = int(gp('crossline_min_area_px').value)
-        self.detector.crossline_max_resid_px = float(gp('crossline_max_resid_px').value)
-        self.detector.crossline_min_inlier_frac = float(gp('crossline_min_inlier_frac').value)
         self.detector.crossline_perp_tol_deg = float(gp('crossline_perp_tol_deg').value)
         self.detector.crossline_bev_aspect = float(gp('crossline_bev_aspect').value)
         self.detector.lane_heading_alpha = float(gp('lane_heading_alpha').value)
         self.detector.crossline_exclude_px = float(gp('crossline_exclude_px').value)
-        self.detector.crossline_perp_tol = float(gp('crossline_perp_tol').value)
         self.detector.crossline_hough_thresh = int(gp('crossline_hough_thresh').value)
         self.detector.crossline_hough_max_gap = int(gp('crossline_hough_max_gap').value)
         self.detector.crossline_min_solidity = float(gp('crossline_min_solidity').value)
@@ -309,7 +296,6 @@ class LaneNode(Node):
         self.detector.oneline_near_bands = int(gp('oneline_near_bands').value)
         self.detector.ra_entry_oneline_frames = int(gp('ra_entry_oneline_frames').value)
         self.detector.ra_exit_oneline_frames = int(gp('ra_exit_oneline_frames').value)
-        self.detector.ra_opening_oneline_frames = int(gp('ra_opening_oneline_frames').value)
         self.detector.sw_entry_frames = int(gp('sw_entry_frames').value)
         self.detector.sw_exit_frames = int(gp('sw_exit_frames').value)
         self.detector.sw_entry_input = str(gp('sw_entry_input').value)

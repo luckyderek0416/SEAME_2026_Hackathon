@@ -82,7 +82,6 @@ class RaceStateMachine:
         self._gate_on_t = 0.0         # 가로선 연속 ON 시간 (지속 필터: blip 배제)
         # 브랜치 락온 탈출용 게이트 통과 카운터 (노란 가로선 or 점선 개구부의
         # 상승엣지 = 게이트 1회 통과). roundabout_exit_gates 회 도달 시 출구 브랜치로 락온.
-        self._gate_prev = False       # 직전 프레임의 게이트 신호 (엣지 감지용)
         self._gate_count = 0          # 이번 회전에서 센 게이트 통과 횟수
         self._gate_cd = 0.0           # 카운트 사이의 debounce 쿨다운
 
@@ -205,8 +204,7 @@ class RaceStateMachine:
         #  ① 블랭크: gate_blank_s(기본 min_loop 연동) 동안 카운트 금지
         #  ② 재무장(arm): 가로선이 gate_rearm_s 이상 "연속으로 꺼져" 있어야
         #     다음 상승엣지를 셀 수 있음 (한두 프레임 깜빡임으로는 무장 안 됨)
-        #  ③ 상승엣지: _gate_prev=True 로 시작(진입선이 보이는 상태 가정)
-        self._gate_prev = True
+        #  ③ 지속: gate_sustain_s 연속 ON 이어야 카운트 (blip 배제)
         self._gate_count = 0
         self._gate_cd = float(self.cfg.get('gate_blank_s', self.cfg['min_loop_time_s']))
         self._gate_armed = False
@@ -476,7 +474,6 @@ class RaceStateMachine:
                 self._gate_cd = self.cfg.get('crossline_cooldown_s', 2.0)
                 self._gate_armed = False
                 self._gate_on_t = 0.0
-            self._gate_prev = gate_now
 
             # ----- 바퀴 수 판정 -----
             # 절대 하한: min_loop_time 전에는 절대 탈출하지 않는다 (한 바퀴 미달은
