@@ -168,10 +168,13 @@ class DecisionNode(Node):
         # 링 안 직각 실선 오인 조기 탈출 -> 17s 까지 블랭크 (진짜 탈출 ~20s+ 무지장).
         # 주의: 시간 기반이라 속도 밴드에 민감 — run55 고속 랩(20.5s)에선 랩의 90%.
         self.declare_parameter('min_loop_time_s', 17.0)   # 이보다 빨리 한 바퀴 완료 불가 (절대 하한)
-        # 속도 스케일 기준: G->RA 접근 소요시간이 이 값일 때 스케일 1.0 (run54=20.5s 밴드,
-        # 절대 임계 3.6/18.5 가 실측 정합했던 밴드). 시간/적분 임계 전부에 s 를 곱한다 —
-        # run53(16.8s)/54(20.5)/55(15.0) 오프라인 재검산 전부 가짜 차단+진짜 통과.
-        self.declare_parameter('ra_ref_drive_s', 20.5)
+        # 속도 스케일 기준: G->RA 접근 소요시간이 이 값일 때 스케일 1.0.
+        # 주의 — 이 상수는 '접근 구간 스로틀 설정'에 묶인다: 접근이 빨라지면 G->RA 가
+        # 줄어 s 가 추락, yaw 게이트가 가짜 대역(2.1~3.15)까지 내려가 오발한다
+        # (run64 실증: yellow 0.185 승격 후 11.5s -> s=0.6 -> 가짜 yaw 2.2 조기탈출).
+        # drive/yellow_throttle 재튜닝 시 반드시 재캘리할 것.
+        # 07-12 재캘리: drive 0.19 / yellow 0.185 접근 기준 11.5s (run64).
+        self.declare_parameter('ra_ref_drive_s', 11.5)
         self.declare_parameter('max_loop_time_s', 30.0)   # 모든 추정치 실패 시 failsafe 탈출
         self.declare_parameter('crossline_cooldown_s', 2.0)  # 게이트 카운트 간 최소 간격 (재카운트 디바운스)
         # --- 탈출 failsafe 3-표결 (조향 적분 + 시간 + 가로선 재등장), IMU/마커 없음 ---
