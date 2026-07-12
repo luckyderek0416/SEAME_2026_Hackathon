@@ -107,11 +107,14 @@ class ArucoNode(Node):
 
         out = ArucoState()
         out.header = header
-        if ids is not None and len(ids) > 0:
+        ids_f = np.asarray(ids).flatten() if ids is not None else np.empty(0, int)
+        if ids_f.size > 0 and len(corners) == ids_f.size:
             areas = [cv2.contourArea(c.reshape(-1, 1, 2).astype(np.float32)) for c in corners]
             idx = int(np.argmax(areas))          # 가장 가까운 마커 = 화면에서 가장 큰 것
             out.detected = True
-            out.marker_id = int(ids[idx][0])
+            # OpenCV 버전에 따라 ids 가 (N,1)/(N,) 혼재 -> flatten 통일
+            # (스칼라 [0] 인덱싱 IndexError 로 기동 직후 노드 사망, 07-12 실측)
+            out.marker_id = int(ids_f[idx])
             out.area_ratio = float(areas[idx] / (w * h))
         else:
             out.detected = False
