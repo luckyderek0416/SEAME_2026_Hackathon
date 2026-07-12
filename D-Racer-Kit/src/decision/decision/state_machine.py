@@ -108,12 +108,9 @@ class RaceStateMachine:
             target = (lane.offset + self._branch_bias(lane)
                       + self._curve_bias(lane))
         else:
-            # 차선 놓침 (07-12 개정): DRIVE 에선 직진 대신 '직전 조향 EMA'를
-            # 유지한다 — 커브 중 소실 시 직진 폴백이 코스를 뚫고 나가는 문제
-            # (run47 v47.6 탈출로 전환부 이탈) 대응. 소실이 길어지면 3초 시정수로
-            # 중앙에 수렴 (무한 원돌기 방지). 직선에선 EMA ~= 중앙이라 기존과 동일.
-            # RA 는 기존 경로 유지 (ra_blind_bias 가 전담 — 여기서 hold 를 쓰면
-            # 블라인드 호와 중복 가산이 된다).
+            # 차선 놓침: DRIVE 는 '직전 조향 EMA' 유지 (직진 폴백이 커브를 뚫던
+            # run47 전환부 이탈 대응), 3s 시정수로 중앙 수렴. RA 는 ra_blind_bias
+            # 전담 (중복 가산 방지).
             if self.state == State.DRIVE and self._steer_hold is not None:
                 center = self.cfg['steer_center']
                 self._steer_hold += (center - self._steer_hold) * min(1.0, dt / 3.0)
@@ -249,13 +246,8 @@ class RaceStateMachine:
         if self.state not in (State.WAIT_GREEN, State.DONE):
             self.race_t += dt   # 출발 후 경과 시간 (FINISH 게이트용)
 
-        # 갈림길 방향은 decision_node 의 다중 프레임 표결에서 온다(단일 감지가 아님).
-        # confirmed_fork_direction 으로 전달된다. 표지판은 두 브랜치 사이에 있으므로
-        # "표지판 확정" == "갈림길 도착": 방향을 latch 하고, 기하 조건으로 해제한다 —
-        # perception 의 fork 플래그가 한 번 켜졌다가 다시 꺼지면(두 브랜치가 재합류 /
-        # 도로가 다시 좁아짐) 해제. 예전의 타이머 전용 홀드(decision_node 의 표결 홀드와
-        # 중첩돼 ≈2×fork_hold_s 가 되던 것)를 대체한다. fork_hold_s 는 failsafe 상한으로만
-        # 유지한다.
+        # 갈림길: 표결 확정(confirmed_fork_direction) = 도착 -> 방향 latch, 해제는
+        # 기하(fork 켜졌다 꺼짐 = 재수렴). fork_hold_s 는 failsafe 상한으로만.
         fork_now = bool(getattr(lane, 'fork', False))
         # ROUNDABOUT 동안은 표지판 표결을 무시한다 — 진입/탈출 락온은 RA 로직이
         # 소유하며, 링 위 표지판 오검출이 latch 를 덮어쓰면 perception 시드가 엉뚱한
@@ -273,11 +265,8 @@ class RaceStateMachine:
                 self._fork_absent_t = 0.0
             else:
                 self._fork_absent_t += dt
-            # 재수렴 판정 디바운스 (07-11 실주행): 회전교차로 진입 순간 fork 가
-            # 딱 한 프레임 True 였다가 꺼지자 단일 엣지 재수렴이 성립, 진입 락온이
-            # 같은 틱에 풀려 차가 링 대신 탈출로로 직진했다. 갈림길 입구에서 fork
-            # 플래그는 원래 깜빡이므로, '0.3초 연속 부재'여야 도로 재수렴으로 보고
-            # 락온도 최소 0.5초는 유지한다.
+            # 재수렴 디바운스: fork '0.3s 연속 부재'여야 재수렴, 락온 최소 0.5s 유지
+            # (1프레임 blip 재수렴으로 진입 락이 같은 틱에 풀리던 것 실측 대응).
             reconverged = (self._fork_seen
                            and self._fork_absent_t >= 0.3
                            and self.turn_latch_age >= 0.5)
@@ -319,12 +308,8 @@ class RaceStateMachine:
 
         # ----- DRIVE -----
         if self.state == State.DRIVE:
-            # 탈출 락 (07-11 run25 재설계): RA 탈출 직후 시간창 동안, "차선이 안 보이는
-            # 프레임에만" 우측 호를 얹는다 — 개구부를 우회전으로 건너 탈출로 방향으로
-            # 시야를 돌리고, 차선이 잡히는 순간 즉시 순수 PID 추종으로 넘긴다.
-            # (구버전: 무조건 가산 -> 정지선에서 곧장 우측으로 감겨 추종 기회 자체가
-            # 없었음. run25 실측: 탈출 직후 조향 +0.01~+0.08 로 바이어스가 지배.)
-            # 양수 = 탈출측(우). RA 맹목 폴백(ra_blind_bias)의 거울상.
+            # 탈출 락: 탈출 직후 시간창 동안 '소실 프레임에만' 우측 호 (차선 잡히면
+            # 즉시 PID 인계). 무조건 가산은 추종 기회를 없앰(run25). 양수 = 탈출측(우).
             if self._exit_lock_t > 0.0:
                 self._exit_lock_t -= dt
                 if not lane.lane_found:
@@ -402,17 +387,10 @@ class RaceStateMachine:
             # 진입 락온이 살아있는 첫 ~2초 동안만 회전 방향으로 조향을 미리 얹는다.
             if self._entry_lock_active:
                 steer = steer + self.cfg['turn_direction'] * self.cfg.get('entry_steer_bias', 0.0)
-            # 재획득 규칙 무장 (07-12): yaw 위치창(merge_yaw_lo/hi) 하드 오버라이드를
-            # 폐기하고 이벤트 기반으로 대체. RA+reacq_arm_s 이후 perception 이
-            # nl 0->1 재획득을 만나면 그 선을 우측(바깥) 경계로 분류한다.
-            # 실측 근거 (런19~26, RA 에피소드 8개 분리 분석):
-            #  - 5s 이후 0->1 은 합류부(RA+22.5~27.8s)에서만 발생, 링 순항 중 오발 0건
-            #  - 2->1 은 정상 순항(7~20s) 중 일상적(에피소드당 3~18회)이라 규칙 제외
-            #  - 하드 오버라이드 제거 근거: run20 이 순수 PID 로 블라인드 0% 완주.
-            #    블라인드 프레임은 아래 ra_blind_bias 가, 재획득 분류는 이 규칙이 담당.
-            # yaw 창 폐기 이유: yaw = 편차x시간이라 런별 속도 차로 창 위치가 밀림.
-            # 시간 하한 5s 는 진입 잔재(실측 <2.6s)와 합류부(최속 가정 ~14s) 사이라
-            # 속도 변화에 사실상 면역.
+            # 재획득 규칙 무장: RA+reacq_arm_s 후 nl 0->1 재획득 선 = 우측(바깥) 경계.
+            # 실측(런19~26): 5s 후 0->1 은 합류부에서만 발생(순항 오발 0건), 2->1 은
+            # 순항 중 일상이라 제외. 구 yaw 위치창은 속도 의존(창 밀림)으로 폐기 —
+            # 시간 하한 5s 는 진입 잔재(<2.6s)와 합류부(~14s+) 사이라 사실상 면역.
             self.reacq_armed = (self.circle_t
                                 >= self.cfg.get('reacq_arm_s', 5.0))
             # RA 맹목 폴백 (07-11 run21): 링 위에서 차선 소실 시 기본값 '직진(0.26)'은
@@ -459,14 +437,10 @@ class RaceStateMachine:
                 self._gate_off_t += dt
                 if self._gate_off_t >= self.cfg.get('gate_rearm_s', 0.5):
                     self._gate_armed = True
-            # 07-11 자율 실측: 링 주행 중 일반 차선이 1~2프레임짜리 가짜 정지선 blip 으로
-            # 잡혀(4~5초 간격), 블랭크가 풀리는 순간 단일 엣지 카운트가 그걸 물고 조기
-            # 탈출했다(+25.9초, latch=right -> 탈선). 진짜 정지선은 수 초 군집이므로
-            # 진입과 동일하게 '지속' 조건을 요구한다 (gate_sustain_s 연속 ON).
-            # 07-11: 링 중간의 '진짜 직각 실선'은 이미지로 진짜 탈출선과 구분 불가
-            # (부호·solidity·junction 전부 실측 겹침). 유일한 차이는 링 위 '위치' —
-            # 조향 적분(yaw_proxy)이 가짜 지점에서 2.6~3.2 (auto 2런 실측), 완주는
-            # ~5.5+ 로 추정되므로 4.2 이전에는 게이트를 무장하지 않는다.
+            # blip 대응: 1~2프레임 가짜 정지선이 조기 탈출 유발 -> gate_sustain_s
+            # 연속 ON 요구. 링 중간 '진짜 직각 실선'은 이미지로 구분 불가 — 유일한
+            # 차이는 링 위 '위치'(yaw_proxy) -> yaw_gate_min 전에는 게이트 비무장.
+            # 주의: yaw 는 속도 의존 (run55 실증 — 빠른 랩에서 진짜 선이 임계 미달).
             yaw_ok = self.yaw_proxy >= self.cfg.get('yaw_gate_min', 0.0)
             if (self._gate_on_t >= self.cfg.get('gate_sustain_s', 0.25)
                     and self._gate_cd <= 0.0 and self._gate_armed and yaw_ok):
@@ -494,13 +468,9 @@ class RaceStateMachine:
                     self._enter(State.DRIVE)
                     return steer, self.cfg['slow_throttle'], self.state.value
 
-                # FAILSAFE: 게이트 감지가 통과를 놓칠 수 있다 (포기 없는 미션은
-                # 어떻게든 탈출해야 함). 3중 2 추정치 표결을 백업으로 유지한다.
-                # junction 표는 점선 개구부 오검출 문제로 표결에서 제외.
-                # 이 경로도 주 탈출과 똑같이 출구측 락온을 건다 — DRIVE 복귀 후에도
-                # FOLLOW-Y 는 유지되므로 락온 없이는 링 노란선을 계속 따라 무한
-                # 순환할 수 있다. 링 중간에서 걸려도 갈림길 기하가 없으면 시드
-                # 밀기는 무해하고, 출구 개구부에 도달하는 순간 그쪽 브랜치를 잡는다.
+                # FAILSAFE: 게이트 실패 대비 3중 2 표결 백업 (junction 표는 오검출로
+                # 제외). 주 탈출과 동일하게 출구측 락온 — 락온 없인 FOLLOW-Y 가 링을
+                # 무한 순환. 링 중간에 걸려도 시드 밀기는 무해.
                 yaw_done = self.yaw_proxy >= self.cfg['yaw_lap_threshold']
                 time_done = self.circle_t >= self.cfg['nominal_loop_time_s']
                 # 가로선 표도 게이트와 같은 재등장 규율 적용: 재무장(_gate_armed,

@@ -43,10 +43,8 @@ class LaneNode(Node):
         self.declare_parameter('crossline_debug_all', False)    # 채택 후에도 전 선분 진단
         self.declare_parameter('debug_topic', '/perception/lane/debug')
         self.declare_parameter('jpeg_quality', 80)
-        # debug_hz: 디버그 이미지 그리기+JPEG 인코딩을 이 주기로 제한한다. 주행 로직은
-        # 카메라 풀레이트(20Hz) 그대로 돌지만, 대시보드는 ~7Hz로만 프레임을 가져가므로
-        # 20Hz 인코딩은 대부분 버려진다. 저주기면 보드 CPU를 아끼면서 대시보드 체감은 동일.
-        # (0 이하 = 매 프레임; 라이브로 ros2 param set /lane_node debug_hz 5.0 조절 가능)
+        # debug_hz: 디버그 그리기+JPEG 인코딩 주기 제한 (주행 로직은 20Hz 유지).
+        # 0 이하 = 매 프레임. 라이브 조절 가능.
         self.declare_parameter('debug_hz', 5.0)   # 07-09: 10->5 전력 다이어트 (그리기+JPEG 인코딩)
         self.declare_parameter('roi_top_ratio', 0.35)   # 상단 35% crop (아래 65% 사용)
         self.declare_parameter('bright_thresh', 160)
@@ -77,18 +75,10 @@ class LaneNode(Node):
         self.declare_parameter('red_hsv_lo2', [170, 80, 60])
         self.declare_parameter('red_hsv_hi2', [179, 255, 255])
         # --- bird-eye view (기본 ON) ---
-        # 평탄화한 비율 리스트 [x1,y1, x2,y2, x3,y3, x4,y4] (TL,TR,BR,BL), ROI 크기 대비 0..1
-        # 카메라 높이/각도를 다시 바꾸면 재캘리브레이션 필요.
-        # 2026-07-08: 카메라 높이 28cm 재마운트 후 실측 프레임 재캘리브레이션.
-        # 직선 구간에서 좌/우 흰선을 직선 피팅해 y=0.342h/0.965h 에서의 차선 x 를
-        # src 꼭짓점으로 사용 (차선이 워프 후 정확히 0.20w/0.80w 에 오도록 구성).
-        # 검증: 워프 후 slope L-0.021/R+0.002 (거의 수직), 차선폭 top 191/bottom 193px
-        # (목표 192px = 실차선 350mm). 이전(07-07, 낮은 마운트) 값:
-        # [0.226, 0.342, 0.745, 0.342, 0.998, 0.965, -0.006, 0.965]
+        # [x1,y1,...,x4,y4] (TL,TR,BR,BL), ROI 대비 0..1. 마운트 변경 시 재캘리 필수:
+        # 직선 구간 흰선 2개를 직선 피팅, y=0.342h/0.965h 의 차선 x 를 src 꼭짓점으로
+        # (워프 후 0.20w/0.80w). 합격: 기둥 slope ~0, 폭 192±5px @x=64/256.
         self.declare_parameter('use_birdeye', True)
-        # 07-10 재캘리: ROI 흰차선 2개를 직선 피팅해 사다리꼴을 차선 위에 정확히 얹었다.
-        # (구값은 하단 좌/우가 각각 23/25px 안쪽이라 워프 후 좌선 기울기가 -0.17 로 기울어
-        #  직선에서도 offset/curvature 가 편향됐다. 신값 검증: 좌 -0.011 / 우 -0.003, x=64/256)
         # 07-11 재캘리 (카메라 재조정 후): 워프 검증 좌 +0.003/우 +0.000, x=64/256 정확.
         self.declare_parameter('birdeye_src_ratio', [0.2598, 0.342, 0.7320, 0.342, 0.9264, 0.965, 0.0376, 0.965])
         self.declare_parameter('birdeye_dst_ratio', [0.20, 0.00, 0.80, 0.00, 0.80, 1.00, 0.20, 1.00])
@@ -124,15 +114,9 @@ class LaneNode(Node):
         self.declare_parameter('fork_seed_px', 90)                  # 브랜치 선택 시드 이동량(px)
         # --- 노란색 우선 추종 (In 코스: 노란 진입 커브/회전교차로 링) ---
         self.declare_parameter('follow_yellow', True)               # In 코스 색상 추종 상태머신 on/off
-        # 07-10 실측: 노랑이 전혀 없는 흰색 구간 232프레임의 yellow_ratio 최댓값이 0.0005.
-        # 0.03 은 노란선이 보이기 시작한 뒤에도 1.8초를 더 기다렸다 -> 0.005 로 낮춘다
-        # (노이즈 바닥 대비 10배 여유; 해제문턱 0.005*0.5=0.0025 도 바닥의 5배).
-        # 07-11: 0.005 는 출발 직후 원거리 노란 마킹(yr 0.01~0.08)에 조기 래치해 흰 차선을
-        # 버리고 요동 -> 이탈을 유발했다 (실주행 2회 재현). 0.03 복원.
-        # 07-11 오전: 0.01 완화 실험(run8) 결과 — 입구 yr 램프가 0.01->0.05 를 0.3초에
-        # 통과해 래치 시점이 0.03 대비 최대 0.3초밖에 안 당겨짐 (죽은 레버). 대신 방황 중
-        # 3% 노란 조각에 재래치돼 우측 이탈을 유발 -> 0.03 복원. 입구 실패의 본체는
-        # 문턱이 아니라 래치 후 단선 좌/우 분류 요동 (run7/run8 동일 서명, §3.6-2 대상).
+        # 흰 구간 노이즈 바닥 0.0005 (07-10, 232f). 0.005/0.01 은 원거리 노란 마킹
+        # 조기 래치 이탈(07-11, 3회) -> 0.03. 07-12: 분기 yr 피크 런별 0.026~0.095
+        # 실측 -> 라이브 0.02 운용 (aux.sh).
         self.declare_parameter('follow_yellow_ratio', 0.03)         # 이 노란비율 이상 -> YELLOW 모드 진입
                                                                     # (노란선이 점선이라 yr 이 낮음)
         self.declare_parameter('follow_yellow_exit_white_ratio', 1.0)  # 흰픽셀 > 이 배율*노란픽셀 (해제 조건 일부)
@@ -142,33 +126,15 @@ class LaneNode(Node):
         self.declare_parameter('yellow_solid_min_h_ratio', 0.30)       # "실선" 판정 최소 세로 비율
         self.declare_parameter('yellow_dash_fallback_px', 120)         # 실선 픽셀 이 미만이면 점선 포함 폴백
         self.declare_parameter('dash_fallback_exit_frames', 30)        # 폴백 해제(실선 복귀)에 필요한 연속 프레임 (1s)
-        # 07-11: 이 보정의 a_h(전체 마스크 피팅)가 ±2.5 로 널뛰어 gain 0.4 에서 보정항이
-        # offset 을 ±1.0 통째로 뒤흔들었다 (nl=2 에서도 off ±0.9 요동 -> 이탈). OFF.
-        self.declare_parameter('yellow_heading_gain', 0.0)             # 헤어핀 주축 기울기 헤딩 보정 게인 (0=off)
-        # 최종 차선중심 연속성 가드: 프레임당 중심 이동 상한 = 반 차폭 x 이 비율 (0=off).
-        # 07-11 run9: 분기 목에서 점선+실선이 nl=2 로 잡히며 중점이 한 프레임에 점프
-        # -> 우 급반전 -> 진입 실패. 상세는 lane_detector.__init__ 주석.
-        self.declare_parameter('center_jump_max_ratio', 0.10)   # 07-11 run10/11: 0.15 는 쐐기 당김 통과 -> 0.10 확정
-        # 진입 병합(1L) 모드: 진입 좌회전 중 '안쪽 실선 소실 순간'(dash 폴백 진입)부터
-        # 이 프레임 동안 밴드 좌/우 분할을 끄고 노란 전체 평균을 "바깥선 하나"로 취급
-        # (중심 = 선 - 반차폭). ~2s@20fps. 0=off. 래치당 1회.
-        # 상세 근거는 lane_detector.__init__ 주석 (run9~11 쐐기 + run14 조기무장 실측).
-        self.declare_parameter('entry_oneline_frames', 80)   # 07-11 run17: 저속에서 2s 미완 만료 -> 4s
-        # 1L 창에서 쓰는 하단 밴드 수 (07-12 run40: 원거리 링 호가 전체평균을 좌로
-        # 오염 -> 급좌 다이브. 하단 밴드에는 진입 점선만 있어 구조적 차단)
-        self.declare_parameter('oneline_near_bands', 2)
-        # 개구부 1L 창 (07-12): RA 진입/해제 '전이 엣지'에서 1L 재무장. 개구부 두 점선
-        # 열의 nl=2 쐐기 차단 (run27~29 이탈 4회, 영상 실증). lane_detector 주석 참고.
-        # 07-12 run31 A/B: 사용자 요청으로 일단 0(off) = 원래 동작. run30 실측은
-        # "창이 덮은 0~5s 는 통과, 창 종료 후 8.1s 이탈" — 재활성 시 진입 160 권장.
+        self.declare_parameter('yellow_heading_gain', 0.0)   # a_h 널뜀으로 OFF (07-11, detector 주석)
+        # 연속성 가드/1L 계열 — 근거는 lane_detector.__init__ 주석 참고.
+        self.declare_parameter('center_jump_max_ratio', 0.10)   # 0.15 는 쐐기 당김 통과 -> 0.10 확정
+        self.declare_parameter('entry_oneline_frames', 80)   # ~4s (run17: 2s 는 저속 미완 만료)
+        self.declare_parameter('oneline_near_bands', 2)      # 1L 하단 밴드 수 (run40)
         self.declare_parameter('ra_entry_oneline_frames', 0)     # 0=off. 재활성 시 160(~8s)
         self.declare_parameter('ra_exit_oneline_frames', 0)      # 0=off. 재활성 시 60(~3s)
-        # --- 슬라이딩 윈도우(SW) 코리도 추적 (07-12 설계; RA 진입/탈출 전이 창 전용) ---
-        # 하드코딩 호(시간 기반 개루프)가 배터리별 속도 차로 런마다 다른 호를 그리는
-        # 문제(run47 통과/run48 실패, 같은 코드)의 위치 기반 폐루프 대체. 유효 락
-        # 프레임만 밴드를 대체하고 실패 프레임은 기존(run47) 경로 그대로 = 폴백 보장.
-        # 상세 설계/근거는 lane_detector.__init__ 의 sw_* 주석.
-        # 전부 라이브 변경 가능: ros2 param set /lane_node sw_entry_frames 140
+        # --- SW 코리도 추적 — 상세는 lane_detector.__init__ sw_* 주석. 락 프레임만
+        # 밴드 대체(실패 = 폴백). 전부 라이브: ros2 param set /lane_node sw_entry_frames 440
         self.declare_parameter('sw_entry_frames', 0)      # RA 진입 창(프레임). 0=off. 권장 140(~7s@20fps, 링 초반 확률구간 커버)
         self.declare_parameter('sw_exit_frames', 0)       # RA 탈출 창. 0=off. 권장 60(~3s)
         self.declare_parameter('sw_entry_input', 'solid') # 진입 입력: solid(병합 사선 제거) | raw
