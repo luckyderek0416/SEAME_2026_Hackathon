@@ -66,7 +66,7 @@ class DecisionNode(Node):
         # 하한 실측 (run60/61/62, PWM 틱 단위): 틱323(0.155)=링 3% / 틱324(0.16)=14%
         # / 틱325(0.17+)=진입 즉사. 1틱=스로틀 0.0098 — 틱 경계 안 넘는 변경은 무효.
         self.declare_parameter('slow_throttle', 0.16)    # 전 구간 하한 (틱 324)
-        self.declare_parameter('yellow_throttle', 0.18)  # 노랑/링 구간 '순항' 기본값 (곡률 감속의 시작점, 틱 326)
+        self.declare_parameter('yellow_throttle', 0.185)  # 노랑/링 구간 '순항' 기본값 (곡률 감속의 시작점)
         # 노란 구간(DRIVE[Y]) 판정 문턱 — 노랑이 이 비율 이상이면 slow_throttle 캡
         # (07-12: 전용 변수 yellow_drive_throttle 폐지, slow 로 통일 — 사용자 확정)
         self.declare_parameter('yellow_slow_ratio', 0.03)   # 노란 구간 판정 문턱 (FOLLOW-Y 와 동일 값 유지 — 07-11 run8 후 0.03 복원에 동기화)   # 1587us: ROUNDABOUT 주행 + 감속 바닥.
