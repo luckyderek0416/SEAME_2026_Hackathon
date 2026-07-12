@@ -203,6 +203,7 @@ class DecisionNode(Node):
         # (post-PID) 우측 편향 -> 개구부의 차선 소실에도 우회전 유지. fork_bias 대체.
         self.declare_parameter('exit_steer_bias', 0.18)      # 양수 = 탈출측(우)
         self.declare_parameter('exit_lock_release_s', 2.5)
+        self.declare_parameter('exit_throttle', 0.165)   # 탈출 스윙 저속 캡 (run60 실증값; slow_throttle 상향과 분리)
         # 진입 락온 중 조향 피드포워드 (음수 = 링 안쪽/좌). 진입 급좌회전 언더스티어
         # 대응 — 총 편향 0.15 는 언더스티어 재발(run15), -0.22 사용자 지정.
         self.declare_parameter('entry_steer_bias', -0.15)
@@ -296,6 +297,7 @@ class DecisionNode(Node):
             'entry_lock_release_s': float(g('entry_lock_release_s').value),
             'exit_steer_bias': float(g('exit_steer_bias').value),
             'exit_lock_release_s': float(g('exit_lock_release_s').value),
+            'exit_throttle': float(g('exit_throttle').value),
             'entry_steer_bias': float(g('entry_steer_bias').value),
             'gate_blank_s': float(g('gate_blank_s').value),
             'gate_sustain_s': float(g('gate_sustain_s').value),
@@ -485,6 +487,14 @@ class DecisionNode(Node):
         adj = float(getattr(self.sm, 'throttle_adj', 0.0))
         if adj != 0.0 and throttle > 0.05:
             throttle = throttle + adj
+        # 탈출 직후 저속 캡 (07-12 run60/61 A/B): 탈출 스윙 구간은 slow_throttle
+        # 상향(0.17)과 무관하게 run60 의 저속(0.165+adj)이 정답 — run61 에서
+        # 0.174 로 빨라지자 스윙이 과회전해 코리도를 가로질렀다(v44 수직 실측).
+        # 창 = 탈출 락 시간(exit_lock_release_s, 모든 탈출 경로에서 장전).
+        if (float(getattr(self.sm, '_exit_lock_t', 0.0)) > 0.0
+                and throttle > 0.05):
+            throttle = min(throttle,
+                           float(self.sm.cfg.get('exit_throttle', 0.165)) + adj)
         if adj != self._last_thr_adj:
             self.get_logger().info(f'throttle_adj -> {adj:+.3f} (G->latch 실측 기반)')
             self._last_thr_adj = adj
