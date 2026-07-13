@@ -453,6 +453,14 @@ class LaneDetector:
                            and self.drive_mode == 'ROUNDABOUT'
                            and self._sw_left > 0
                            and getattr(self, '_sw_interior', None) is not None)
+        # 분류기 비활성 억제 (07-13 run102, 사용자 방어 설계): stopline_mode 1 인데
+        # RA 중 분류기 전제(코리도 락/내부 기하)가 안 서는 프레임은 구식 경로로
+        # 폴백하지 않고 crossline 자체를 억제한다. B 누출(0.06~0.18s 가변)은 전부
+        # "분류기가 눈 감은 프레임"에서 나왔다 — 눈 감은 검출은 신뢰하지 않는다.
+        # A 재도달 순간 코리도가 하필 언락이면 미발화 -> 2랩 자가복구 (늦는 쪽 안전).
+        if (int(getattr(self, 'stopline_mode', 0)) == 1
+                and self.drive_mode == 'ROUNDABOUT' and not stopline_active):
+            return False
         span_ivs = []
         if stopline_active:
             _im, _ia, _ib, _iside = self._sw_interior
