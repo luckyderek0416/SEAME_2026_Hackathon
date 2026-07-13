@@ -1,0 +1,73 @@
+digraph dataflow {
+    label="D-Racer 자율주행 데이터 흐름 (2026-07-13 기준)";
+    labelloc=t;
+    fontsize=24;
+    fontname="Noto Sans CJK KR";
+    rankdir=TB;
+    compound=true;
+    node [fontname="Noto Sans CJK KR", shape=box, style="rounded,filled"];
+    edge [fontname="Noto Sans CJK KR", fontsize=12];
+
+    camera [label="camera_node\nUSB 카메라 (vehicle_config.yaml)\n320×160 JPEG 30Hz", fillcolor="#ffe9a8", shape=box3d];
+
+    subgraph cluster_perception {
+        label="① 인지 (Perception)";
+        fontsize=17;
+        style="rounded,filled";
+        fillcolor="#dcebf7";
+        aruco [label="aruco_node\ncv2.aruco DICT_6X6_50\n(동적 장애물 마커, 12Hz)\n사전은 실물과 일치 필수", fillcolor="#bcd7ee"];
+        yolo [label="yolo_ncnn_node (NCNN)\nred/green_light,\nleft/right_sign", fillcolor="#bcd7ee"];
+        lane [label="lane_node (OpenCV)\nROI→BEV→HSV(흰+노랑)→guided 멀티밴드\n+ SW 코리도 (In: 노랑 / Out: 흰 상시)\n정지선 3층 방어: 곡률가드·교차게이트·STOPLINE\n갈림길 시야 마스킹 (fork_blind 40%)", fillcolor="#bcd7ee"];
+    }
+
+    subgraph cluster_decision {
+        label="② 판단 (Decision)";
+        fontsize=17;
+        style="rounded,filled";
+        fillcolor="#ddeed4";
+        decision [label="decision_node\n라이브 파라미터 허브\n표지판 표결 (5중 2표, conf 0.5)", fillcolor="#c2e0ae"];
+        sm [label="state_machine (두뇌)\nWAIT_GREEN→DRIVE⇄ROUNDABOUT\n⇄OBSTACLE_STOP →FINISH→DONE\n조향=차선 PID (kp0.6 kd0.15) + 곡률 감속\nRA 게이트=가로선 군집 카운트 (gate=1 exitV=2)\n탈출 후 병합 브리지 (무검출=완만 좌호 6s)", fillcolor="#c2e0ae"];
+    }
+
+    subgraph cluster_actuation {
+        label="③ 구동 (Actuation)";
+        fontsize=17;
+        style="rounded,filled";
+        fillcolor="#fbdce8";
+        control [label="control_node (respawn)\nPCA9685 @I2C-3 0x40, 20Hz\n1틱=스로틀 0.0098 (0.16≡0.165)\nESC 아밍 + E-STOP", fillcolor="#f6b8d0"];
+        pwm [label="ch0: 조향 서보 / ch1: ESC 구동모터\n(1500µs=중립)", fillcolor="#f6b8d0", shape=box3d];
+    }
+
+    subgraph cluster_support {
+        label="지원 노드";
+        fontsize=17;
+        style="rounded,filled";
+        fillcolor="#eeeeee";
+        joystick [label="joystick_node\n(E-stop 백업)", fillcolor="#d7d7d7"];
+        battery [label="battery_node (respawn)\nINA219 @I2C-3 0x42", fillcolor="#d7d7d7"];
+        monitor [label="monitor_node\nFlask 웹 :5000\n원본+차선 디버그+배터리", fillcolor="#d7d7d7"];
+    }
+
+    car [label="🚗 차가 움직임", fillcolor="#fff3a8", shape=ellipse];
+
+    camera -> aruco;
+    camera -> yolo;
+    camera -> lane [label="/camera/image/compressed"];
+
+    aruco -> decision [label="/perception/aruco\n(detected, area)"];
+    yolo -> decision [label="/inference/detections"];
+    lane -> decision [label="/perception/lane\n(offset, curvature, junction,\nyellow, crossline, fork)"];
+
+    decision -> lane [label="/decision/fork_dir\n(확정 방향→시야 마스킹)", style=dashed, color="#b05a00", fontcolor="#b05a00", constraint=false];
+
+    decision -> sm [label="step()", dir=both, style=dashed];
+    decision -> control [label="/control\n(steering, throttle)"];
+    joystick -> control [label="/joystick (E-stop)"];
+    control -> pwm [label="PWM (I2C)"];
+    pwm -> car;
+
+    camera -> monitor [style=dashed];
+    lane -> monitor [label="/perception/lane/debug\n(BEV SRC뷰+밴드창)", style=dashed];
+    decision -> monitor [style=dashed];
+    battery -> monitor [label="battery_status", style=dashed];
+}
