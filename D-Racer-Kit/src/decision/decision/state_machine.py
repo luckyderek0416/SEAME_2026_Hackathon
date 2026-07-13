@@ -77,6 +77,7 @@ class RaceStateMachine:
         self._latch_seen = False      # 런당 1회
         self.throttle_adj = 0.0       # 순항 스로틀 가산 보정 (decision_node 가 적용)
         self.yaw_proxy = 0.0          # IMU 없는 헤딩 추정치 (조향 적분)
+        self._merge_bridge_t = 0.0    # 병합 브리지 잔여 시간 (RA 탈출 시 무장)
         self._entry_votes = 0         # 마지막 회전교차로 진입 투표 수 (디버그/로그)
         self._exit_votes = 0          # 마지막 회전교차로 탈출 투표 수 (디버그/로그)
         self._entry_lock_active = False  # 진입측 락온이 걸려 있는 동안 True (one-shot)
@@ -112,6 +113,8 @@ class RaceStateMachine:
 
     # ---------- 조향 (항상 차선 PID) ----------
     def _lane_steer(self, lane, dt):
+        if self._merge_bridge_t > 0.0 and lane.lane_found:
+            self._merge_bridge_t = max(0.0, self._merge_bridge_t - dt)
         if lane.lane_found:
             # 07-11 방안1: fork 편향(_turn_bias) 을 조향 경로에서 제거. 목표측 가산은
             # 차선 소실 시 증발해 탈출 개구부에서 무력했다 (run20: 우회전 1.5초 사망).
@@ -123,6 +126,13 @@ class RaceStateMachine:
             # 차선 놓침: DRIVE 는 '직전 조향 EMA' 유지 (직진 폴백이 커브를 뚫던
             # run47 전환부 이탈 대응), 3s 시정수로 중앙 수렴. RA 는 ra_blind_bias
             # 전담 (중복 가산 방지).
+            if self.state == State.DRIVE and self._merge_bridge_t > 0.0:
+                # 병합 브리지 (07-13): 탈출 직후 무차선 구간은 직전 조향 관성이 아니라
+                # 기하 사전값(병합은 항상 완만한 좌호)으로 통과한다. run83/84 우측 표류
+                # + 분기 점선 오추종 좌이탈의 공통 봉합.
+                self._merge_bridge_t = max(0.0, self._merge_bridge_t - dt)
+                return float(self.cfg['steer_center']
+                             + self.cfg.get('merge_blind_bias', 0.0))
             if self.state == State.DRIVE and self._steer_hold is not None:
                 center = self.cfg['steer_center']
                 self._steer_hold += (center - self._steer_hold) * min(1.0, dt / 3.0)
@@ -521,6 +531,7 @@ class RaceStateMachine:
                     self.turn_latch_age = 0.0
                     self._fork_seen = False
                     self.roundabout_done = True
+                    self._merge_bridge_t = float(self.cfg.get('merge_bridge_s', 0.0))
                     self._enter(State.DRIVE)
                     return steer, self.cfg['slow_throttle'], self.state.value
 
@@ -552,6 +563,7 @@ class RaceStateMachine:
                     self.turn_latch_age = 0.0
                     self._fork_seen = False
                     self.roundabout_done = True
+                    self._merge_bridge_t = float(self.cfg.get('merge_bridge_s', 0.0))
                     self._enter(State.DRIVE)
                     return steer, self.cfg['slow_throttle'], self.state.value
 
@@ -561,6 +573,7 @@ class RaceStateMachine:
                 self.turn_latch_age = 0.0
                 self._fork_seen = False
                 self.roundabout_done = True
+                self._merge_bridge_t = float(self.cfg.get('merge_bridge_s', 0.0))
                 self._enter(State.DRIVE)
             return steer, self.cfg['slow_throttle'], self.state.value
 

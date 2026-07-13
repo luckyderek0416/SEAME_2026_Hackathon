@@ -198,6 +198,9 @@ class LaneDetector:
         self.w_align_frames = 60        # 창 길이 (~3s@20fps, run59 리플레이: 2s 는 사선 구간 전에 만료). 0=off
         self.w_align_gain = 0.4         # 기울기 -> offset 보정 게인. 0=보정만 off
         self.w_align_min_px = 80        # 점선 필터 결과 이 미만이면 raw 흰 폴백
+        self.w_align_dash_fallback = 0  # 0(기본)=폴백 금지: 점선 잡지 말고 무검출 -> 결정층 브리지 바이어스에 위임
+        self.follow_yellow_blind_release_frames = 12  # 흰 우세 없이도 노랑 소실 지속 시 해제 (0=off)
+        self._yellow_blind_count = 0
         self._w_align_left = 0
         self.course = course
         self._following_yellow = False   # 현재 YELLOW 모드인지 (프레임 간 유지)
@@ -601,6 +604,21 @@ class LaneDetector:
                             self._w_align_left = int(self.w_align_frames)
                 else:
                     self._yellow_exit_count = 0
+                # 블라인드 해제 (07-13): 병합부에서 노랑도 흰도 안 보이면 흰 우세
+                # 조건이 영영 안 걸려 DRIVE[Y] 에 고착된다 (run83/84 의 3~4s 무검출).
+                # 노랑 소실만 지속돼도 해제해 브리지(w_align + 결정층 바이어스)를 무장.
+                if yellow_gone and int(self.follow_yellow_blind_release_frames) > 0:
+                    self._yellow_blind_count += 1
+                    if (self._following_yellow and self._yellow_blind_count
+                            >= int(self.follow_yellow_blind_release_frames)):
+                        self._following_yellow = False
+                        self._yellow_exit_count = 0
+                        self._yellow_blind_count = 0
+                        self._oneline_left = 0
+                        if self._ra_seen and int(self.w_align_frames) > 0:
+                            self._w_align_left = int(self.w_align_frames)
+                else:
+                    self._yellow_blind_count = 0
             else:
                 self._yellow_exit_count = 0   # ROUNDABOUT: 강제 YELLOW 유지
             if self._following_yellow:
@@ -648,6 +666,10 @@ class LaneDetector:
                     wf = self._filter_yellow_dashes(wmask)
                     if cv2.countNonZero(wf) >= int(self.w_align_min_px):
                         sel = wf
+                    elif not int(getattr(self, 'w_align_dash_fallback', 1)):
+                        # 실선 부족 = 점선(분기 표식)만 보이는 프레임: 잡지 않는다.
+                        # 무검출로 두면 결정층 병합 브리지가 완만 좌호로 끌고 간다.
+                        sel = np.zeros_like(wmask)
                     sel = cv2.bitwise_or(sel, ymask)
                 self._yellow_dash_cx = None
                 self._dash_fallback_on = False

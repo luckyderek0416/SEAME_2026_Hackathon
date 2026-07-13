@@ -164,6 +164,8 @@ class DecisionNode(Node):
         # RA 맹목 폴백 (07-11 run21): RA 중 차선 소실 프레임의 조향을 직진 대신
         # 링 유지 호로. 진입 락과 중복 가산 안 함. 음수 = 안쪽(좌).
         self.declare_parameter('ra_blind_bias', -0.15)
+        self.declare_parameter('merge_blind_bias', 0.10)   # 병합 브리지 무검출 조향(+=좌). RA 탈출 직후 무차선 구간용
+        self.declare_parameter('merge_bridge_s', 6.0)      # 브리지 창 길이(초). 0=off
         # 골든런 실측: 랩 19.7s, 진입 정지선 군집 3.9s, 가짜 0건. 자율 1차에서 8.6s
         # 링 안 직각 실선 오인 조기 탈출 -> 17s 까지 블랭크 (진짜 탈출 ~20s+ 무지장).
         # 주의: 시간 기반이라 속도 밴드에 민감 — run55 고속 랩(20.5s)에선 랩의 90%.
@@ -277,6 +279,8 @@ class DecisionNode(Node):
             'circle_steer_bias': float(g('circle_steer_bias').value),
             'reacq_arm_s': float(g('reacq_arm_s').value),
             'ra_blind_bias': float(g('ra_blind_bias').value),
+            'merge_blind_bias': float(g('merge_blind_bias').value),
+            'merge_bridge_s': float(g('merge_bridge_s').value),
             'min_loop_time_s': float(g('min_loop_time_s').value),
             'ra_ref_drive_s': float(g('ra_ref_drive_s').value),
             'throttle_ref_latch_s': float(g('throttle_ref_latch_s').value),

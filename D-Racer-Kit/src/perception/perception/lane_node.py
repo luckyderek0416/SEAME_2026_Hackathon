@@ -46,6 +46,8 @@ class LaneNode(Node):
         self.declare_parameter('stopline_ang_max', 15.0)
         self.declare_parameter('stopline_cov_min', 0.35)
         self.declare_parameter('stopline_sol_min', 0.55)
+        self.declare_parameter('w_align_dash_fallback', 0)
+        self.declare_parameter('follow_yellow_blind_release_frames', 12)
         self.declare_parameter('crossline_sw_margin', 40.0)      # 교차 판정 여유(px)
         self.declare_parameter('crossline_debug_all', False)    # 채택 후에도 전 선분 진단
         self.declare_parameter('debug_topic', '/perception/lane/debug')
@@ -273,6 +275,8 @@ class LaneNode(Node):
         self.detector.stopline_ang_max = float(gp('stopline_ang_max').value)
         self.detector.stopline_cov_min = float(gp('stopline_cov_min').value)
         self.detector.stopline_sol_min = float(gp('stopline_sol_min').value)
+        self.detector.w_align_dash_fallback = int(gp('w_align_dash_fallback').value)
+        self.detector.follow_yellow_blind_release_frames = int(gp('follow_yellow_blind_release_frames').value)
         self.detector.crossline_sw_margin = float(gp('crossline_sw_margin').value)
         self.detector.crossline_debug_all = bool(gp('crossline_debug_all').value)
         self.detector.filter_yellow_dashes = bool(gp('filter_yellow_dashes').value)
