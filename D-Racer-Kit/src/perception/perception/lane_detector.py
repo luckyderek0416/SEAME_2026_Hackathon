@@ -596,8 +596,14 @@ class LaneDetector:
                 # WHITE 복귀 = "노랑 소실" AND "흰 우세" 연속 N프레임 (__init__ 주석).
                 wcount = int(np.count_nonzero(wmask))
                 ycount = int(np.count_nonzero(ymask))
-                yellow_gone = yellow_ratio < (self.follow_yellow_ratio
-                                              * self.follow_yellow_exit_yellow_frac)
+                # 해제 문턱 스코프 (07-13 run100 분석): exit_yellow_frac 3.0
+                # (yr<0.06 조기 해제)은 병합(RA 후) 전용. 진입/북상 구간은 yr 이
+                # 0.05대라 전역 적용 시 래치가 12프레임마다 플랩한다 — RA 전에는
+                # 검증값(0.75) 상한으로 캡.
+                eff_frac = (float(self.follow_yellow_exit_yellow_frac)
+                            if self._ra_seen
+                            else min(0.75, float(self.follow_yellow_exit_yellow_frac)))
+                yellow_gone = yellow_ratio < (self.follow_yellow_ratio * eff_frac)
                 white_dom = wcount > self.follow_yellow_exit_white_ratio * max(1, ycount)
                 if yellow_gone and white_dom:
                     self._yellow_exit_count += 1
