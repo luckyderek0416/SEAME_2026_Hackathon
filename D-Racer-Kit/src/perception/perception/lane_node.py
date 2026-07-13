@@ -139,6 +139,7 @@ class LaneNode(Node):
         self.declare_parameter('w_align_frames', 60)    # 창 길이 (~3s). 0=off
         self.declare_parameter('w_align_gain', 0.4)     # 헤딩 정렬 게인 (0=보정 off)
         self.declare_parameter('w_align_min_px', 80)    # 점선 필터 폴백 문턱
+        self.declare_parameter('yw_premix', 0)          # RA 후 Y래치 중 흰 실선 선행 혼합
         self.declare_parameter('filter_yellow_dashes', True)           # Y추종 중 점선/정지선 track 제외 (실선만)
         self.declare_parameter('yellow_solid_min_h_ratio', 0.30)       # "실선" 판정 최소 세로 비율
         self.declare_parameter('yellow_dash_fallback_px', 120)         # 실선 픽셀 이 미만이면 점선 포함 폴백
@@ -264,6 +265,7 @@ class LaneNode(Node):
         self.detector.w_align_frames = int(gp('w_align_frames').value)
         self.detector.w_align_gain = float(gp('w_align_gain').value)
         self.detector.w_align_min_px = int(gp('w_align_min_px').value)
+        self.detector.yw_premix = int(gp('yw_premix').value)
         self.detector.crossline_min_area_px = int(gp('crossline_min_area_px').value)
         self.detector.crossline_perp_tol_deg = float(gp('crossline_perp_tol_deg').value)
         self.detector.crossline_bev_aspect = float(gp('crossline_bev_aspect').value)

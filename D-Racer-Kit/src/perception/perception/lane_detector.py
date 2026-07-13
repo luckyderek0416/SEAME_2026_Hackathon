@@ -199,6 +199,17 @@ class LaneDetector:
         self.w_align_gain = 0.4         # 기울기 -> offset 보정 게인. 0=보정만 off
         self.w_align_min_px = 80        # 점선 필터 결과 이 미만이면 raw 흰 폴백
         self.w_align_dash_fallback = 0  # 0(기본)=폴백 금지: 점선 잡지 말고 무검출 -> 결정층 브리지 바이어스에 위임
+        # Y+W 선행 혼합 (07-13 run103, 사용자 설계): RA 후 DRIVE[Y] 중 흰 '실선'을
+        # track 에 미리 합성. 높이 게이트(_filter_yellow_dashes)가 흰 점선(개구부
+        # 표식)과 가로로 누운 먼 도로선을 걸러 평행해진 흰 실선만 통과 —
+        # ① 좌곡에서 안쪽 노랑 순간 소실 시 픽 유지 ② 해제 전 nl=2 인계 기하.
+        # 무장 게이트 (07-13 run105: 탈출 스윙 중 노랑이 시야를 벗어난 순간
+        # 아웃코스 흰 호를 혼합해 좌훅 이탈 — 높이 게이트만으론 부족):
+        # 탈출 코리도 창 밖 + 노란 실선 위에 실제로 앉은 프레임에서만 무장하고,
+        # 노랑 소실 시 carry 프레임 동안만 흰 실선이 픽을 인계한다(분기 딥 구제).
+        self.yw_premix = 0
+        self.yw_premix_carry_frames = 30   # ~1.5s@20fps (run103 딥 0.75s 커버)
+        self._yw_carry = 0
         self.follow_yellow_blind_release_frames = 12  # 흰 우세 없이도 노랑 소실 지속 시 해제 (0=off)
         self._yellow_blind_count = 0
         self._w_align_left = 0
@@ -243,6 +254,7 @@ class LaneDetector:
         # 단선 좌/우 분류용 점선 힌트: 실선은 항상 점선의 반대편 경계 — 화면 기준이
         # 아니라 점선 대비 위치로 분류. None = 힌트 없음.
         self._yellow_dash_cx = None
+        self._yellow_dash_px = 0
         # 현재 주행 모드(상태머신 상태 문자열). decision 이 publish 하고 lane_node 가
         # 매 프레임 갱신 -> BEV 디버그 화면에 표시. '' 면 표시 안 함(decision 미실행).
         self.drive_mode = ''
@@ -677,10 +689,35 @@ class LaneDetector:
                 # 점선 힌트 갱신: 필터로 제거된 점선 픽셀들의 평균 x (track 과 같은
                 # BEV 공간). 폴백으로 sel=ymask 면 차분이 비어 힌트 없음(기존 동작).
                 dash = cv2.subtract(ymask, sel)
-                if cv2.countNonZero(dash) >= 30:
+                self._yellow_dash_px = int(cv2.countNonZero(dash))
+                if self._yellow_dash_px >= 30:
                     self._yellow_dash_cx = float(np.nonzero(dash)[1].mean())
                 else:
                     self._yellow_dash_cx = None
+                # Y+W 선행 혼합 (__init__ yw_premix 주석): 병합 접근에서만.
+                # 점선 힌트(dash) 계산 뒤에 섞어 노랑 전용 신호는 오염되지 않는다.
+                # _prev_drive_mode 조건 = RA->DRIVE 전이 프레임 차단 (코리도 창이
+                # 같은 프레임 뒤쪽에서 무장되므로 _sw_left 만으론 엣지가 새어든다).
+                if (int(getattr(self, 'yw_premix', 0))
+                        and self._ra_seen and self.drive_mode != 'ROUNDABOUT'
+                        and self._prev_drive_mode != 'ROUNDABOUT'):
+                    if (self._sw_left <= 0
+                            and cv2.countNonZero(solid)
+                            >= int(self.yellow_dash_fallback_px)):
+                        self._yw_carry = int(self.yw_premix_carry_frames)
+                    elif self._yw_carry > 0:
+                        self._yw_carry -= 1
+                    if self._yw_carry > 0:
+                        wf_pre = self._filter_yellow_dashes(wmask)
+                        # 근거리 한정 (07-13 run108): 분기 너머 원거리 흰 도로가
+                        # 세로 성분으로 높이 게이트를 통과, S커브에서 직선 오추종
+                        # -> 우곡 이탈. 병합 표적 흰 실선은 하단 절반에 크게
+                        # 들어오므로 상단 절반은 버린다.
+                        wf_pre[:wf_pre.shape[0] // 2, :] = 0
+                        if cv2.countNonZero(wf_pre) >= int(self.w_align_min_px):
+                            sel = cv2.bitwise_or(sel, wf_pre)
+                else:
+                    self._yw_carry = 0
             else:
                 sel = wmask
                 if self._w_align_left > 0:
@@ -696,6 +733,7 @@ class LaneDetector:
                 self._yellow_dash_cx = None
                 self._dash_fallback_on = False
                 self._solid_ok_count = 0
+                self._yw_carry = 0
             track = cv2.morphologyEx(sel, cv2.MORPH_OPEN, k) if use_morph else sel
         else:
             self._following_yellow = False
@@ -704,6 +742,7 @@ class LaneDetector:
             self._yellow_dash_cx = None
             self._dash_fallback_on = False
             self._solid_ok_count = 0
+            self._yw_carry = 0
 
         # 차선 주축 a_h = dx/dy 갱신 (다음 프레임 정지선 직교 게이트용). 정지선 스캔
         # 창과 '같은 행 범위'에서만 잰다 — 전체 피팅은 휜 실선에서 국소 접선이 아닌
@@ -1068,6 +1107,15 @@ class LaneDetector:
         if self._yellow_dash_cx is not None:
             if line < self._yellow_dash_cx:
                 return line + half, 1   # 실선이 점선보다 왼쪽 = 왼쪽 경계
+            # RA 순환 개구부 유출 차단 (07-13 run105): 개구부 점선 호 '너머'
+            # (오른쪽)의 단독 실선은 링 밖 접선 도로 실선이다 — 우측 경계로
+            # 해석해 반차폭 왼쪽을 지켜도 선 자체가 밖으로 뻗어 유출된다(실측).
+            # 프레임 기각 -> 무검출 관성으로 개구부 통과 (개구부에서 아무것도
+            # 안 보일 때와 같은 검증된 경로). 점선 질량/여유 하한으로 잡음 배제.
+            if (self.drive_mode == 'ROUNDABOUT'
+                    and int(getattr(self, '_yellow_dash_px', 0)) >= 150
+                    and line - self._yellow_dash_cx > 25.0):
+                return None, 0
             return line - half, 1       # 실선이 점선보다 오른쪽 = 오른쪽 경계
         # 시간 연속성 분류: 직전 중심에 더 가까운 해석을 고른다 — 화면 반쪽 기준은
         # 단선이 중앙을 넘나드는 커브에서 좌/우가 매 프레임 뒤집혀 이탈 (07-11 첫
