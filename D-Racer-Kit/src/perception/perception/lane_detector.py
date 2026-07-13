@@ -264,6 +264,8 @@ class LaneDetector:
         self.sw_entry_input = 'solid'   # 진입 창 입력: 'solid'(dash 제거) | 'raw'
         self.sw_exit_input = 'raw'      # 탈출 창 입력: 점선이 좌측 경계라 raw 필수
         self.sw_num_boxes = 9           # 상자 개수 (ROI 세로 분할)
+        self.sw_curv_max_a = 0.003      # 진입 창 우곡률 상한 (run87 실측: 링 -0.013~+0.0015,
+                                        # B 가지 +0.006 — 초과 피팅 기각 = 개구부 가지 오물림 방지)
         self.sw_box_margin = 30         # 상자 반폭(px)
         self.sw_max_shift = 20          # 상자당 중심 이동 상한(px) — 누운 실선 끌림/반대 가지 점프 차단
         self.sw_min_box_px = 8          # 상자 '적중' 최소 픽셀
@@ -1126,6 +1128,14 @@ class LaneDetector:
                 fits.append(f)
         if not fits:
             return None
+
+        # 곡률 부호 가드 (run87 실측): 링 순환(진입 창) 중 B 개구부의 우곡률 가지
+        # (a=+0.006 대역)를 물면 링 밖으로 끌려간다. 우곡률 상한 초과 피팅은 버리고
+        # 시드 연속성(직전 피팅)으로 관성 통과한다. race_dir=left 전제.
+        if self._sw_dir < 0 and float(getattr(self, 'sw_curv_max_a', 0.0)) > 0.0:
+            fits = [f for f in fits if f['abc'][0] <= float(self.sw_curv_max_a)]
+            if not fits:
+                return None
 
         def ev(f, y):
             a, b, c = f['abc']

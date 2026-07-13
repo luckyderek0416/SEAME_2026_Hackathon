@@ -41,6 +41,7 @@ class LaneNode(Node):
         self.declare_parameter('crossline_hough_max_gap', 10)   # 선분 이어붙이기 최대 간격(px). 8 이하면 진짜 정지선도 못 잇는다
         self.declare_parameter('crossline_min_solidity', 0.80)  # 선분 위 픽셀 충실도 하한 (이어붙인 점선 배제)
         self.declare_parameter('crossline_sw_gate', 1)           # SW 코리도 교차 게이트 (run76~80 실전 검증: B 개구부 페인트 기각)
+        self.declare_parameter('sw_curv_max_a', 0.003)          # 진입 창 우곡률 상한 (B 가지 오물림 방지, 0=off)
         self.declare_parameter('crossline_sw_margin', 40.0)      # 교차 판정 여유(px)
         self.declare_parameter('crossline_debug_all', False)    # 채택 후에도 전 선분 진단
         self.declare_parameter('debug_topic', '/perception/lane/debug')
@@ -263,6 +264,7 @@ class LaneNode(Node):
         self.detector.crossline_hough_max_gap = int(gp('crossline_hough_max_gap').value)
         self.detector.crossline_min_solidity = float(gp('crossline_min_solidity').value)
         self.detector.crossline_sw_gate = int(gp('crossline_sw_gate').value)
+        self.detector.sw_curv_max_a = float(gp('sw_curv_max_a').value)
         self.detector.crossline_sw_margin = float(gp('crossline_sw_margin').value)
         self.detector.crossline_debug_all = bool(gp('crossline_debug_all').value)
         self.detector.filter_yellow_dashes = bool(gp('filter_yellow_dashes').value)
