@@ -79,7 +79,7 @@ run80 완주는 이전 스택 기준. 이후 들어간 [STOPLINE(stopline_mode 1
 | `yellow_drive_throttle`/`slow_throttle` | 0.165 기본, 0.17 운용 | 노랑/링 속도. **틱 사다리 주의: 0.16≡0.165(324), 0.17(325)** |
 | `curve_slow` / `curve_steer_bias` | 0.5 / — | 커브 감속 / 급커브 선행 조향 |
 | `kp`/`kd`, `steer_center`(0.26) | 0.6/0.15 | 라인추종 PID / 직진 보정 |
-| `gate_blank_s` / `gate_cluster_on_s` | 3.5 / 0.20 | 게이트 블랭크 / 군집 카운트 문턱 |
+| `gate_blank_s` / `gate_cluster_on_s` | 3.5 / **0.25** | 게이트 블랭크 / 군집 카운트 문턱 (0.15 인하는 07-13 스윕에서 기각 — run86 B 오발 재생) |
 | `roundabout_exit_gates` / `max_loop_time_s` | 2 / 75 | 발화 군집 수 / 강제 탈출 상한 |
 | `yaw_lap_threshold` | 7.0 | 백업 표결 yaw (사실상 봉인값) |
 | `merge_bridge_s` / `merge_blind_bias` | 6.0 / 0.10 | 병합 브리지 창 / 좌호 바이어스 |
