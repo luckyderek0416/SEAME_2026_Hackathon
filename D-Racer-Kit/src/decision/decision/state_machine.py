@@ -96,6 +96,7 @@ class RaceStateMachine:
         # 브랜치 락온 탈출용 게이트 통과 카운터 (노란 가로선 or 점선 개구부의
         # 상승엣지 = 게이트 1회 통과). roundabout_exit_gates 회 도달 시 출구 브랜치로 락온.
         self._gate_count = 0          # 이번 회전에서 센 게이트 통과 횟수
+        self._gate_just_counted = False  # 이번 프레임에 카운트 성립 (직발화용)
         self._gate_cd = 0.0           # 카운트 사이의 debounce 쿨다운
 
     # ---------- 감지 헬퍼 ----------
@@ -482,6 +483,7 @@ class RaceStateMachine:
             #   잔상: 길이가 링 속도 따라 4~9.3s 로 변해 고정 블랭크로 못 덮는다
             #         (run69 오카운트) -> '블랭크 중 태어난 군집은 통째 무효'.
             #         시작 시점은 속도 무관하게 항상 RA+0 부근이라는 불변량 이용.
+            self._gate_just_counted = False
             if self._gate_cd > 0.0:
                 self._gate_cd = max(0.0, self._gate_cd - dt)
             gate_now = bool(lane.yellow_crossline)
@@ -511,6 +513,7 @@ class RaceStateMachine:
                     >= self.cfg.get('gate_cluster_on_s', 0.18)
                     and self._gate_cd <= 0.0 and self._gate_armed and yaw_ok):
                 self._gate_count += 1
+                self._gate_just_counted = True
                 self._gate_cluster_counted = True
                 self._gate_cd = self.cfg.get('crossline_cooldown_s', 2.0)
                 self._gate_armed = False
@@ -522,6 +525,23 @@ class RaceStateMachine:
             # 가로선 재등장) 중 >= lap_votes_needed 개 동의.
             # 편향은 늦게 나가는 쪽으로, 절대 일찍 나가지 않는다.
             if self.circle_t >= self.cfg['min_loop_time_s'] * self._speed_scale:
+                # 직발화 (07-13 run92, 사용자 설계): STOPLINE 청정 스트림에서는
+                # 잔상(void)·약피처(0.25s 미달)·B(분류기 침묵)가 다 걸러져 카운트되는
+                # 첫 군집 = A 재도달. 카운트 성립 그 프레임에 즉시 발화한다.
+                # min_loop 는 유지 — 조기 래치(run79) 시 A "1차"가 카운트돼 랩 없이
+                # 탈출하는 것을 막는 유일한 방어 (정상 케이스 타이밍 영향 0).
+                # ⚠️ B 누출 스트림(stopline_mode 0)에서는 B 가 #1 로 카운트되므로
+                # 이 경로가 B 오발을 만든다 — 반드시 stopline_mode 1 과 함께 켤 것.
+                if (int(self.cfg.get('ra_direct_fire', 0))
+                        and self._gate_just_counted):
+                    self.turn_latch = self.cfg['roundabout_exit_side']
+                    self.turn_latch_age = 0.0
+                    self._fork_seen = False
+                    self.roundabout_done = True
+                    self._merge_bridge_t = float(self.cfg.get('merge_bridge_s', 0.0))
+                    self._enter(State.DRIVE)
+                    return steer, self.cfg['slow_throttle'], self.state.value
+
                 # 주(PRIMARY) 탈출: 출구 게이트를 충분히 통과함 -> 출구 브랜치로 락온
                 # (표지판 갈림길과 같은 메커니즘). 그러면 차선 추종이 링에 다시 붙는
                 # 대신 개구부 밖으로 조향한다. turn_latch 는 fork_dir 로 perception 에

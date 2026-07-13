@@ -215,6 +215,7 @@ class DecisionNode(Node):
         self.declare_parameter('gate_rearm_s', 0.5)          # 가로선이 이 시간 연속 OFF 여야 다음 카운트 무장
         self.declare_parameter('gate_cluster_gap_s', 1.8)    # 목격 간격 이 미만 = 같은 군집 (파편/2조각 병합)
         self.declare_parameter('gate_cluster_on_s', 0.25)    # 군집 누적 ON 카운트 문턱 (run76 약피처 0.19 배제, 실선 0.5+ 통과)
+        self.declare_parameter('ra_direct_fire', 0)   # 1=카운트 성립 즉시 발화 (STOPLINE 청정 스트림 전용 — stopline_mode 1 필수)
         # 이 조향적분 전에는 탈출 게이트 잠금 (링 중간 가짜선 차단).
         # 07-12 재배치 4.2 -> 3.6 (사용자 승인, B안): 4.2 는 진짜 탈출선 실측
         # (4.12~4.28)과 여유 2%뿐이라 손 개입/빠른 랩에서 yaw 가 모자라 불발 —
@@ -305,6 +306,7 @@ class DecisionNode(Node):
             'gate_blank_s': float(g('gate_blank_s').value),
             'gate_cluster_gap_s': float(g('gate_cluster_gap_s').value),
             'gate_cluster_on_s': float(g('gate_cluster_on_s').value),
+            'ra_direct_fire': int(g('ra_direct_fire').value),
             'yaw_gate_min': float(g('yaw_gate_min').value),
             'gate_rearm_s': float(g('gate_rearm_s').value),
         }
@@ -328,7 +330,7 @@ class DecisionNode(Node):
             'entry_lock_release_s', 'entry_steer_bias',   # 진입 락온 시간 / 진입 피드포워드
             'exit_lock_release_s', 'exit_steer_bias',     # 탈출 락 시간 / 탈출 피드포워드
             'gate_blank_s', 'gate_rearm_s', 'yaw_gate_min',
-            'gate_cluster_gap_s', 'gate_cluster_on_s',
+            'gate_cluster_gap_s', 'gate_cluster_on_s', 'ra_direct_fire',
             'ra_ref_drive_s',                     # 속도 스케일 기준 (G->RA 소요시간)
             'throttle_ref_latch_s', 'throttle_adapt_gain', 'throttle_adapt_max',
             'crossline_cooldown_s',               # 게이트 카운트 간 최소 간격
