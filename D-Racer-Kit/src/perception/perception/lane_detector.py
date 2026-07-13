@@ -266,6 +266,15 @@ class LaneDetector:
         self.sw_num_boxes = 9           # 상자 개수 (ROI 세로 분할)
         self.sw_curv_max_a = 0.003      # 진입 창 우곡률 상한 (run87 실측: 링 -0.013~+0.0015,
                                         # B 가지 +0.006 — 초과 피팅 기각 = 개구부 가지 오물림 방지)
+        # STOPLINE 분류기 (07-13 재설계): RA+코리도 중 "관통(coverage)+정면(각도)" 프레임만
+        # 정지선으로 인정. B 개구부 스침은 가장자리/비스듬이라 원리적으로 탈락 (실측:
+        # 건강 궤적에서 A cov 0.42~0.71/각 5~19도 vs B cov<=0.29/각 21도+).
+        self.stopline_mode = 0          # 1=활성 (기본 off — 리플레이 검증 후 라이브 전환)
+        self.stopline_ang_max = 15.0    # 정면 판정: 직교로부터의 각도 상한(도)
+        self.stopline_cov_min = 0.25    # 차로내부 합집합 커버리지 하한 (f59 실측 0.28 포용, B 정면후보는 0)
+        self.stopline_sol_min = 0.55    # 정면 후보 solidity 하한 (레거시 0.80 대비 완화 = 재현율)
+        self.last_stopline_cov = 0.0    # 디버그: 직전 프레임 커버리지
+        self._sw_interior = None        # ('pair',fl,fr,_)|('single',abc,None,side) — 차로내부 정의
         self.sw_box_margin = 30         # 상자 반폭(px)
         self.sw_max_shift = 20          # 상자당 중심 이동 상한(px) — 누운 실선 끌림/반대 가지 점프 차단
         self.sw_min_box_px = 8          # 상자 '적중' 최소 픽셀
@@ -282,6 +291,7 @@ class LaneDetector:
         self._sw_left = 0               # 남은 창 프레임 (0=창 밖)
         self._sw_dir = 0                # 기대 곡률 방향: -1=좌향(진입) +1=우향(탈출) 0=비활성
         self._sw_prev_fit = None        # 직전 유효 피팅 (a,b,c) — 다음 프레임 시드 연속성
+        self._sw_last_side = 0.0        # 추적선이 좌(-1)/우(+1) 경계인지 (0=미정/양선)
         self._sw_straight = 0           # 탈출 직선 연속 카운터
         self.sw_exit_wsteady_k = 20     # 흰 인계 종결자: 흰 추종 연속 K프레임 -> 창 종료 (0=off)
         # 탈출 방향 게이트 적용 프레임: 탈출로 = 우커브 -> 좌굽이 2단계라 창 내내
@@ -427,6 +437,25 @@ class LaneDetector:
         # OpenCV 버전에 따라 (N,1,4) 또는 (N,4) 로 온다.
         lines = np.asarray(lines).reshape(-1, 4)
 
+        # STOPLINE 모드 준비: RA + 코리도 활성 + 추적선 좌우 side 확정 시에만
+        stopline_active = (int(getattr(self, 'stopline_mode', 0)) == 1
+                           and self.drive_mode == 'ROUNDABOUT'
+                           and self._sw_left > 0
+                           and getattr(self, '_sw_interior', None) is not None)
+        span_ivs = []
+        if stopline_active:
+            _im, _ia, _ib, _iside = self._sw_interior
+            s_half = self._lane_width / 2.0
+
+            def _interior_at(ym):
+                xa = _ia[0] * ym * ym + _ia[1] * ym + _ia[2]
+                if _im == 'pair':
+                    xb = _ib[0] * ym * ym + _ib[1] * ym + _ib[2]
+                    return (xa, xb) if xa <= xb else (xb, xa)
+                xb = xa + _iside * 2.0 * s_half
+                return (xa, xb) if xa <= xb else (xb, xa)
+        self.last_stopline_cov = 0.0
+
         # BEV 는 가로/세로 스케일이 달라(sx/sy = r) 지면의 직각이 영상에서 직각이 아니다.
         # 07-10 실측(진짜 정지선 11프레임): r^2 = 3.63, 변동계수 0.08 로 상수 확인.
         # 지면 방향으로 되돌린 뒤 직교를 본다: (dx, dy)_bev -> (dx/r, dy)_ground.
@@ -454,6 +483,28 @@ class LaneDetector:
             perp_cos = abs(lane_g[0] * seg_g[0] + lane_g[1] * seg_g[1]) / (lane_norm * seg_norm)
             # 실선 판정: 점선을 이어붙인 선분은 구멍이 많아 여기서 탈락한다.
             solidity = self._segment_solidity(cross_roi, seg)
+            ang_deg = float(np.degrees(np.arcsin(min(1.0, perp_cos))))
+            if stopline_active:
+                # 관통+정면 분류: 이진 채택 대신 정면 후보의 내부 구간을 모아
+                # 프레임 커버리지로 판정한다 (아래 루프 종료 후).
+                y_mid = (float(yy1) + float(yy2)) / 2.0 + y1
+                ilo, ihi = _interior_at(y_mid)
+                frontal = (ang_deg <= float(self.stopline_ang_max)
+                           and solidity >= float(self.stopline_sol_min))
+                if frontal:
+                    a0 = max(ilo, min(float(x1), float(x2)))
+                    b0 = min(ihi, max(float(x1), float(x2)))
+                    if b0 > a0:
+                        span_ivs.append((a0, b0))
+                sl = (dy / dx) if abs(dx) > 1e-6 else float('inf')
+                self.last_crossline_cands.append(
+                    (round(sl, 3) if np.isfinite(sl) else 'vert',
+                     round(ang_deg, 1), round(length, 1), round(solidity, 3),
+                     'FRONTAL' if frontal else ('edge_ang' if ang_deg
+                      > float(self.stopline_ang_max) else 'edge_sol'),
+                     round(ah, 3), round(perp_cos, 3),
+                     [int(x1), int(yy1) + y1, int(x2), int(yy2) + y1]))
+                continue
             # SW 교차 게이트: 추적 중인 코리도 선을 수평으로 걸치는 선분만 인정
             sw_ok = True
             if int(getattr(self, 'crossline_sw_gate', 0)) and self._sw_prev_fit is not None \
@@ -480,11 +531,23 @@ class LaneDetector:
                 (round(slope, 3) if np.isfinite(slope) else 'vert',
                  round(float(np.degrees(np.arcsin(min(1.0, perp_cos)))), 1),
                  round(length, 1), round(solidity, 3), verdict,
-                 round(ah, 3), round(perp_cos, 3)))
+                 round(ah, 3), round(perp_cos, 3),
+                 [int(x1), int(yy1) + y1, int(x2), int(yy2) + y1]))
             if ok:
                 found = True
                 if not self.crossline_debug_all:
                     break                    # 진단이 필요 없으면 첫 채택에서 종료
+        if stopline_active:
+            merged = []
+            for a0, b0 in sorted(span_ivs):
+                if merged and a0 <= merged[-1][1]:
+                    merged[-1][1] = max(merged[-1][1], b0)
+                else:
+                    merged.append([a0, b0])
+            _ilo, _ihi = _interior_at((y1 + y2) / 2.0)
+            cov = sum(b0 - a0 for a0, b0 in merged) / max(1e-6, _ihi - _ilo)
+            self.last_stopline_cov = round(cov, 3)
+            return cov >= float(self.stopline_cov_min)
         return found
 
     def process(self, bgr, draw_debug=True):
@@ -653,6 +716,7 @@ class LaneDetector:
                 self._sw_len = self._sw_left
                 self._sw_dir = -1            # 진입 = 좌향 기대
                 self._sw_prev_fit = None     # 직전 직선 주행 피팅 잔재 유입 방지
+                self._sw_interior = None
                 self._sw_straight = 0
             elif (self._prev_drive_mode == 'ROUNDABOUT'
                     and self.drive_mode == 'DRIVE'
@@ -661,6 +725,7 @@ class LaneDetector:
                 self._sw_len = self._sw_left
                 self._sw_dir = +1            # 탈출 = 우향 기대 (초반 한정, gate_frames 주석)
                 self._sw_prev_fit = None
+                self._sw_interior = None     # RA 밖에선 STOPLINE 분류기 비활성 보장
                 self._sw_straight = 0
             self._prev_drive_mode = self.drive_mode
 
@@ -1204,6 +1269,11 @@ class LaneDetector:
             return None
 
         # 상태/디버그 갱신 (락 성공시에만 — 실패 프레임은 시드 연속성 유지)
+        self._sw_last_side = float(side) if near_lanes == 1 else 0.0
+        if pair:
+            self._sw_interior = ('pair', fl['abc'], fr['abc'], 0.0)
+        else:
+            self._sw_interior = ('single', best['abc'], None, float(side))
         self._sw_prev_fit = best['abc']
         self._sw_last_lean = best['lean']
         boxes_dbg = []
