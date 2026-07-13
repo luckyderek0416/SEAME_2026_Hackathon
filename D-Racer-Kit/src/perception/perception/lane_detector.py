@@ -265,6 +265,13 @@ class LaneDetector:
         self.sw_entry_frames = 0        # RA 진입 창 길이(프레임). 0=off. 권장 140(~7s@20fps)
         self.sw_exit_frames = 0         # RA 탈출 창 길이(프레임). 0=off. 권장 60(~3s)
         self.sw_entry_input = 'solid'   # 진입 창 입력: 'solid'(dash 제거) | 'raw'
+        self.sw_out_always = 1          # OUT 코스: DRIVE 전 구간 코리도 상시 (S자 좌우 교대 소실 대응).
+                                        # dir=0 -> 곡률가드/탈출규칙/STOPLINE 비활성, 입력 raw. in 코스 무영향
+        self.fork_blind_frac = 0.40     # OUT 갈림길: 확정 방향 반대쪽 컬럼 마스킹 비율 (0=off)
+        self.fork_blind_frames = 60     # 마스킹 지속 상한(프레임, ~3s@20fps)
+        self._fork_blind_left = 0
+        self._prev_fork_dir = None
+        self._fork_cut = None           # (side, px) — 이번 프레임 적용된 마스킹
         self.sw_exit_input = 'raw'      # 탈출 창 입력: 점선이 좌측 경계라 raw 필수
         self.sw_num_boxes = 9           # 상자 개수 (ROI 세로 분할)
         self.sw_curv_max_a = 0.003      # 진입 창 우곡률 상한 (run87 실측: 링 -0.013~+0.0015,
@@ -722,6 +729,15 @@ class LaneDetector:
         # 개구부 1L 재무장 (모드 전이 엣지 — __init__ 의 ra_*_oneline_frames 주석 참고).
         # RA 진입 시엔 Y-latch 가 이미 켜져 있고 RA 동안 강제 유지되므로 즉시 발효,
         # 해제 창은 Y-latch 가 흰 복귀로 풀리는 순간 _oneline_left=0 으로 자연 종료된다.
+        # OUT 코스 상시 코리도 (07-13): S자에서 좌/우 경계가 번갈아 소실돼도
+        # 시드 연속성으로 관성 추적. 락 실패 프레임은 기존 파이프라인 폴백(안전 계약).
+        if (self.course == 'out' and int(getattr(self, 'sw_out_always', 0)) == 1
+                and self.drive_mode == 'DRIVE' and self._sw_left <= 0):
+            self._sw_left = 999999
+            self._sw_len = self._sw_left
+            self._sw_dir = 0
+            self._sw_straight = 0
+
         if self.drive_mode != self._prev_drive_mode:
             if (self.drive_mode == 'ROUNDABOUT'
                     and int(self.ra_entry_oneline_frames) > 0):
@@ -750,6 +766,28 @@ class LaneDetector:
                 self._sw_interior = None     # RA 밖에선 STOPLINE 분류기 비활성 보장
                 self._sw_straight = 0
             self._prev_drive_mode = self.drive_mode
+
+        # OUT 갈림길 시야 마스킹 (07-13 사용자 설계): 표지판 확정 방향의 반대쪽
+        # 컬럼을 가린다. 조향 편향(제어)은 차선 소실 시 증발하지만, 마스크는 잘못된
+        # 가지 락온 자체를 차단한다. nl==2(양차선 복원)면 해소로 보고 일시 중지.
+        self._fork_cut = None
+        if self.course == 'out' and float(self.fork_blind_frac) > 0.0:
+            fd = self.fork_dir if self.fork_dir in ('left', 'right') else None
+            if fd is not None and self._prev_fork_dir != fd:
+                self._fork_blind_left = int(self.fork_blind_frames)
+            self._prev_fork_dir = fd
+            if fd is not None and self._fork_blind_left > 0:
+                self._fork_blind_left -= 1
+                if self._prev_nl != 2:
+                    wcut = int(track.shape[1] * float(self.fork_blind_frac))
+                    if wcut > 0:
+                        track = track.copy()
+                        if fd == 'left':
+                            track[:, track.shape[1] - wcut:] = 0
+                            self._fork_cut = ('right', wcut)
+                        else:
+                            track[:, :wcut] = 0
+                            self._fork_cut = ('left', wcut)
 
         # (1) multi-band look-ahead: ROI 를 가로 band 들(가까움..멂)로 나누고 각각에서
         # 차선 중심을 찾는다. 가까운 band 는 조향에, 먼 band 는 커브 선행 감지에 쓴다.
@@ -831,6 +869,18 @@ class LaneDetector:
                           if str(mode_in) == 'solid' else ymask)
                 src = (cv2.morphologyEx(sw_src, cv2.MORPH_OPEN, k)
                        if use_morph else sw_src)
+            elif (self._sw_dir == 0 and self.course == 'out'
+                    and wmask is not None):
+                # OUT 상시 코리도 입력 = 흰 마스크 (중앙선 없음, 양쪽 실선 -> pair 락 적합)
+                src = (cv2.morphologyEx(wmask, cv2.MORPH_OPEN, k)
+                       if use_morph else wmask)
+            if src is not None and self._fork_cut is not None:
+                side, wcut = self._fork_cut
+                src = src.copy()
+                if side == 'right':
+                    src[:, src.shape[1] - wcut:] = 0
+                else:
+                    src[:, :wcut] = 0
             if src is not None:
                 self._sw_gate_dir = self._sw_dir
                 self._sw_open = False
