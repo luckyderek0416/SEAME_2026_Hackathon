@@ -146,7 +146,7 @@ class LaneNode(Node):
         self.declare_parameter('yellow_heading_gain', 0.0)   # a_h 널뜀으로 OFF (07-11, detector 주석)
         # 연속성 가드/1L 계열 — 근거는 lane_detector.__init__ 주석 참고.
         self.declare_parameter('center_jump_max_ratio', 0.10)   # 0.15 는 쐐기 당김 통과 -> 0.10 확정
-        self.declare_parameter('entry_oneline_frames', 120)  # ~6s (run17: 2s 저속 미완 만료, 07-13: 4s->6s)
+        self.declare_parameter('entry_oneline_frames', 80)   # ~4s (run89 후 6s->4s 원복, 사용자 결정)
         self.declare_parameter('oneline_near_bands', 2)      # 1L 하단 밴드 수 (run40)
         self.declare_parameter('ra_entry_oneline_frames', 0)     # 0=off. 재활성 시 160(~8s)
         self.declare_parameter('ra_exit_oneline_frames', 0)      # 0=off. 재활성 시 60(~3s)
