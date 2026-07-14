@@ -410,7 +410,9 @@ class RaceStateMachine:
             # 흰 구간과 속도를 분리). yellow_ratio 는 FOLLOW-Y 전환과 같은 문턱을 쓴다.
             ydt = self.cfg.get('yellow_drive_throttle', 0.0)
             if ydt > 0.0 and lane.yellow_ratio >= self.cfg.get('yellow_slow_ratio', 0.03):
-                throttle = min(throttle, ydt)
+                # 07-15 사용자: 노란 구간은 상한(cap)이 아니라 '상수' — 커브 감속/
+                # 하한 무관하게 항상 이 값. 변동 요소 제거 (07-12 상수화 철학 동일).
+                throttle = ydt
             # 빨간 도로(장애물 구간)가 보이기 시작하면 저속주행. 마커 앞에서 제동 거리를
             # 줄여 정지 성공률을 높인다. 이 구간은 직선이라 curve_slow 로는 감속되지 않는다.
             if in_red_zone:
