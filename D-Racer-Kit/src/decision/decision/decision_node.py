@@ -61,9 +61,9 @@ class DecisionNode(Node):
         #   정지->출발 임계(정지마찰): 0.20 (1602us, 틱328)
         #   굴러가는 중 유지 임계(운동마찰): 0.175 (1587us, 틱325) 로도 계속 주행
         # 배터리가 닳으면 두 임계 모두 올라간다 -> 반쯤 닳은 상태에서 재검증할 것.
-        self.declare_parameter('drive_throttle', 0.22)   # 07-15 사용자 고정   # 1602us: DRIVE 기본(=직선 최고 속도).
+        self.declare_parameter('drive_throttle', 0.23)   # 07-15 사용자 고정   # 1602us: DRIVE 기본(=직선 최고 속도).
                                                          # curve_slow/steer_slow 가 여기서 깎는다.
-        self.declare_parameter('slow_throttle', 0.20)    # 07-15 사용자 고정
+        self.declare_parameter('slow_throttle', 0.18)    # 07-15 사용자 고정
         # 노란 구간(DRIVE[Y]) 전용 상한: 접근/갈림길에서 저속·정밀 주행 (0=기능 off).
         # 07-12 run47 실증 + 사용자 확정: 노란 구간은 0.165 고정. (0.17 이던 시절에도
         # 커브 감속이 하한 0.165 로 깎아 링에선 사실상 0.165 였음 — 카메라 재캘리 후
