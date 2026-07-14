@@ -77,7 +77,14 @@ class RaceStateMachine:
         self._latch_seen = False      # 런당 1회
         self.throttle_adj = 0.0       # 순항 스로틀 가산 보정 (decision_node 가 적용)
         self.yaw_proxy = 0.0          # IMU 없는 헤딩 추정치 (조향 적분)
-        self._merge_bridge_t = 0.0    # 병합 브리지 잔여 시간 (RA 탈출 시 무장)
+        self._merge_bridge_t = 0.0    # 병합 브리지 잔여 시간 (RA 탈출 시 무장; 07-14 이후 _exit_active 로 대체)
+        # 탈출 구간 진행 플래그 (07-14 항목4): RA 탈출 트리거 발화 시 True, perception 의
+        # 흰 실선 이벤트(/perception/merge_done) 수신 시 False. 시간창(merge_bridge 6s
+        # 등)이 스로틀 인상 후 속도 변화에 안 붙던 문제를, 이벤트 기반으로 구조적 제거.
+        # 이 동안: 완전소실 시 마지막 조향 유지 + 스로틀 slow 캡.
+        self._exit_active = False
+        self._last_lane_steer = None  # 직전 lane_found 프레임의 PID 조향 (탈출 블라인드 유지용)
+        self.merge_done_sig = False   # perception→decision: 흰 실선 이벤트 수신 (decision_node 가 매 틱 주입)
         self._entry_votes = 0         # 마지막 회전교차로 진입 투표 수 (디버그/로그)
         self._exit_votes = 0          # 마지막 회전교차로 탈출 투표 수 (디버그/로그)
         self._entry_lock_active = False  # 진입측 락온이 걸려 있는 동안 True (one-shot)
@@ -124,6 +131,13 @@ class RaceStateMachine:
             target = (lane.offset + self._branch_bias(lane)
                       + self._curve_bias(lane))
         else:
+            # 탈출 구간 블라인드 (07-14 항목4): 완전 소실 시 마지막 조향 명령을 상한
+            # 없이 그대로 유지한다 — center 수렴도, 기하 편향도 없음. 창이 시간이
+            # 아니라 흰 실선 이벤트(_exit_active 해제)로 종료되므로 속도 의존이 없다.
+            # (탈출~병합 이탈이 스로틀 인상 후 늘어난 원인 = 고정 시간창의 속도 미추종.)
+            if (self.state == State.DRIVE and self._exit_active
+                    and self._last_lane_steer is not None):
+                return float(self._last_lane_steer)
             # 차선 놓침: DRIVE 는 '직전 조향 EMA' 유지 (직진 폴백이 커브를 뚫던
             # run47 전환부 이탈 대응), 3s 시정수로 중앙 수렴. RA 는 ra_blind_bias
             # 전담 (중복 가산 방지).
@@ -149,6 +163,7 @@ class RaceStateMachine:
             s = max(c - 0.30, min(c + 0.30, steer))
             self._steer_hold = (s if self._steer_hold is None
                                 else 0.3 * s + 0.7 * self._steer_hold)
+            self._last_lane_steer = steer   # 탈출 블라인드 유지용 (07-14 항목4)
         return steer
 
     def _turn_bias(self):
@@ -209,6 +224,9 @@ class RaceStateMachine:
             # 시간창 동안 post-PID 우측 편향을 유지한다 (합류부 보조와 같은 원리 —
             # 탈출 후엔 yaw 적분이 멈추므로 위치창 대신 시간창). 모든 탈출 경로 공통.
             self._exit_lock_t = float(self.cfg.get('exit_lock_release_s', 0.0))
+            # 탈출 구간 진행 시작 (07-14 항목4): 흰 실선 이벤트 수신까지 유지.
+            self._exit_active = True
+            self._last_lane_steer = None
         self.state = state
         self.pid.reset()
         self.green_count = 0
@@ -257,6 +275,10 @@ class RaceStateMachine:
         """(steering, throttle, state_name) 을 반환한다."""
         center = self.cfg['steer_center']
         stop = self.cfg['stop_throttle']
+        # 탈출 구간 종료 (07-14 항목4): perception 이 흰 실선 이벤트를 보고하면 해제.
+        # 이후 블라인드는 기존 EMA 수렴으로, 스로틀 slow 캡도 풀린다.
+        if self.merge_done_sig:
+            self._exit_active = False
         # 재획득 규칙 무장 여부 (decision -> perception, /decision/merge_zone 토픽).
         # RA+reacq_arm_s 경과 시 True — perception 의 "nl 0->1 재획득 = 우측 경계"
         # 분류 규칙을 무장시킨다. (07-12: yaw 위치창 스코프를 대체. 토픽명은
@@ -365,9 +387,13 @@ class RaceStateMachine:
         if self.state == State.DRIVE:
             # 탈출 락: 탈출 직후 시간창 동안 '소실 프레임에만' 우측 호 (차선 잡히면
             # 즉시 PID 인계). 무조건 가산은 추종 기회를 없앰(run25). 양수 = 탈출측(우).
+            # 07-14 항목4: 탈출 구간(_exit_active) 중에는 '마지막 조향 유지'가 소실
+            # 프레임을 전담하므로, 이중 가산을 피하려 여기선 편향을 걸지 않는다.
+            # (exit_steer_bias 는 고정 2.5s 창이라 스로틀 인상 후 커버 거리가 어긋남 —
+            #  이벤트 기반 유지로 대체. 값 자체 재캘리는 별도 작업.)
             if self._exit_lock_t > 0.0:
                 self._exit_lock_t -= dt
-                if not lane.lane_found:
+                if not lane.lane_found and not self._exit_active:
                     steer = max(-1.0, min(1.0, steer + self.cfg['turn_direction']
                                           * self.cfg.get('exit_steer_bias', 0.0)))
             # 회전교차로 진입 (In 코스, 한 번 완료하기 전까지만).
@@ -424,10 +450,12 @@ class RaceStateMachine:
             ydt = self.cfg.get('yellow_drive_throttle', 0.0)
             if ydt > 0.0 and lane.yellow_ratio >= self.cfg.get('yellow_slow_ratio', 0.03):
                 throttle = min(throttle, ydt)
-            # 병합 감속 (07-13 run94): 브리지 창(RA 탈출 후 merge_bridge_s) 동안은
+            # 병합 감속 (07-13 run94 → 07-14 항목4): 탈출 구간(_exit_active) 동안은
             # 블라인드 구간 최고속(0.19) 진입을 막는다 — 고속 밴드에서 무차선 주파
             # 거리가 길어져 흰 획득 전에 이탈 (run94: 좌모서리). 상한 = slow.
-            if self._merge_bridge_t > 0.0:
+            # 고정 6s 창(merge_bridge)이 아니라 이벤트 플래그에 묶여, 감속이 속도
+            # 무관하게 실제 병합 완료(흰 실선 이벤트)까지 이어진다.
+            if self._exit_active:
                 throttle = min(throttle, self.cfg['slow_throttle'])
             # 빨간 도로(장애물 구간)가 보이기 시작하면 저속주행. 마커 앞에서 제동 거리를
             # 줄여 정지 성공률을 높인다. 이 구간은 직선이라 curve_slow 로는 감속되지 않는다.

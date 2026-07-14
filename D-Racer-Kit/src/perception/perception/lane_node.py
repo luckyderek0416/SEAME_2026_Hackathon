@@ -164,7 +164,7 @@ class LaneNode(Node):
         # --- SW 코리도 추적 — 상세는 lane_detector.__init__ sw_* 주석. 락 프레임만
         # 밴드 대체(실패 = 폴백). 전부 라이브: ros2 param set /lane_node sw_entry_frames 440
         self.declare_parameter('sw_entry_frames', 1200)   # RA 진입 창(프레임). 0=off. run79: 저전압 랩 지연으로 440(22s) 만료 후 개구부 이탈 -> 60s
-        self.declare_parameter('sw_exit_frames', 40)      # RA 탈출 창 2s (run95 처방: 20s 창이 점선을 물어 조향 대체 → 짧게 컷. 07-14 박제)
+        self.declare_parameter('sw_exit_frames', 150)     # RA 탈출 창 = 07-14 재설계 후 '순수 failsafe 상한'(≈7.5s@20fps). 종료는 흰 실선 이벤트가 담당 — 정상 주행에선 상한이 먼저 안 닿게, 그러나 미발화 시 구조 레이턴시라 과하게 길게도 금지. 리플레이로 확정. 0=off(라이브 킬)
         self.declare_parameter('sw_entry_input', 'solid') # 진입 입력: solid(병합 사선 제거) | raw
         self.declare_parameter('sw_exit_input', 'raw')    # 탈출 입력: 좌측 경계가 점선 -> raw 필수
         self.declare_parameter('sw_num_boxes', 9)         # 상자 개수
@@ -179,8 +179,14 @@ class LaneNode(Node):
         self.declare_parameter('sw_max_peaks', 3)         # 프레임당 피크 시드 수
         self.declare_parameter('sw_cross_row_frac', 0.45) # 정지선 행 제거 문턱(가로 점유율)
         self.declare_parameter('sw_side_default', -1)     # 단선 분류 폴백(-1=우측 경계)
-        self.declare_parameter('sw_exit_straight_k', 5)   # 탈출 조기해제 직선 연속 프레임
-        self.declare_parameter('sw_exit_wsteady_k', 20)   # 흰 인계 종결자 연속 프레임 (0=off)
+        self.declare_parameter('sw_exit_straight_k', 5)   # (07-14 미사용 — 흰 실선 이벤트가 종료 대체) 탈출 조기해제 직선 연속 프레임
+        self.declare_parameter('sw_exit_wsteady_k', 20)   # (07-14 미사용) 흰 인계 종결자 연속 프레임
+        # --- 탈출→흰병합 재설계 (07-14, _sw_dir>0 전용, 상세 lane_detector.__init__) ---
+        self.declare_parameter('sw_exit_dash_occupancy_max', 0.72)  # 항목1: 곡선 점유율 초과=실선→락포기. ⚠️실측 캘리
+        self.declare_parameter('sw_exit_white_bottom_px', 40)       # 항목2: 최하단 흰 최소 픽셀
+        self.declare_parameter('sw_exit_white_min_span_px', 55)     # 항목2: 연속 스팬 하한(점선 토막>초과=실선). ⚠️실측 캘리
+        self.declare_parameter('sw_exit_white_solidity_min', 0.80)  # 항목2: 스팬내 점유율 하한
+        self.declare_parameter('sw_exit_white_confirm_frames', 4)   # 항목2: 발화 디바운스 프레임
         self.declare_parameter('sw_exit_gate_frames', 40)  # 탈출 방향게이트 적용 프레임 (이후 해제)
         self.declare_parameter('sw_exit_open_frames', 30)  # 탈출 개방 구간(발화 직후 좌향 코리도 허용). 0=off
         self.declare_parameter('sw_open_max_lean_px', 110.0)  # 개방 구간 |기욺| 상한 (07-14 BEV 재캘리 스케일 보정: 코리도 실측 ≤86 / 정지선 대각선 ≥119 — 리플레이서 90은 코리도 7프레임 오기각)
@@ -330,8 +336,16 @@ class LaneNode(Node):
         self.detector.sw_exit_open_frames = int(gp('sw_exit_open_frames').value)
         self.detector.sw_open_max_lean_px = float(gp('sw_open_max_lean_px').value)
         self.detector.sw_exit_straight_px = float(gp('sw_exit_straight_px').value)
+        self.detector.sw_exit_dash_occupancy_max = float(gp('sw_exit_dash_occupancy_max').value)
+        self.detector.sw_exit_white_bottom_px = int(gp('sw_exit_white_bottom_px').value)
+        self.detector.sw_exit_white_min_span_px = float(gp('sw_exit_white_min_span_px').value)
+        self.detector.sw_exit_white_solidity_min = float(gp('sw_exit_white_solidity_min').value)
+        self.detector.sw_exit_white_confirm_frames = int(gp('sw_exit_white_confirm_frames').value)
 
         self.pub = self.create_publisher(LaneState, self.lane_topic, 10)
+        # 흰 실선 병합 이벤트 (07-14 항목4): detector._merge_done 을 decision 에 알려
+        # 탈출 구간 종료(_exit_active 해제)를 트리거한다. merge_zone 과 대칭 패턴.
+        self.merge_done_pub = self.create_publisher(Bool, '/perception/merge_done', 10)
         self.debug_pub = None
         if self.publish_debug:
             self.debug_pub = self.create_publisher(CompressedImage, self.debug_topic, 10)
@@ -360,6 +374,10 @@ class LaneNode(Node):
             f'y_ratio={d.follow_yellow_ratio:g} exit_frac={d.follow_yellow_exit_yellow_frac:g} '
             f'sw_exit={d.sw_exit_frames} lean_max={d.sw_open_max_lean_px:g} '
             f'relatch_block={d.w_align_block_relatch} yhsv_lo={d.yellow_hsv_lo}')
+        self.get_logger().info(
+            f'[실효 탈출병합] dash_occ_max={d.sw_exit_dash_occupancy_max:g} '
+            f'w_span={d.sw_exit_white_min_span_px:g} w_sol={d.sw_exit_white_solidity_min:g} '
+            f'w_confirm={d.sw_exit_white_confirm_frames} w_bottom={d.sw_exit_white_bottom_px}')
 
     def _on_set_params(self, params):
         hsv_keys = {'white_hsv_lo', 'white_hsv_hi', 'yellow_hsv_lo', 'yellow_hsv_hi',
@@ -431,6 +449,7 @@ class LaneNode(Node):
         out.fork = bool(fork)
         out.red_ratio = float(red_ratio)
         self.pub.publish(out)
+        self.merge_done_pub.publish(Bool(data=bool(getattr(self.detector, '_merge_done', False))))
 
         if self.crossline_dbg_pub is not None:
             cands = getattr(self.detector, 'last_crossline_cands', [])
