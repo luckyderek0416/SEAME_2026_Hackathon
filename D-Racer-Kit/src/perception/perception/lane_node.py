@@ -145,6 +145,9 @@ class LaneNode(Node):
         self.declare_parameter('oneline_near_bands', 2)
         # 1L 조기 해제 (07-15): 차폭 페어 K프레임 연속 복원 시 즉시 1L 종료. 0=off
         self.declare_parameter('oneline_release_pair_k', 5)
+        self.declare_parameter('sw_drive_always', 1)             # 전구간 코리도 (07-15 P0). 0=off(라이브 킬 → 기존 스택)
+        self.declare_parameter('sw_approach_frames', 600)        # 1L해제→RA 접근 코리도 failsafe 상한. 0=off
+        self.declare_parameter('crossline_sw_heading', 1)        # 정지선 직교 헤딩 = 코리도 접선. 0=구식 EMA
         self.declare_parameter('oneline_release_min_hold', 20)
         # 탈출 노랑 소실 즉시 해제 (07-15): RA 후 ROI 노랑 소실 시 즉시 흰 추종
         self.declare_parameter('exit_yellow_gone_instant', 1)  # 0=off(기존 2조건 경로만)
@@ -290,6 +293,9 @@ class LaneNode(Node):
         self.detector.entry_oneline_frames = int(gp('entry_oneline_frames').value)
         self.detector.oneline_near_bands = int(gp('oneline_near_bands').value)
         self.detector.oneline_release_pair_k = int(gp('oneline_release_pair_k').value)
+        self.detector.sw_drive_always = int(gp('sw_drive_always').value)
+        self.detector.sw_approach_frames = int(gp('sw_approach_frames').value)
+        self.detector.crossline_sw_heading = int(gp('crossline_sw_heading').value)
         self.detector.oneline_release_min_hold = int(gp('oneline_release_min_hold').value)
         self.detector.exit_yellow_gone_instant = int(gp('exit_yellow_gone_instant').value)
         self.detector.exit_yellow_gone_frames = int(gp('exit_yellow_gone_frames').value)

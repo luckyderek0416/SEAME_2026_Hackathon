@@ -279,6 +279,18 @@ class LaneDetector:
         self.sw_exit_frames = 0         # RA 탈출 창 길이(프레임). 0=off. 권장 60(~3s)
         self.sw_entry_input = 'solid'   # 진입 창 입력: 'solid'(dash 제거) | 'raw'
         self.sw_exit_input = 'raw'      # 탈출 창 입력: 점선이 좌측 경계라 raw 필수
+        # --- 전구간 SW (07-15 재설계 P0, 4관점 검토 반영) ---
+        # DRIVE 래치 순간부터 상시 코리도: W구간 = 흰 페어(양쪽 상자체인 → 중점),
+        # Y래치 엣지에 노란 마스크로 재시드 + dir=-1 (RA 진입 전 Y = solid 입력이라
+        # 점선 자동 무시 → B 합류 점선 직진). RA 진입/탈출 엣지는 기존 entry/exit
+        # 창이 덮어쓴다. 락 실패 프레임 폴백 = 기존 파이프라인(1L 포함) 그대로.
+        # 분류기(stopline_mode)의 전제(_sw_interior)를 Y래치 구간에도 세워주는 기반.
+        self.sw_drive_always = 1        # 0=off (라이브 킬스위치; 끄면 즉시 기존 스택 복귀)
+        self.sw_approach_frames = 600   # 접근 코리도 failsafe 상한 (1L 해제→RA 래치까지의 예비 창)
+        self.crossline_sw_heading = 1   # 정지선 직교 게이트 헤딩 = 코리도 접선. 0=구식 EMA
+        self._sw_kind = ''              # 활성 창 종류: entry/exit/approach/drive (킬스위치 매핑)
+        self._sw_prev_yellow = False    # Y래치 엣지 감지 (drive 창 재시드/방향 전환용)
+        self._sw_nl2_count = 0          # approach 예비 무장용 nl=2 연속 카운터
         self.sw_num_boxes = 9           # 상자 개수 (ROI 세로 분할)
         self.sw_curv_max_a = 0.003      # 진입 창 우곡률 상한 (run87 실측: 링 -0.013~+0.0015,
                                         # B 가지 +0.006 — 초과 피팅 기각 = 개구부 가지 오물림 방지)
@@ -479,18 +491,24 @@ class LaneDetector:
         # OpenCV 버전에 따라 (N,1,4) 또는 (N,4) 로 온다.
         lines = np.asarray(lines).reshape(-1, 4)
 
-        # STOPLINE 모드 준비: RA + 코리도 활성 + 추적선 좌우 side 확정 시에만
+        # STOPLINE 모드 준비: (RA 또는 Y래치) + 코리도 활성 + 내부 기하 확정 시에만.
+        # 07-15 사용자 결정: 분류기 스코프를 DRIVE[Y] 래치 순간부터로 확장 — 1번째
+        # 정지선(RA 진입 트리거)도 관통(cov)+정면(각) 판정을 받는다. 레거시 직교
+        # 게이트의 B 정면각 마진(21° vs 허용 20°)과 헤딩 붕괴(F1/F3)를 분류기가 대체.
+        # 전제(_sw_interior)는 전구간 SW(sw_drive_always)가 Y래치 중에도 세워준다.
+        cls_scope = (self.drive_mode == 'ROUNDABOUT' or self._following_yellow)
         stopline_active = (int(getattr(self, 'stopline_mode', 0)) == 1
-                           and self.drive_mode == 'ROUNDABOUT'
+                           and cls_scope
                            and self._sw_left > 0
                            and getattr(self, '_sw_interior', None) is not None)
         # 분류기 비활성 억제 (07-13 run102, 사용자 방어 설계): stopline_mode 1 인데
-        # RA 중 분류기 전제(코리도 락/내부 기하)가 안 서는 프레임은 구식 경로로
+        # 스코프 중 분류기 전제(코리도 락/내부 기하)가 안 서는 프레임은 구식 경로로
         # 폴백하지 않고 crossline 자체를 억제한다. B 누출(0.06~0.18s 가변)은 전부
         # "분류기가 눈 감은 프레임"에서 나왔다 — 눈 감은 검출은 신뢰하지 않는다.
-        # A 재도달 순간 코리도가 하필 언락이면 미발화 -> 2랩 자가복구 (늦는 쪽 안전).
+        # A 재도달 순간 코리도가 하필 언락이면 미발화 -> 비상구 자가복구 (늦는 쪽 안전).
+        # 07-15: 억제도 Y래치부터 — 진입 sustain(0.12s)은 락 프레임 연속으로만 쌓인다.
         if (int(getattr(self, 'stopline_mode', 0)) == 1
-                and self.drive_mode == 'ROUNDABOUT' and not stopline_active):
+                and cls_scope and not stopline_active):
             return False
         span_ivs = []
         if stopline_active:
@@ -521,8 +539,17 @@ class LaneDetector:
             length = float(np.hypot(dx, dy))
             if length < min_len:
                 continue
-            # 이 후보를 지우고 남은 픽셀로 차선 방향을 잰다 (순환 회피).
-            ah = self._lane_heading_excluding(seg, fallback_ah)
+            # 차선 방향(a_h) 소스 (07-14 밤 → 07-15 재이식): 코리도 활성이면 추적
+            # 피팅의 국소 접선 — 후보가 마스크 대부분인 프레임(누운 단선)에서도 진짜
+            # 차선 방향이 나와 '평행=차선' 기각이 성립한다 (F1: 22:10 오진입 수리).
+            # 아니면 구식: 후보를 지우고 남은 픽셀로 잰다 (순환 회피).
+            if (int(getattr(self, 'crossline_sw_heading', 0))
+                    and self._sw_left > 0 and self._sw_prev_fit is not None):
+                pa_h, pb_h, _pc_h = self._sw_prev_fit
+                ym_roi = (float(yy1) + float(yy2)) / 2.0 + y1
+                ah = float(np.clip(2.0 * pa_h * ym_roi + pb_h, -2.5, 2.5))
+            else:
+                ah = self._lane_heading_excluding(seg, fallback_ah)
             lane_g = (ah / r, 1.0)
             lane_norm = float(np.hypot(*lane_g))
             # 지면 공간에서의 |cos(차선, 선분)|. 0 = 직교(정지선), 1 = 평행(차선).
@@ -766,6 +793,21 @@ class LaneDetector:
         # 개구부 1L 재무장 (모드 전이 엣지 — __init__ 의 ra_*_oneline_frames 주석 참고).
         # RA 진입 시엔 Y-latch 가 이미 켜져 있고 RA 동안 강제 유지되므로 즉시 발효,
         # 해제 창은 Y-latch 가 흰 복귀로 풀리는 순간 _oneline_left=0 으로 자연 종료된다.
+        # 전구간 SW 무장 (07-15 P0, __init__ sw_drive_always 주석): DRIVE 인 동안
+        # 창이 없으면 즉시 무장. RA 이후 재무장은 P1(_merge_done)에서 개방 예정 —
+        # P0 에서는 탈출~병합을 기존 기계에 맡기기 위해 pre-RA 한정.
+        if (self.course == 'in' and int(getattr(self, 'sw_drive_always', 0)) == 1
+                and self.drive_mode == 'DRIVE' and self._sw_left <= 0
+                and not self._ra_seen):
+            self._sw_left = 999999
+            self._sw_len = self._sw_left
+            self._sw_dir = -1 if self._following_yellow else 0
+            self._sw_kind = 'drive'
+            self._sw_prev_fit = None
+            self._sw_prev_y_hi = None
+            self._sw_interior = None
+            self._sw_straight = 0
+            self._sw_prev_yellow = self._following_yellow
         if self.drive_mode != self._prev_drive_mode:
             if (self.drive_mode == 'ROUNDABOUT'
                     and int(self.ra_entry_oneline_frames) > 0):
@@ -785,6 +827,7 @@ class LaneDetector:
                 self._sw_left = int(self.sw_entry_frames)
                 self._sw_len = self._sw_left
                 self._sw_dir = -1            # 진입 = 좌향 기대
+                self._sw_kind = 'entry'
                 self._sw_prev_fit = None     # 직전 직선 주행 피팅 잔재 유입 방지
                 self._sw_prev_y_hi = None
                 self._sw_interior = None
@@ -795,6 +838,7 @@ class LaneDetector:
                 self._sw_left = int(self.sw_exit_frames)
                 self._sw_len = self._sw_left
                 self._sw_dir = +1            # 탈출 = 우향 기대 (초반 한정, gate_frames 주석)
+                self._sw_kind = 'exit'
                 self._sw_prev_fit = None
                 self._sw_prev_y_hi = None
                 self._sw_interior = None     # RA 밖에선 STOPLINE 분류기 비활성 보장
@@ -819,6 +863,19 @@ class LaneDetector:
                 if self._oneline_pair_run >= int(self.oneline_release_pair_k):
                     self._oneline_left = 0
                     oneline = False
+                    # 1L 종료 = 첫 좌회전 완료 이벤트 → 접근 코리도 즉시 인계
+                    # (07-15 P0: drive 창이 이미 활성이면 그대로 두고 재시드만)
+                    if (self.course == 'in' and not self._ra_seen
+                            and int(getattr(self, 'sw_approach_frames', 0)) > 0):
+                        if self._sw_left <= 0:
+                            self._sw_left = int(self.sw_approach_frames)
+                            self._sw_len = self._sw_left
+                            self._sw_kind = 'approach'
+                        self._sw_dir = -1
+                        self._sw_prev_fit = None
+                        self._sw_prev_y_hi = None
+                        self._sw_interior = None
+                        self._sw_straight = 0
             else:
                 self._oneline_pair_run = 0
         if oneline:
@@ -876,9 +933,22 @@ class LaneDetector:
         # 라이브 킬스위치 (07-12 검증 리뷰): 창은 무장 시점에 _sw_left 로 래치되므로
         # 주행 중 `ros2 param set /lane_node sw_entry_frames 0` 만으로는 안 풀렸다.
         # 0=off 규약 일관성 + "끄면 즉시 run47 복귀" 보장을 위해 매 프레임 확인.
+        # Y래치 엣지 재타겟 (07-15 P0): drive 창 활성 중 래치가 흰↔노랑으로 바뀌는
+        # 순간 입력 마스크가 통째로 바뀌므로 직전 피팅 시드를 버리고 새 마스크의
+        # 히스토그램 피크로 재시드한다. Y 구간은 dir=-1 (곡률 가드 + solid 입력 자동).
+        if (getattr(self, '_sw_kind', '') == 'drive' and self._sw_left > 0
+                and self._following_yellow != self._sw_prev_yellow):
+            self._sw_prev_fit = None
+            self._sw_prev_y_hi = None
+            self._sw_interior = None
+            self._sw_dir = -1 if self._following_yellow else 0
+        self._sw_prev_yellow = self._following_yellow
         if self._sw_left > 0:
-            live = (self.sw_entry_frames if self._sw_dir < 0
-                    else self.sw_exit_frames)
+            live = {'entry': self.sw_entry_frames,
+                    'exit': self.sw_exit_frames,
+                    'approach': getattr(self, 'sw_approach_frames', 0),
+                    'drive': getattr(self, 'sw_drive_always', 0)}.get(
+                        getattr(self, '_sw_kind', ''), 1)
             if int(live) <= 0:
                 self._sw_left = 0
         if self._sw_left > 0:
@@ -889,12 +959,19 @@ class LaneDetector:
             # 끝나면 락 자연 실패 -> 흰 추종 인계 (아래 wsteady 종결자).
             if ymask is not None and (self._following_yellow
                                       or self._sw_dir > 0):
-                mode_in = (self.sw_entry_input if self._sw_dir < 0
-                           else self.sw_exit_input)
+                # dir<=0 = 진입/접근/drive[Y]: solid 입력 (RA 전 점선 무시 — B 직진).
+                # dir>0 = 탈출: raw (점선이 추종 대상, 07-15 사용자 확정).
+                mode_in = (self.sw_exit_input if self._sw_dir > 0
+                           else self.sw_entry_input)
                 sw_src = (self._filter_yellow_dashes(ymask)
                           if str(mode_in) == 'solid' else ymask)
                 src = (cv2.morphologyEx(sw_src, cv2.MORPH_OPEN, k)
                        if use_morph else sw_src)
+            elif (self._sw_dir == 0 and wmask is not None
+                    and getattr(self, '_sw_kind', '') == 'drive'):
+                # drive[W] 구간 입력 = 흰 마스크 (양쪽 실선 → pair 락)
+                src = (cv2.morphologyEx(wmask, cv2.MORPH_OPEN, k)
+                       if use_morph else wmask)
             if src is not None:
                 self._sw_gate_dir = self._sw_dir
                 self._sw_open = False
@@ -941,6 +1018,7 @@ class LaneDetector:
                     self._sw_wsteady = 0
         else:
             self._sw_dir = 0
+            self._sw_kind = ''
 
         mid = w / 2.0
         near_cx, la_cx = None, None
