@@ -68,7 +68,7 @@ class DecisionNode(Node):
         # 07-12 run47 실증 + 사용자 확정: 노란 구간은 0.165 고정. (0.17 이던 시절에도
         # 커브 감속이 하한 0.165 로 깎아 링에선 사실상 0.165 였음 — 카메라 재캘리 후
         # 곡률 추정이 정확해지며 상시 하한 도달. 변동 요소를 없애고 상수로 못 박는다.)
-        self.declare_parameter('yellow_drive_throttle', 0.165)
+        self.declare_parameter('yellow_drive_throttle', 0.18)
         self.declare_parameter('yellow_slow_ratio', 0.03)   # 노란 구간 판정 문턱 (FOLLOW-Y 와 동일 값 유지 — 07-11 run8 후 0.03 복원에 동기화)   # 1587us: ROUNDABOUT 주행 + 감속 바닥.
                                                          # 유지는 되지만 정지에서 출발은 불가.
         self.declare_parameter('stop_throttle', 0.0)     # 1500us: 중립
@@ -79,7 +79,7 @@ class DecisionNode(Node):
         # 임계가 올라가 아예 못 나간다. 0.24(1620us)는 실측상 확실히 출발하는 값이다.
         # (순항 속도로는 빠르지만 0.4s 만 유지하므로 무해)  0 = off.
         self.declare_parameter('start_kick_throttle', 0.23)   # 1620us: 임계(0.20)보다 확실히 위
-        self.declare_parameter('start_kick_s', 0.4)           # 킥 유지 시간(초)
+        self.declare_parameter('start_kick_s', 1.0)           # 킥 유지 시간(초)
         self.declare_parameter('curve_slow', 0.5)     # DRIVE: 커브에서 감속 (|curvature| 비례)
         # ----- look-ahead 보조 (기본 0 = 기존 동작 그대로) -----
         self.declare_parameter('max_steering_delta', 0.0)  # 틱당 조향 변화 상한; 0=off
@@ -130,7 +130,7 @@ class DecisionNode(Node):
         self.declare_parameter('fork_vote_clear_s', 1.0)    # 표지판 끊긴 뒤 표결 초기화까지(떨림방지창; 홀드 아님)
 
         # ----- 회전교차로 (junction 카운트, IMU 없음) -----
-        self.declare_parameter('enter_sustain_s', 0.2)
+        self.declare_parameter('enter_sustain_s', 0.12)
         self.declare_parameter('ra_min_drive_s', 7.5)    # 출발 후 이 시간 전엔 RA 진입 금지 (입구 오진입 차단)
                                                          # 07-11 run12: 1L 진입 성공으로 진짜 정지선 도착이 9.3s 로
                                                          # 당겨져 10.0 이 진짜 진입을 차단 -> 7.5 (가짜 5.9s +1.6 여유,
@@ -178,7 +178,7 @@ class DecisionNode(Node):
         self.declare_parameter('throttle_adapt_max', 0.015)   # 보정 절대 상한 (안전 클램프)
         self.declare_parameter('y_latch_ratio', 0.02)         # 래치 감지 yr 문턱 (perception 과 동일값 권장)
         self.declare_parameter('y_latch_frames', 10)          # 래치 감지 연속 틱
-        self.declare_parameter('max_loop_time_s', 30.0)   # 모든 추정치 실패 시 failsafe 탈출
+        self.declare_parameter('max_loop_time_s', 75.0)   # 모든 추정치 실패 시 failsafe 탈출
         self.declare_parameter('crossline_cooldown_s', 2.0)  # 게이트 카운트 간 최소 간격 (재카운트 디바운스)
         # --- 탈출 failsafe 3-표결 (조향 적분 + 시간 + 가로선 재등장), IMU/마커 없음 ---
         # 07-11: yaw_proxy 부호 수정으로 이 표가 실제로 나올 수 있게 됨. 링 편향 0.225/s 만으로
@@ -186,7 +186,7 @@ class DecisionNode(Node):
         # 조기 탈출(실격)하지 않도록, yaw 표는 랩 완주 이후에나 나오는 값으로 올려 둔다.
         # 완주 yaw 백업 표: 실측 발화 yaw/s = 4.16~4.72 (3런) -> 5.0 이면 정지선을
         # 놓쳤을 때만 ~1-3s 뒤 time+yaw 2표로 강제 탈출 (9.0 은 도달 불가 죽은 표였음)
-        self.declare_parameter('yaw_lap_threshold', 5.0)
+        self.declare_parameter('yaw_lap_threshold', 7.0)
         self.declare_parameter('nominal_loop_time_s', 15.0) # 저속(0.16) 예상 한 바퀴 시간 (골든런 랩 19.7초 기반)
         self.declare_parameter('lap_votes_needed', 2)      # {yaw, time, crossline} 중 탈출에 필요한 표 수
         # 노란색이 회전교차로 진입을 게이트한다 (회전교차로는 노란색, 외곽 루프는 흰색)
@@ -209,10 +209,11 @@ class DecisionNode(Node):
         # RA 진입 후 게이트 카운트 금지 시간(진입선 오카운트 방어). 길어서 손해는
         # "한 바퀴 더"뿐(과회전 허용), 짧으면 조기 탈출=실격 위험 -> 길게 잡는다.
         # 단, 실측 한 바퀴 시간보다는 반드시 짧아야 함 (트랙에서 라이브 조정).
-        self.declare_parameter('gate_blank_s', 7.0)   # 잔상 '출생' 덮개 (군집 v2 — 무효 판정용, 무스케일)
+        self.declare_parameter('gate_blank_s', 3.5)   # 잔상 '출생' 덮개 (군집 v2 — 무효 판정용, 무스케일)
         self.declare_parameter('gate_rearm_s', 0.5)          # 가로선이 이 시간 연속 OFF 여야 다음 카운트 무장
         self.declare_parameter('gate_cluster_gap_s', 1.8)    # 목격 간격 이 미만 = 같은 군집 (파편/2조각 병합)
-        self.declare_parameter('gate_cluster_on_s', 0.25)    # 군집 누적 ON 카운트 문턱 (run76 약피처 0.19 배제, 실선 0.5+ 통과)
+        self.declare_parameter('gate_cluster_on_s', 0.12)    # 군집 누적 ON 카운트 문턱 (run76 약피처 0.19 배제, 실선 0.5+ 통과)
+        self.declare_parameter('ra_direct_fire', 1)   # 1=카운트 성립 즉시 발화 (07-15 포팅 — stopline_mode 1 필수 세트, 둘 다 소스 박제)
         # 이 조향적분 전에는 탈출 게이트 잠금 (링 중간 가짜선 차단).
         # 07-12 재배치 4.2 -> 3.6 (사용자 승인, B안): 4.2 는 진짜 탈출선 실측
         # (4.12~4.28)과 여유 2%뿐이라 손 개입/빠른 랩에서 yaw 가 모자라 불발 —
@@ -301,6 +302,7 @@ class DecisionNode(Node):
             'gate_blank_s': float(g('gate_blank_s').value),
             'gate_cluster_gap_s': float(g('gate_cluster_gap_s').value),
             'gate_cluster_on_s': float(g('gate_cluster_on_s').value),
+            'ra_direct_fire': int(g('ra_direct_fire').value),
             'yaw_gate_min': float(g('yaw_gate_min').value),
             'gate_rearm_s': float(g('gate_rearm_s').value),
         }

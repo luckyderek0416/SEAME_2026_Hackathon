@@ -41,6 +41,11 @@ class LaneNode(Node):
         self.declare_parameter('crossline_hough_max_gap', 10)   # 선분 이어붙이기 최대 간격(px). 8 이하면 진짜 정지선도 못 잇는다
         self.declare_parameter('crossline_min_solidity', 0.80)  # 선분 위 픽셀 충실도 하한 (이어붙인 점선 배제)
         self.declare_parameter('crossline_sw_gate', 1)           # SW 코리도 교차 게이트 (run76~80 실전 검증: B 개구부 페인트 기각)
+        self.declare_parameter('sw_curv_max_a', 0.003)          # 진입 창 우곡률 상한 (B 가지 오물림 방지, 0=off)
+        self.declare_parameter('stopline_mode', 1)               # 관통+정면 정지선 분류기 (0=레거시)
+        self.declare_parameter('stopline_ang_max', 15.0)
+        self.declare_parameter('stopline_cov_min', 0.25)
+        self.declare_parameter('stopline_sol_min', 0.55)
         self.declare_parameter('crossline_sw_margin', 40.0)      # 교차 판정 여유(px)
         self.declare_parameter('crossline_debug_all', False)    # 채택 후에도 전 선분 진단
         self.declare_parameter('debug_topic', '/perception/lane/debug')
@@ -67,7 +72,7 @@ class LaneNode(Node):
         self.declare_parameter('use_yellow', True)            # 노란색 회전교차로 차선
         self.declare_parameter('white_hsv_lo', [0, 0, 180])   # H,S,V 하한 (OpenCV H 0-179)
         self.declare_parameter('white_hsv_hi', [179, 60, 255])
-        self.declare_parameter('yellow_hsv_lo', [18, 45, 110])   # 옅은/바랜 노란 선을 위해 S 하한을 낮춤
+        self.declare_parameter('yellow_hsv_lo', [22, 45, 140])   # 옅은/바랜 노란 선을 위해 S 하한을 낮춤
         self.declare_parameter('yellow_hsv_hi', [40, 255, 255])
         # 빨간 노면(ArUco 장애물 구간). 빨강은 H 양끝에 걸쳐 두 구간을 합쳐 잡는다.
         # red_ratio 만 계산하고 차선 mask 에는 넣지 않으므로 조향에 영향 없다.
@@ -82,7 +87,7 @@ class LaneNode(Node):
         # (워프 후 0.20w/0.80w). 합격: 기둥 slope ~0, 폭 192±5px @x=64/256.
         self.declare_parameter('use_birdeye', True)
         # 07-11 재캘리 (카메라 재조정 후): 워프 검증 좌 +0.003/우 +0.000, x=64/256 정확.
-        self.declare_parameter('birdeye_src_ratio', [0.2598, 0.342, 0.7320, 0.342, 0.9264, 0.965, 0.0376, 0.965])
+        self.declare_parameter('birdeye_src_ratio', [0.2705, 0.342, 0.6697, 0.342, 0.8579, 0.965, 0.0871, 0.965])
         self.declare_parameter('birdeye_dst_ratio', [0.20, 0.00, 0.80, 0.00, 0.80, 1.00, 0.20, 1.00])
         # --- 가이드 밴드 탐색 (기본 ON) ---
         self.declare_parameter('use_guided_band', True)
@@ -119,7 +124,7 @@ class LaneNode(Node):
         # 흰 구간 노이즈 바닥 0.0005 (07-10, 232f). 0.005/0.01 은 원거리 노란 마킹
         # 조기 래치 이탈(07-11, 3회) -> 0.03. 07-12: 분기 yr 피크 런별 0.026~0.095
         # 실측 -> 라이브 0.02 운용 (aux.sh).
-        self.declare_parameter('follow_yellow_ratio', 0.03)         # 이 노란비율 이상 -> YELLOW 모드 진입
+        self.declare_parameter('follow_yellow_ratio', 0.02)         # 이 노란비율 이상 -> YELLOW 모드 진입
                                                                     # (노란선이 점선이라 yr 이 낮음)
         self.declare_parameter('follow_yellow_exit_white_ratio', 1.0)  # 흰픽셀 > 이 배율*노란픽셀 (해제 조건 일부)
         self.declare_parameter('follow_yellow_exit_yellow_frac', 0.5)  # 해제 노랑문턱 = 진입문턱*이 비율 (노랑 보이면 유지)
@@ -137,7 +142,13 @@ class LaneNode(Node):
         # 연속성 가드/1L 계열 — 근거는 lane_detector.__init__ 주석 참고.
         self.declare_parameter('center_jump_max_ratio', 0.10)   # 0.15 는 쐐기 당김 통과 -> 0.10 확정
         self.declare_parameter('entry_oneline_frames', 80)   # ~4s (run17: 2s 는 저속 미완 만료)
-        self.declare_parameter('oneline_near_bands', 2)      # 1L 하단 밴드 수 (run40)
+        self.declare_parameter('oneline_near_bands', 2)
+        # 1L 조기 해제 (07-15): 차폭 페어 K프레임 연속 복원 시 즉시 1L 종료. 0=off
+        self.declare_parameter('oneline_release_pair_k', 5)
+        self.declare_parameter('oneline_release_min_hold', 20)
+        # 탈출 노랑 소실 즉시 해제 (07-15): RA 후 ROI 노랑 소실 시 즉시 흰 추종
+        self.declare_parameter('exit_yellow_gone_instant', 1)  # 0=off(기존 2조건 경로만)
+        self.declare_parameter('exit_yellow_gone_frames', 1)   # 즉시=1, 노이즈여유 2~3      # 1L 하단 밴드 수 (run40)
         self.declare_parameter('ra_entry_oneline_frames', 0)     # 0=off. 재활성 시 160(~8s)
         self.declare_parameter('ra_exit_oneline_frames', 0)      # 0=off. 재활성 시 60(~3s)
         # --- SW 코리도 추적 — 상세는 lane_detector.__init__ sw_* 주석. 락 프레임만
@@ -263,6 +274,11 @@ class LaneNode(Node):
         self.detector.crossline_hough_max_gap = int(gp('crossline_hough_max_gap').value)
         self.detector.crossline_min_solidity = float(gp('crossline_min_solidity').value)
         self.detector.crossline_sw_gate = int(gp('crossline_sw_gate').value)
+        self.detector.sw_curv_max_a = float(gp('sw_curv_max_a').value)
+        self.detector.stopline_mode = int(gp('stopline_mode').value)
+        self.detector.stopline_ang_max = float(gp('stopline_ang_max').value)
+        self.detector.stopline_cov_min = float(gp('stopline_cov_min').value)
+        self.detector.stopline_sol_min = float(gp('stopline_sol_min').value)
         self.detector.crossline_sw_margin = float(gp('crossline_sw_margin').value)
         self.detector.crossline_debug_all = bool(gp('crossline_debug_all').value)
         self.detector.filter_yellow_dashes = bool(gp('filter_yellow_dashes').value)
@@ -273,6 +289,10 @@ class LaneNode(Node):
         self.detector.center_jump_max_ratio = float(gp('center_jump_max_ratio').value)
         self.detector.entry_oneline_frames = int(gp('entry_oneline_frames').value)
         self.detector.oneline_near_bands = int(gp('oneline_near_bands').value)
+        self.detector.oneline_release_pair_k = int(gp('oneline_release_pair_k').value)
+        self.detector.oneline_release_min_hold = int(gp('oneline_release_min_hold').value)
+        self.detector.exit_yellow_gone_instant = int(gp('exit_yellow_gone_instant').value)
+        self.detector.exit_yellow_gone_frames = int(gp('exit_yellow_gone_frames').value)
         self.detector.ra_entry_oneline_frames = int(gp('ra_entry_oneline_frames').value)
         self.detector.ra_exit_oneline_frames = int(gp('ra_exit_oneline_frames').value)
         self.detector.sw_entry_frames = int(gp('sw_entry_frames').value)
