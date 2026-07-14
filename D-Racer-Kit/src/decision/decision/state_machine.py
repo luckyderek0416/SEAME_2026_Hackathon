@@ -19,12 +19,12 @@
 
 탈출 판정 (IMU 없음, 마커 없음):
   주(PRIMARY) = 가로선 게이트 카운트 (블랭크 + 재무장으로 진입선 재카운트 차단)
-  백업(failsafe) = 3-표결: yaw proxy(조향 적분) / 경과시간 / 가로선 재등장
-                   중 >= lap_votes_needed 개 동의 (junction 표는 오검출로 제외)
-  최후 = max_loop_time 강제 탈출.
+  비상구(유일 failsafe) = ra_failsafe_exit_s: 링 체류 절대 시간 상한 (07-15 사용자
+                   결정 — 구 3-표결(yaw/시간/가로선)은 속도 의존 + 조기 탈출
+                   오발(=실격) 이력으로 전부 삭제).
 min_loop_time 전에는 절대 탈출하지 않는다. 모든 임계값은 늦게 나가는 쪽으로:
 규정상 >= 1 바퀴가 허용이라 과회전은 공짜지만 < 1 바퀴는 실격이다.
-yaw_lap_threshold 와 nominal_loop_time_s 는 실제 트랙에서 캘리브레이션할 것.
+ra_failsafe_exit_s 는 실측 랩타임 기반 '2랩 근처(=A 부근)'로 캘리브레이션할 것.
 """
 
 from enum import Enum
@@ -78,7 +78,6 @@ class RaceStateMachine:
         self.throttle_adj = 0.0       # 순항 스로틀 가산 보정 (decision_node 가 적용)
         self.yaw_proxy = 0.0          # IMU 없는 헤딩 추정치 (조향 적분)
         self._entry_votes = 0         # 마지막 회전교차로 진입 투표 수 (디버그/로그)
-        self._exit_votes = 0          # 마지막 회전교차로 탈출 투표 수 (디버그/로그)
         self._entry_lock_active = False  # 진입측 락온이 걸려 있는 동안 True (one-shot)
         self._exit_lock_t = 0.0          # 탈출 락 남은 시간(초) — RA 탈출 순간 장전
         # DRIVE 소실 폴백용: 최근 조향의 EMA (07-12 run47 v47.6 실증 — 탈출로
@@ -443,7 +442,7 @@ class RaceStateMachine:
 
             # (1) 조향 적분 yaw proxy (IMU 대체). 속도가 거의 일정하면 누적 yaw 는
             # 회전 방향 조향 편향량의 합에 비례(∝)한다.
-            # 임계값은 실제 트랙에서 캘리브레이션한다 (yaw_lap_threshold).
+            # 07-15: 표결 삭제 후 용도는 게이트 카운트 위생 하한(yaw_gate_min)뿐.
             # 07-11: 이 차의 조향 규약은 steer>center=좌 (실측 3중 검증). turn_direction
             # (-1=CCW) 가정과 반대라 부호를 뒤집는다 — 안 뒤집으면 CCW 링에서 좌조향이
             # 음수 defl 이 되어 yaw_proxy 가 영영 0 (백업 표결의 yaw 표가 못 나옴).
@@ -508,8 +507,7 @@ class RaceStateMachine:
             # ----- 바퀴 수 판정 -----
             # 절대 하한: min_loop_time 전에는 절대 탈출하지 않는다 (한 바퀴 미달은
             # 미션 실패이고, 진입 쪽 노란 가로선을 출구로 오인하는 것도 막아준다).
-            # 주 탈출 = 게이트 카운트. 백업 = 세 가지 추정치(yaw proxy, 시간, 노란
-            # 가로선 재등장) 중 >= lap_votes_needed 개 동의.
+            # 주 탈출 = 게이트 카운트. 백업 표결은 07-15 삭제 (아래 비상구가 유일).
             # 편향은 늦게 나가는 쪽으로, 절대 일찍 나가지 않는다.
             if self.circle_t >= self.cfg['min_loop_time_s'] * self._speed_scale:
                 # 주(PRIMARY) 탈출: 출구 게이트를 충분히 통과함 -> 출구 브랜치로 락온
@@ -524,39 +522,14 @@ class RaceStateMachine:
                     self._enter(State.DRIVE)
                     return steer, self.cfg['slow_throttle'], self.state.value
 
-                # FAILSAFE: 게이트 실패 대비 3중 2 표결 백업 (junction 표는 오검출로
-                # 제외). 주 탈출과 동일하게 출구측 락온 — 락온 없인 FOLLOW-Y 가 링을
-                # 무한 순환. 링 중간에 걸려도 시드 밀기는 무해.
-                yaw_done = (self.yaw_proxy
-                            >= self.cfg['yaw_lap_threshold'] * self._speed_scale)
-                time_done = (self.circle_t
-                             >= self.cfg['nominal_loop_time_s'] * self._speed_scale)
-                # 가로선 표도 게이트와 같은 재등장 규율 적용: 재무장(_gate_armed,
-                # 0.5s 이상 사라졌다 다시 나타남) 상태에서 보일 때만 인정한다.
-                # 진입선이 시야에 계속 남아 있는 것(정차/저속 통과)은 표가 아니다.
-                # cross 표는 '반대편 입구를 이미 세었고'(군집 이력) 현재 목격이
-                # 무효 군집도, 방금 카운트된 그 군집도 아닐 때만 — 긴 군집 내부
-                # 공백(>=0.5s)에 재무장이 일어나면 자기 군집 꼬리가 count>=1 을
-                # 자충족해 표결 오발하던 것(run74 파란 꼬리 발화) 봉쇄.
-                cross_done = (bool(lane.yellow_crossline) and self._gate_armed
-                              and not self._gate_cluster_void
-                              and not self._gate_cluster_counted
-                              and self._gate_count
-                              >= int(self.cfg['roundabout_exit_gates']) - 1
-                              and self.yaw_proxy >= self.cfg.get('yaw_gate_min', 0.0)
-                              * self._speed_scale)
-                votes = int(yaw_done) + int(time_done) + int(cross_done)
-                self._exit_votes = votes
-                if votes >= self.cfg['lap_votes_needed']:
-                    self.turn_latch = self.cfg['roundabout_exit_side']
-                    self.turn_latch_age = 0.0
-                    self._fork_seen = False
-                    self.roundabout_done = True
-                    self._enter(State.DRIVE)
-                    return steer, self.cfg['slow_throttle'], self.state.value
-
-            # 최후 failsafe: 모든 추정치가 실패하면 강제 탈출 (역시 출구측 락온)
-            if self.circle_t >= self.cfg['max_loop_time_s']:
+            # 비상구 (07-15 사용자 결정, 유일 failsafe): 3중 표결(yaw/시간/가로선
+            # 재등장)은 전부 삭제 — yaw 적분·랩타임 가정이 속도 의존이라 스로틀
+            # 밴드마다 재캘리를 요구했고, 오발 = 1바퀴 미달 조기 탈출 = 실격
+            # (run55/64/65/66/68/72/74 연쇄). 규정상 과회전은 무해하므로 백업은
+            # "일찍 나갈 수 있는 보험"이 아니라 "늦게라도 반드시 나가는 문" 하나만:
+            # 링 체류 절대 시간 상한 (속도 스케일 없음 — 위치 판별은 게이트가 전담,
+            # 이 문턱은 2랩 근처(=A 부근)로 실측 랩타임 기반 캘리할 것).
+            if self.circle_t >= self.cfg.get('ra_failsafe_exit_s', 40.0):
                 self.turn_latch = self.cfg['roundabout_exit_side']
                 self.turn_latch_age = 0.0
                 self._fork_seen = False

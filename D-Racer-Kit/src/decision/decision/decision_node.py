@@ -178,17 +178,12 @@ class DecisionNode(Node):
         self.declare_parameter('throttle_adapt_max', 0.015)   # 보정 절대 상한 (안전 클램프)
         self.declare_parameter('y_latch_ratio', 0.02)         # 래치 감지 yr 문턱 (perception 과 동일값 권장)
         self.declare_parameter('y_latch_frames', 10)          # 래치 감지 연속 틱
-        self.declare_parameter('max_loop_time_s', 30.0)   # 모든 추정치 실패 시 failsafe 탈출
+        # 비상구 (07-15 사용자 결정): 구 3-표결(yaw/시간/가로선 재등장) + max_loop
+        # 전부 삭제 — 속도 의존 재캘리 + 조기 탈출 오발(=실격) 이력. 유일 failsafe 는
+        # 링 체류 절대 상한 하나 (속도 스케일 없음). 실측 랩타임 기반 '2랩 근처
+        # (=A 부근에서 발동)'로 캘리할 것. 참고: 현대 스택 실측 랩 18.6s@0.185.
+        self.declare_parameter('ra_failsafe_exit_s', 40.0)
         self.declare_parameter('crossline_cooldown_s', 2.0)  # 게이트 카운트 간 최소 간격 (재카운트 디바운스)
-        # --- 탈출 failsafe 3-표결 (조향 적분 + 시간 + 가로선 재등장), IMU/마커 없음 ---
-        # 07-11: yaw_proxy 부호 수정으로 이 표가 실제로 나올 수 있게 됨. 링 편향 0.225/s 만으로
-        # ~6.0 은 27초, PID 포함 시 더 빨리 도달. 랩(~20초) 전에 time(15초)+yaw 2표가 모여
-        # 조기 탈출(실격)하지 않도록, yaw 표는 랩 완주 이후에나 나오는 값으로 올려 둔다.
-        # 완주 yaw 백업 표: 실측 발화 yaw/s = 4.16~4.72 (3런) -> 5.0 이면 정지선을
-        # 놓쳤을 때만 ~1-3s 뒤 time+yaw 2표로 강제 탈출 (9.0 은 도달 불가 죽은 표였음)
-        self.declare_parameter('yaw_lap_threshold', 5.0)
-        self.declare_parameter('nominal_loop_time_s', 15.0) # 저속(0.16) 예상 한 바퀴 시간 (골든런 랩 19.7초 기반)
-        self.declare_parameter('lap_votes_needed', 2)      # {yaw, time, crossline} 중 탈출에 필요한 표 수
         # 노란색이 회전교차로 진입을 게이트한다 (회전교차로는 노란색, 외곽 루프는 흰색)
         self.declare_parameter('use_yellow_entry', True)
         self.declare_parameter('yellow_enter_ratio', 0.06)  # ROI 노란색 비율 => 회전교차로 안
@@ -284,11 +279,8 @@ class DecisionNode(Node):
             'throttle_adapt_max': float(g('throttle_adapt_max').value),
             'y_latch_ratio': float(g('y_latch_ratio').value),
             'y_latch_frames': int(g('y_latch_frames').value),
-            'max_loop_time_s': float(g('max_loop_time_s').value),
+            'ra_failsafe_exit_s': float(g('ra_failsafe_exit_s').value),
             'crossline_cooldown_s': float(g('crossline_cooldown_s').value),
-            'yaw_lap_threshold': float(g('yaw_lap_threshold').value),
-            'nominal_loop_time_s': float(g('nominal_loop_time_s').value),
-            'lap_votes_needed': int(g('lap_votes_needed').value),
             'use_yellow_entry': bool(g('use_yellow_entry').value),
             'yellow_enter_ratio': float(g('yellow_enter_ratio').value),
             'roundabout_exit_gates': int(g('roundabout_exit_gates').value),
@@ -328,12 +320,9 @@ class DecisionNode(Node):
             'ra_ref_drive_s',                     # 속도 스케일 기준 (G->RA 소요시간)
             'throttle_ref_latch_s', 'throttle_adapt_gain', 'throttle_adapt_max',
             'crossline_cooldown_s',               # 게이트 카운트 간 최소 간격
-            # 아래 넷은 전부 '트랙에서 캘리브레이션할 것' 으로 남아있던 값이다.
             # 링을 실제 속도로 돌려 실측해야 하므로 주행 중 변경 가능해야 한다.
-            # (특히 max_loop_time_s failsafe 를 늘리지 못하면 20초에 강제 탈출해
-            #  한 바퀴를 다 못 돌아 측정 자체가 불가능하다.)
-            'min_loop_time_s', 'max_loop_time_s',
-            'nominal_loop_time_s', 'yaw_lap_threshold', 'lap_votes_needed',
+            # (비상구를 늘리지 못하면 측정 중 강제 탈출해 랩 측정 자체가 불가능하다.)
+            'min_loop_time_s', 'ra_failsafe_exit_s',
             'finish_min_drive_s',                 # 빨간불 무시 최소 주행시간 (오인식 가드)
             'light_min_area',                     # 신호등 bbox 최소 면적 (오검출 필터)
             'conf_threshold',                     # YOLO confidence 문턱 (현장 조정)
@@ -500,12 +489,12 @@ class DecisionNode(Node):
         # 재획득 규칙 무장 여부 -> perception (nl 0->1 재획득 = 우측 규칙 스코프)
         self.merge_pub.publish(Bool(data=bool(getattr(self.sm, 'reacq_armed', False))))
         # 상태 전환은 INFO 로 남긴다 (디버그 레벨 없이도 전환 사유 추적 가능):
-        # ROUNDABOUT 탈출이 게이트(gate)였는지 표결(exitV)이었는지 수치로 판별.
+        # ROUNDABOUT 탈출 = 게이트 카운트 or 비상구(circle_t 로 판별).
         if state != self._prev_state:
             self.get_logger().info(
                 f'state {self._prev_state} -> {state} '
                 f'(race_t={self.sm.race_t:.1f}s circle_t={self.sm.circle_t:.1f}s '
-                f'gate={self.sm._gate_count} exitV={self.sm._exit_votes} '
+                f'gate={self.sm._gate_count} '
                 f'yaw={self.sm.yaw_proxy:.1f} latch={self.sm.turn_latch})')
             self._prev_state = state
         cfg = self.sm.cfg
@@ -583,7 +572,7 @@ class DecisionNode(Node):
             f'xline={int(self.lane.yellow_crossline)} junc={int(self.lane.junction)} '
             f'fork={int(self.lane.fork)} '
             f'yr={self.lane.yellow_ratio:.2f} '
-            f'entryV={self.sm._entry_votes} exitV={self.sm._exit_votes} gate={self.sm._gate_count} '
+            f'entryV={self.sm._entry_votes} gate={self.sm._gate_count} '
             f'sc={self.sm._speed_scale:.2f} '
             f'forkDet={self._last_fork_dir} forkFix={self.confirmed_fork_direction} '
             f'forkConf={self.fork_sign_confidence:.2f} latch={self.sm.turn_latch}'
