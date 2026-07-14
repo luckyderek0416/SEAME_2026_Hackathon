@@ -33,7 +33,7 @@ class LaneNode(Node):
         # 0 = 비활성(측정 모드). 곡선 위에서 비스듬히 접근해도 통과한다.
         self.declare_parameter('crossline_perp_tol_deg', 20.0)
         # BEV 가로/세로 스케일비(sx/sy). 07-10 실측 r=1.91. dst_ratio 변경 시 재측정.
-        self.declare_parameter('crossline_bev_aspect', 1.91)
+        self.declare_parameter('crossline_bev_aspect', 2.23)   # 07-15 대회장 재측정 (새 warp; 분류기 각도 판정 기준)
         self.declare_parameter('lane_heading_alpha', 0.2)
         self.declare_parameter('crossline_exclude_px', 6.0)  # 후보 선분 배제 반경(px)
         # HoughLinesP 파라미터 (정지선 선분 검출).
