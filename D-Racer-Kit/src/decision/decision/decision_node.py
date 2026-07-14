@@ -65,10 +65,11 @@ class DecisionNode(Node):
                                                          # curve_slow/steer_slow 가 여기서 깎는다.
         self.declare_parameter('slow_throttle', 0.165)
         # 노란 구간(DRIVE[Y]) 전용 상한: 접근/갈림길에서 저속·정밀 주행 (0=기능 off).
-        # 07-12 run47 실증 + 사용자 확정: 노란 구간은 0.165 고정. (0.17 이던 시절에도
-        # 커브 감속이 하한 0.165 로 깎아 링에선 사실상 0.165 였음 — 카메라 재캘리 후
-        # 곡률 추정이 정확해지며 상시 하한 도달. 변동 요소를 없애고 상수로 못 박는다.)
-        self.declare_parameter('yellow_drive_throttle', 0.165)
+        # 07-14 사용자 확정(설계 원복): 상한은 drive(0.19)보다 조금 낮게 0.18, 전 주행
+        # 하한은 slow(0.165) — 직선부는 0.18 로 달리고 커브는 곡률 감속이 0.165 까지
+        # 깎는다. (07-12 의 0.165 고정은 상한=하한이 붙어 노란 직선까지 저속이던 상태.)
+        # 주의: throttle_adj(±0.015)가 캡 뒤에 가산되므로 실효는 0.18+adj.
+        self.declare_parameter('yellow_drive_throttle', 0.18)
         self.declare_parameter('yellow_slow_ratio', 0.03)   # 노란 구간 판정 문턱 (FOLLOW-Y 와 동일 값 유지 — 07-11 run8 후 0.03 복원에 동기화)   # 1587us: ROUNDABOUT 주행 + 감속 바닥.
                                                          # 유지는 되지만 정지에서 출발은 불가.
         self.declare_parameter('stop_throttle', 0.0)     # 1500us: 중립
