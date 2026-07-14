@@ -42,7 +42,7 @@ class LaneNode(Node):
         self.declare_parameter('crossline_min_solidity', 0.80)  # 선분 위 픽셀 충실도 하한 (이어붙인 점선 배제)
         self.declare_parameter('crossline_sw_gate', 1)           # SW 코리도 교차 게이트 (run76~80 실전 검증: B 개구부 페인트 기각)
         self.declare_parameter('sw_curv_max_a', 0.003)          # 진입 창 우곡률 상한 (B 가지 오물림 방지, 0=off)
-        self.declare_parameter('stopline_mode', 1)               # 관통+정면 정지선 분류기 (0=레거시)
+        self.declare_parameter('stopline_mode', 0)               # 07-15 사용자: 레거시 복귀 (게이트2 세트 — B도 세어야 함)
         self.declare_parameter('stopline_ang_max', 15.0)
         self.declare_parameter('stopline_cov_min', 0.25)
         self.declare_parameter('stopline_sol_min', 0.55)
