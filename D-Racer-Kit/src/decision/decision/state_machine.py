@@ -135,9 +135,18 @@ class RaceStateMachine:
             # 없이 그대로 유지한다 — center 수렴도, 기하 편향도 없음. 창이 시간이
             # 아니라 흰 실선 이벤트(_exit_active 해제)로 종료되므로 속도 의존이 없다.
             # (탈출~병합 이탈이 스로틀 인상 후 늘어난 원인 = 고정 시간창의 속도 미추종.)
-            if (self.state == State.DRIVE and self._exit_active
-                    and self._last_lane_steer is not None):
-                return float(self._last_lane_steer)
+            if self.state == State.DRIVE and self._exit_active:
+                # 탈출 락 창(발화 후 exit_lock_release_s): 기하 피드포워드(탈출측 호).
+                # run_c 실측(07-14 밤): 개구부에서 소실 시 '마지막 조향 유지'는 직전의
+                # 과도 스파이크를 물 수 있고(-0.002 하드값 2.4s 유지), 초기 우회전
+                # 권위가 없어 신목을 관통했다. 락 창 동안은 구 검증 세대(run76~80)의
+                # 탈출 바이어스를 복원하고, 창 이후 소실은 홀드가 담당한다.
+                if self._exit_lock_t > 0.0:
+                    return float(self.cfg['steer_center']
+                                 + self.cfg['turn_direction']
+                                 * self.cfg.get('exit_steer_bias', 0.0))
+                if self._last_lane_steer is not None:
+                    return float(self._last_lane_steer)
             # 차선 놓침: DRIVE 는 '직전 조향 EMA' 유지 (직진 폴백이 커브를 뚫던
             # run47 전환부 이탈 대응), 3s 시정수로 중앙 수렴. RA 는 ra_blind_bias
             # 전담 (중복 가산 방지).
@@ -163,7 +172,10 @@ class RaceStateMachine:
             s = max(c - 0.30, min(c + 0.30, steer))
             self._steer_hold = (s if self._steer_hold is None
                                 else 0.3 * s + 0.7 * self._steer_hold)
-            self._last_lane_steer = steer   # 탈출 블라인드 유지용 (07-14 항목4)
+            # 탈출 블라인드 유지용 (07-14 항목4). run_c: 소실 직전 마지막 틱의 PID
+            # D-스파이크(-0.002)가 그대로 2.4s 유지됐다 — _steer_hold 와 동일하게
+            # center±0.30 클램프해 과도값이 홀드로 박제되는 것을 차단.
+            self._last_lane_steer = s
         return steer
 
     def _turn_bias(self):

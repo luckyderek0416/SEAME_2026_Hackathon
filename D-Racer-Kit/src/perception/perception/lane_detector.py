@@ -359,6 +359,13 @@ class LaneDetector:
         # 해제 + 시드 전체 높이(코리도가 정지선 너머 상단에만 있는 프레임 대응),
         # 대신 |기욺| 상한으로 정지선 대각선(실측 102~148px)만 기각 — 코리도는 완만.
         self.sw_exit_open_frames = 30   # 개방 구간 길이. 0=off(기존 동작과 동일)
+        # 탈출 개구부 링쪽 컬럼 컷 (07-14 밤 run_c 실측): 발화 순간 개구부에서 진입
+        # 커넥터 점선(링쪽)과 탈출 선이 '차폭 간격 가짜 페어'를 이뤄 코리도가 신목
+        # 한가운데를 추종 → 좌이탈. 발화 직후 이 프레임 수 동안 SW 입력에서 탈출
+        # 반대쪽(fork_dir 반대) 컬럼을 제거해 코리도가 탈출측 선만 보게 한다.
+        # 컷으로 락 실패 시 폴백 = 일반 파이프라인(fork 가이드 우측 시드) — 원 설계.
+        self.sw_exit_cut_frames = 40    # ~2s@20fps. 0=off
+        self.sw_exit_cut_frac = 0.45    # 제거 컬럼 비율
         self.sw_open_max_lean_px = 90.0 # 개방 구간 |기욺| 상한 (정지선 대각선 실측 102+)
         self._sw_open = False           # 이번 프레임이 개방 구간인지
         self._sw_len = 0                # 무장 시점의 창 길이 (age 계산용)
@@ -1160,6 +1167,19 @@ class LaneDetector:
                     src[:, src.shape[1] - wcut:] = 0
                 else:
                     src[:, :wcut] = 0
+            # 탈출 개구부 컷 (__init__ sw_exit_cut_frames 주석): 발화 직후 링쪽 제거
+            if (src is not None and self._sw_kind == 'exit' and self._sw_dir > 0
+                    and int(getattr(self, 'sw_exit_cut_frames', 0)) > 0
+                    and (self._sw_len - self._sw_left)
+                    <= int(self.sw_exit_cut_frames)
+                    and self.fork_dir in ('left', 'right')):
+                wcut = int(src.shape[1] * float(self.sw_exit_cut_frac))
+                if wcut > 0:
+                    src = src.copy()
+                    if self.fork_dir == 'right':
+                        src[:, :wcut] = 0                      # 링(좌) 제거
+                    else:
+                        src[:, src.shape[1] - wcut:] = 0       # 링(우) 제거
             if src is not None:
                 self._sw_gate_dir = self._sw_dir
                 self._sw_open = False
