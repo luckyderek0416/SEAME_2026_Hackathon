@@ -33,7 +33,7 @@ class LaneNode(Node):
         # 0 = 비활성(측정 모드). 곡선 위에서 비스듬히 접근해도 통과한다.
         self.declare_parameter('crossline_perp_tol_deg', 20.0)
         # BEV 가로/세로 스케일비(sx/sy). 07-10 실측 r=1.91. dst_ratio 변경 시 재측정.
-        self.declare_parameter('crossline_bev_aspect', 1.91)
+        self.declare_parameter('crossline_bev_aspect', 2.23)
         self.declare_parameter('lane_heading_alpha', 0.2)
         self.declare_parameter('crossline_exclude_px', 6.0)  # 후보 선분 배제 반경(px)
         # HoughLinesP 파라미터 (정지선 선분 검출).
@@ -67,7 +67,7 @@ class LaneNode(Node):
         self.declare_parameter('use_yellow', True)            # 노란색 회전교차로 차선
         self.declare_parameter('white_hsv_lo', [0, 0, 180])   # H,S,V 하한 (OpenCV H 0-179)
         self.declare_parameter('white_hsv_hi', [179, 60, 255])
-        self.declare_parameter('yellow_hsv_lo', [18, 45, 110])   # 옅은/바랜 노란 선을 위해 S 하한을 낮춤
+        self.declare_parameter('yellow_hsv_lo', [22, 45, 140])   # 옅은/바랜 노란 선을 위해 S 하한을 낮춤
         self.declare_parameter('yellow_hsv_hi', [40, 255, 255])
         # 빨간 노면(ArUco 장애물 구간). 빨강은 H 양끝에 걸쳐 두 구간을 합쳐 잡는다.
         # red_ratio 만 계산하고 차선 mask 에는 넣지 않으므로 조향에 영향 없다.
@@ -82,7 +82,7 @@ class LaneNode(Node):
         # (워프 후 0.20w/0.80w). 합격: 기둥 slope ~0, 폭 192±5px @x=64/256.
         self.declare_parameter('use_birdeye', True)
         # 07-11 재캘리 (카메라 재조정 후): 워프 검증 좌 +0.003/우 +0.000, x=64/256 정확.
-        self.declare_parameter('birdeye_src_ratio', [0.2598, 0.342, 0.7320, 0.342, 0.9264, 0.965, 0.0376, 0.965])
+        self.declare_parameter('birdeye_src_ratio', [0.2705, 0.342, 0.6697, 0.342, 0.8579, 0.965, 0.0871, 0.965])
         self.declare_parameter('birdeye_dst_ratio', [0.20, 0.00, 0.80, 0.00, 0.80, 1.00, 0.20, 1.00])
         # --- 가이드 밴드 탐색 (기본 ON) ---
         self.declare_parameter('use_guided_band', True)
