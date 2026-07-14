@@ -33,7 +33,7 @@ class LaneNode(Node):
         # 0 = 비활성(측정 모드). 곡선 위에서 비스듬히 접근해도 통과한다.
         self.declare_parameter('crossline_perp_tol_deg', 20.0)
         # BEV 가로/세로 스케일비(sx/sy). 07-10 실측 r=1.91. dst_ratio 변경 시 재측정.
-        self.declare_parameter('crossline_bev_aspect', 1.91)
+        self.declare_parameter('crossline_bev_aspect', 2.23)   # 07-15 대회장 재측정 (보드 로컬 튜닝 회수)
         self.declare_parameter('lane_heading_alpha', 0.2)
         self.declare_parameter('crossline_exclude_px', 6.0)  # 후보 선분 배제 반경(px)
         # HoughLinesP 파라미터 (정지선 선분 검출).
@@ -41,7 +41,7 @@ class LaneNode(Node):
         self.declare_parameter('crossline_hough_max_gap', 10)   # 선분 이어붙이기 최대 간격(px). 8 이하면 진짜 정지선도 못 잇는다
         self.declare_parameter('crossline_min_solidity', 0.80)  # 선분 위 픽셀 충실도 하한 (이어붙인 점선 배제)
         self.declare_parameter('crossline_sw_gate', 1)           # SW 코리도 교차 게이트 (run76~80 실전 검증: B 개구부 페인트 기각)
-        self.declare_parameter('sw_curv_max_a', 0.003)          # 진입 창 우곡률 상한 (B 가지 오물림 방지, 0=off)
+        self.declare_parameter('sw_curv_max_a', 0.0035)         # 진입 창 우곡률 상한 (B 가지 오물림 방지, 0=off) — 07-15 대회장
         self.declare_parameter('stopline_mode', 1)               # 관통+정면 정지선 분류기 (07-14 운용값 박제 — ra_direct_fire 1 과 세트)
         self.declare_parameter('stopline_ang_max', 15.0)
         self.declare_parameter('stopline_cov_min', 0.25)   # 캘리 근거(f59 실측 0.28 포용)와 통일 (구 0.35 는 진짜 A 기각 위험)
@@ -51,7 +51,7 @@ class LaneNode(Node):
         self.declare_parameter('sw_out_always', 1)              # OUT 코스 DRIVE 전 구간 코리도
         self.declare_parameter('fork_blind_frac', 0.40)
         self.declare_parameter('fork_blind_frames', 60)
-        self.declare_parameter('crossline_sw_margin', 40.0)      # 교차 판정 여유(px)
+        self.declare_parameter('crossline_sw_margin', 47.0)      # 교차 판정 여유(px)
         self.declare_parameter('crossline_debug_all', False)    # 채택 후에도 전 선분 진단
         self.declare_parameter('debug_topic', '/perception/lane/debug')
         self.declare_parameter('jpeg_quality', 80)
@@ -128,7 +128,7 @@ class LaneNode(Node):
         self.declare_parameter('fork_col_min_ratio', 0.15)          # 컬럼=라인 판정 세로픽셀 비율
         self.declare_parameter('fork_min_groups', 3)                # 라인 군집 개수 이상 => 분기
         self.declare_parameter('fork_span_ratio', 0.0)              # 바깥라인 간격 폴백 (0=비활성, 07-10 실측상 무용)
-        self.declare_parameter('fork_seed_px', 90)                  # 브랜치 선택 시드 이동량(px)
+        self.declare_parameter('fork_seed_px', 105)                  # 브랜치 선택 시드 이동량(px)
         # --- 노란색 우선 추종 (In 코스: 노란 진입 커브/회전교차로 링) ---
         self.declare_parameter('follow_yellow', True)               # In 코스 색상 추종 상태머신 on/off
         # 흰 구간 노이즈 바닥 0.0005 (07-10, 232f). 0.005/0.01 은 원거리 노란 마킹
@@ -151,7 +151,7 @@ class LaneNode(Node):
         self.declare_parameter('w_align_block_relatch', 1)
         self.declare_parameter('yw_premix', 0)          # RA 후 Y래치 중 흰 실선 선행 혼합
         self.declare_parameter('filter_yellow_dashes', True)           # Y추종 중 점선/정지선 track 제외 (실선만)
-        self.declare_parameter('yellow_solid_min_h_ratio', 0.30)       # "실선" 판정 최소 세로 비율
+        self.declare_parameter('yellow_solid_min_h_ratio', 0.38)       # "실선" 판정 최소 세로 비율
         self.declare_parameter('yellow_dash_fallback_px', 120)         # 실선 픽셀 이 미만이면 점선 포함 폴백
         self.declare_parameter('dash_fallback_exit_frames', 30)        # 폴백 해제(실선 복귀)에 필요한 연속 프레임 (1s)
         self.declare_parameter('yellow_heading_gain', 0.0)   # a_h 널뜀으로 OFF (07-11, detector 주석)
@@ -175,14 +175,14 @@ class LaneNode(Node):
         self.declare_parameter('sw_exit_frames', 150)     # RA 탈출 창 = 07-14 재설계 후 '순수 failsafe 상한'(≈7.5s@20fps). 종료는 흰 실선 이벤트가 담당 — 정상 주행에선 상한이 먼저 안 닿게, 그러나 미발화 시 구조 레이턴시라 과하게 길게도 금지. 리플레이로 확정. 0=off(라이브 킬)
         self.declare_parameter('sw_entry_input', 'solid') # 진입 입력: solid(병합 사선 제거) | raw
         self.declare_parameter('sw_exit_input', 'raw')    # 탈출 입력: 좌측 경계가 점선 -> raw 필수
-        self.declare_parameter('sw_num_boxes', 9)         # 상자 개수
-        self.declare_parameter('sw_box_margin', 30)       # 상자 반폭(px)
-        self.declare_parameter('sw_max_shift', 20)        # 상자당 이동 상한(px)
+        self.declare_parameter('sw_num_boxes', 5)         # 상자 개수
+        self.declare_parameter('sw_box_margin', 55)       # 상자 반폭(px)
+        self.declare_parameter('sw_max_shift', 35)        # 상자당 이동 상한(px)
         self.declare_parameter('sw_min_box_px', 8)        # 상자 적중 최소 픽셀
         self.declare_parameter('sw_min_boxes', 3)         # 유효 피팅 최소 적중 상자
         self.declare_parameter('sw_min_pixels', 50)       # 유효 피팅 최소 총 픽셀
-        self.declare_parameter('sw_wrongdir_px', 8.0)     # 기대 반대 방향 기욺 기각 문턱(px)
-        self.declare_parameter('sw_max_resid_px', 12.0)   # 피팅 평균 잔차 상한(px)
+        self.declare_parameter('sw_wrongdir_px', 9.4)     # 기대 반대 방향 기욺 기각 문턱(px)
+        self.declare_parameter('sw_max_resid_px', 14.0)   # 피팅 평균 잔차 상한(px)
         self.declare_parameter('sw_peak_min_px', 40)      # 시드 피크 최소 질량
         self.declare_parameter('sw_max_peaks', 3)         # 프레임당 피크 시드 수
         self.declare_parameter('sw_cross_row_frac', 0.45) # 정지선 행 제거 문턱(가로 점유율)
@@ -197,8 +197,8 @@ class LaneNode(Node):
         self.declare_parameter('sw_exit_white_confirm_frames', 4)   # 항목2: 발화 디바운스 프레임
         self.declare_parameter('sw_exit_gate_frames', 40)  # 탈출 방향게이트 적용 프레임 (이후 해제)
         self.declare_parameter('sw_exit_open_frames', 30)  # 탈출 개방 구간(발화 직후 좌향 코리도 허용). 0=off
-        self.declare_parameter('sw_open_max_lean_px', 110.0)  # 개방 구간 |기욺| 상한 (07-14 BEV 재캘리 스케일 보정: 코리도 실측 ≤86 / 정지선 대각선 ≥119 — 리플레이서 90은 코리도 7프레임 오기각)
-        self.declare_parameter('sw_exit_straight_px', 8.0)  # 직선 판정 |기욺| 문턱(px)
+        self.declare_parameter('sw_open_max_lean_px', 115.0)  # 개방 구간 |기욺| 상한 (07-14 BEV 재캘리 스케일 보정: 코리도 실측 ≤86 / 정지선 대각선 ≥119 — 리플레이서 90은 코리도 7프레임 오기각)
+        self.declare_parameter('sw_exit_straight_px', 9.4)  # 직선 판정 |기욺| 문턱(px)
         self.declare_parameter('course', 'in')                      # 'in' 일 때만 색상 추종 활성 (launch 전달)
         # 차선 폭 초기값(px, BEV 워프 기준). 0=학습대기. EMA 학습은 그대로 계속 미세보정.
         # 192 = 실측 차선폭 350mm 를 BEV 캘리로 변환한 값((0.80-0.20)*320px). 단선 구간
