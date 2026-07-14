@@ -290,7 +290,22 @@ class LaneDetector:
         # dir=-1 무장 → 우곡률 가지 기각(sw_curv_max_a, run87)·실선 입력 자동 적용.
         # 해제 = RA 래치 시 진입 코리도가 덮어씀. 0=off (라이브 킬스위치).
         self.sw_approach_frames = 600   # failsafe 상한 (~30s@20fps; RA 래치가 정상 종료)
-        self._sw_kind = ''              # 활성 창 종류: entry/exit/approach/out (킬스위치 매핑)
+        # IN 전구간 코리도 (07-14 밤, 사용자 설계): DRIVE[W] 래치 순간부터 상시 SW.
+        # 실측 근거(22:10 런): 출발~첫 좌회전이 일반 파이프라인 + 1L 인 동안 누운 노란
+        # 단선이 crossline 으로 오인돼 race_t=11.8s 가짜 RA 진입 → 이탈. W 구간은 흰
+        # 페어(양쪽 상자 체인 → 중점), Y래치 엣지에 노란 마스크로 재시드 + dir=-1
+        # (approach 와 동일: wrongdir 게이트 + run87 우곡 가드 + solid 입력 자동).
+        # RA 진입/탈출은 기존 entry/exit 창이 엣지에서 덮어쓰고, 탈출~병합 완료
+        # (_merge_done 전)엔 재무장하지 않는다(exit 기계 전담). 락 실패 프레임 폴백 =
+        # 기존 파이프라인(1L 포함) 그대로 — 기존 스택은 전부 보존된 안전망.
+        self.sw_drive_always = 1        # 0=off (라이브 킬스위치; 끄면 즉시 기존 스택 복귀)
+        # crossline 직교 게이트의 차선 헤딩 소스 교체 (07-14 밤): 후보 소거 후 잔여
+        # 픽셀이 없는 프레임(첫 좌회전의 누운 단선 = 마스크 대부분이 후보 자신)에서
+        # _lane_heading_excluding 이 EMA 폴백 → 누운 차선이 '직교'로 오인. 코리도
+        # 활성 중엔 추적 피팅의 국소 접선(2a·y+b)이 그 프레임의 진짜 차선 방향.
+        self.crossline_sw_heading = 1   # 0=구식(EMA 폴백) 복귀
+        self._sw_prev_yellow = False    # Y래치 엣지 감지 (drive 창 재시드/방향 전환용)
+        self._sw_kind = ''              # 활성 창 종류: entry/exit/approach/out/drive (킬스위치 매핑)
         self._sw_nl2_count = 0          # 접근 무장용 nl=2 연속 카운터
         # 1L 조기 해제 → SW 인계 (07-14 사용자 설계): 1L 중 노란 실선 '페어'(차폭 간격
         # 두 기둥)가 K프레임 연속 복원되면 = 좌회전 종료 이벤트 → 80f 만료를 안 기다리고
@@ -610,8 +625,17 @@ class LaneDetector:
             length = float(np.hypot(dx, dy))
             if length < min_len:
                 continue
-            # 이 후보를 지우고 남은 픽셀로 차선 방향을 잰다 (순환 회피).
-            ah = self._lane_heading_excluding(seg, fallback_ah)
+            # 차선 방향(a_h) 소스 (07-14 밤, __init__ crossline_sw_heading 주석):
+            # 코리도 활성이면 추적 피팅의 국소 접선 — 후보가 마스크 대부분인 프레임
+            # (누운 단선)에서도 진짜 차선 방향이 나와 '평행=차선' 기각이 성립한다.
+            # 아니면 구식: 후보를 지우고 남은 픽셀로 잰다 (순환 회피).
+            if (int(getattr(self, 'crossline_sw_heading', 0))
+                    and self._sw_left > 0 and self._sw_prev_fit is not None):
+                pa_h, pb_h, _pc_h = self._sw_prev_fit
+                ym_roi = (float(yy1) + float(yy2)) / 2.0 + y1
+                ah = float(np.clip(2.0 * pa_h * ym_roi + pb_h, -2.5, 2.5))
+            else:
+                ah = self._lane_heading_excluding(seg, fallback_ah)
             lane_g = (ah / r, 1.0)
             lane_norm = float(np.hypot(*lane_g))
             # 지면 공간에서의 |cos(차선, 선분)|. 0 = 직교(정지선), 1 = 평행(차선).
@@ -913,6 +937,19 @@ class LaneDetector:
             self._sw_dir = 0
             self._sw_kind = 'out'
             self._sw_straight = 0
+        # IN 전구간 코리도 무장 (07-14 밤, __init__ sw_drive_always 주석): DRIVE 인
+        # 동안 창이 없으면 즉시 무장. RA 탈출~병합 완료 전은 exit 기계 전담이라 제외.
+        if (self.course == 'in' and int(getattr(self, 'sw_drive_always', 0)) == 1
+                and self.drive_mode == 'DRIVE' and self._sw_left <= 0
+                and (not self._ra_seen or self._merge_done)):
+            self._sw_left = 999999
+            self._sw_len = self._sw_left
+            self._sw_dir = -1 if self._following_yellow else 0
+            self._sw_kind = 'drive'
+            self._sw_prev_fit = None
+            self._sw_interior = None
+            self._sw_straight = 0
+            self._sw_prev_yellow = self._following_yellow
         # 1L 조기 해제 → SW 즉시 인계 (07-14, __init__ oneline_release_* 주석):
         # 1L 진행 중 노란 실선 페어가 K프레임 연속 복원되면 좌회전 종료로 보고
         # 1L 을 닫고 같은 프레임에 접근 코리도를 무장한다.
@@ -1076,11 +1113,21 @@ class LaneDetector:
         # 0=off 규약 일관성 + "끄면 즉시 run47 복귀" 보장을 위해 매 프레임 확인.
         # 07-14: dir 기반 → 창 종류(_sw_kind) 매핑으로 교체 (approach 신설 + out 도
         # 자기 파라미터로 꺼지도록 — 구 코드는 out 이 sw_exit_frames 에 잘못 묶임).
+        # Y래치 엣지 재타겟 (07-14 밤): drive 창 활성 중 래치가 흰↔노랑으로 바뀌는
+        # 순간 입력 마스크가 통째로 바뀌므로 직전 피팅 시드를 버리고 새 마스크의
+        # 히스토그램 피크로 재시드한다. Y 구간은 dir=-1 (approach 와 동일 가드).
+        if (getattr(self, '_sw_kind', '') == 'drive' and self._sw_left > 0
+                and self._following_yellow != self._sw_prev_yellow):
+            self._sw_prev_fit = None
+            self._sw_interior = None
+            self._sw_dir = -1 if self._following_yellow else 0
+        self._sw_prev_yellow = self._following_yellow
         if self._sw_left > 0:
             live = {'entry': self.sw_entry_frames,
                     'exit': self.sw_exit_frames,
                     'approach': getattr(self, 'sw_approach_frames', 0),
-                    'out': getattr(self, 'sw_out_always', 0)}.get(
+                    'out': getattr(self, 'sw_out_always', 0),
+                    'drive': getattr(self, 'sw_drive_always', 0)}.get(
                         getattr(self, '_sw_kind', ''), 1)
             if int(live) <= 0:
                 self._sw_left = 0
@@ -1092,15 +1139,18 @@ class LaneDetector:
             # 끝나면 락 자연 실패 -> 흰 추종 인계 (아래 wsteady 종결자).
             if ymask is not None and (self._following_yellow
                                       or self._sw_dir > 0):
-                mode_in = (self.sw_entry_input if self._sw_dir < 0
-                           else self.sw_exit_input)
+                # dir<=0 = 진입/접근/drive[Y] 계열: solid 입력 (병합 사선 노이즈 제거)
+                mode_in = (self.sw_exit_input if self._sw_dir > 0
+                           else self.sw_entry_input)
                 sw_src = (self._filter_yellow_dashes(ymask)
                           if str(mode_in) == 'solid' else ymask)
                 src = (cv2.morphologyEx(sw_src, cv2.MORPH_OPEN, k)
                        if use_morph else sw_src)
-            elif (self._sw_dir == 0 and self.course == 'out'
-                    and wmask is not None):
-                # OUT 상시 코리도 입력 = 흰 마스크 (중앙선 없음, 양쪽 실선 -> pair 락 적합)
+            elif (self._sw_dir == 0 and wmask is not None
+                    and (self.course == 'out'
+                         or getattr(self, '_sw_kind', '') == 'drive')):
+                # 상시 코리도 흰 입력 (OUT 전구간 / IN drive[W] 구간):
+                # 양쪽 실선 -> pair 락(중점) 적합
                 src = (cv2.morphologyEx(wmask, cv2.MORPH_OPEN, k)
                        if use_morph else wmask)
             if src is not None and self._fork_cut is not None:
