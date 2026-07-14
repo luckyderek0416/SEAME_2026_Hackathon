@@ -371,6 +371,7 @@ class LaneDetector:
         self._sw_side_mem = 0.0         # +1=좌측 경계 / -1=우측 경계 / 0=무효
         self._sw_side_mem_age = 999
         self._sw_pair_xbots = None      # 직전 페어의 (x_l, x_r) — 생존측 판정용
+        self._sw_pair_run = 0           # 페어 연속 프레임 (유령 페어의 기억 오염 차단, run3)
         # 진입턴 점선 서브모드: 급좌회전에서 안쪽 실선 소실(_dash_fallback_on) 시
         # 점선 전용 입력 + side=우측(외측) 경계 고정 — 잔존 호 점선을 잃지 않기.
         self.sw_turn_dash_mode = 1      # 0=off
@@ -1612,6 +1613,14 @@ class LaneDetector:
 
         bands = []
         chosen = []
+        # 유령 페어 차단 (run3): 페어 '후보'는 2프레임 연속일 때만 출력으로 인정.
+        # 1프레임 반사광 페어가 중심(prev_center 연속성)과 기억을 오염하던 것 봉쇄.
+        if pair is not None:
+            self._sw_pair_run += 1
+            if self._sw_pair_run < 2:
+                pair = None
+        else:
+            self._sw_pair_run = 0
         if pair:
             fl, fr = pair
             chosen = [fl, fr]
@@ -1665,6 +1674,12 @@ class LaneDetector:
                 # 링 구조 prior (P2): 좌곡 단선 = 안쪽(좌측) 경계 (race_dir=left).
                 # 오분류 자기강화(run22~24)가 분류기 내부기하까지 오염하는 것 차단.
                 side = +1.0
+            elif (getattr(self, '_sw_kind', '') == 'drive'
+                    and not self._following_yellow
+                    and best['abc'][0] < -0.0008):
+                # W 코너 구조 prior (run3): 좌코너에서 남는 단선은 바깥(우측) 경계 —
+                # 안쪽 선은 FOV 이탈. 이 코스의 pre-RA 흰 급코너는 전부 좌코너.
+                side = -1.0
             elif (self._yellow_dash_cx is not None
                     and abs(best['x_bot'] - self._yellow_dash_cx) > 0.5 * half):
                 side = (1.0 if best['x_bot'] < self._yellow_dash_cx else -1.0)
@@ -1690,8 +1705,10 @@ class LaneDetector:
         side_src_confident = True
         if pair:
             self._sw_interior = ('pair', fl['abc'], fr['abc'], 0.0)
-            # side 기억 원천: 페어의 두 하단 교점 저장 (전이 시 생존측 판정용)
-            self._sw_pair_xbots = (fl['x_bot'], fr['x_bot'])
+            # side 기억 원천: 3프레임 이상 지속된 페어만 (run3 실측: 1프레임 유령
+            # 페어[바깥선+반사광]가 기억을 오염 → 흰 코너에서 side 반전 +0.99 포화)
+            if self._sw_pair_run >= 3:
+                self._sw_pair_xbots = (fl['x_bot'], fr['x_bot'])
             self._sw_side_mem = 0.0
             self._sw_side_mem_age = 0
         else:
