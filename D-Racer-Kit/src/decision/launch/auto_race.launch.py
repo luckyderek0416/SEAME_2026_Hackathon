@@ -126,15 +126,14 @@ def generate_launch_description():
              respawn=True, respawn_delay=1.0,
              parameters=[{'use_joystick_control': False, 'control_topic': '/control'}]),
 
-        # --- 키트: E-STOP 안전용으로 조이스틱 유지 ---
-        # 자율주행에선 조향/스로틀은 안 쓰고 X버튼 E-STOP만 쓰므로, 5Hz 디버그 로그
-        # (SSH I/O 부하)는 끈다. 비상정지 기능은 그대로 살아있다.
-        Node(package='joystick', executable='joystick_node', name='joystick_node', output='screen',
-             parameters=[{'debug_log_enable': False}]),
-
         # --- 키트: 배터리 (모니터용 battery_status publish; use_battery:=false 로 끔) ---
         OpaqueFunction(function=_battery_node),
 
-        # --- 키트: 웹 모니터 (카메라 + 배터리 상태 표시) ---
-        Node(package='monitor', executable='monitor_node', name='monitor_node', output='screen'),
+        # 07-15 사용자 결정: 주행 최소 노드만 — joystick(X버튼 E-STOP 미사용,
+        # 정지는 회수/Ctrl-C)과 monitor(웹 대시보드, CPU 절약)는 제외.
+        # 복원: 아래 두 Node 를 되살리면 됨.
+        # Node(package='joystick', executable='joystick_node', name='joystick_node',
+        #      output='screen', parameters=[{'debug_log_enable': False}]),
+        # Node(package='monitor', executable='monitor_node', name='monitor_node',
+        #      output='screen'),
     ])
