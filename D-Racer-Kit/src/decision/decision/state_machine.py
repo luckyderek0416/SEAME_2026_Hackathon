@@ -94,6 +94,7 @@ class RaceStateMachine:
         # 브랜치 락온 탈출용 게이트 통과 카운터 (노란 가로선 or 점선 개구부의
         # 상승엣지 = 게이트 1회 통과). roundabout_exit_gates 회 도달 시 출구 브랜치로 락온.
         self._gate_count = 0          # 이번 회전에서 센 게이트 통과 횟수
+        self._gate_just_counted = False  # 이번 프레임에 카운트 성립 (직발화용, 07-15 포팅)
         self._gate_cd = 0.0           # 카운트 사이의 debounce 쿨다운
 
     # ---------- 감지 헬퍼 ----------
@@ -218,6 +219,7 @@ class RaceStateMachine:
         #     다음 상승엣지를 셀 수 있음 (한두 프레임 깜빡임으로는 무장 안 됨)
         #  ③ 지속: gate_sustain_s 연속 ON 이어야 카운트 (blip 배제)
         self._gate_count = 0
+        self._gate_just_counted = False
         self._gate_cluster_on = 0.0
         self._gate_cluster_counted = False
         self._gate_in_cluster = False
@@ -474,6 +476,7 @@ class RaceStateMachine:
             if self._gate_cd > 0.0:
                 self._gate_cd = max(0.0, self._gate_cd - dt)
             gate_now = bool(lane.yellow_crossline)
+            self._gate_just_counted = False
             if gate_now:
                 if not self._gate_in_cluster:
                     self._gate_in_cluster = True
@@ -500,6 +503,7 @@ class RaceStateMachine:
                     >= self.cfg.get('gate_cluster_on_s', 0.18)
                     and self._gate_cd <= 0.0 and self._gate_armed and yaw_ok):
                 self._gate_count += 1
+                self._gate_just_counted = True
                 self._gate_cluster_counted = True
                 self._gate_cd = self.cfg.get('crossline_cooldown_s', 2.0)
                 self._gate_armed = False
@@ -509,6 +513,21 @@ class RaceStateMachine:
             # 미션 실패이고, 진입 쪽 노란 가로선을 출구로 오인하는 것도 막아준다).
             # 주 탈출 = 게이트 카운트. 백업 표결은 07-15 삭제 (아래 비상구가 유일).
             # 편향은 늦게 나가는 쪽으로, 절대 일찍 나가지 않는다.
+            # 직발화 (07-13 run92/93 설계, 07-15 run80 포팅): STOPLINE 청정 스트림
+            # (stopline_mode 1)에서는 잔상(void)·B(분류기 침묵)가 걸러져 카운트되는
+            # 첫 군집 = A 재도달. 카운트 성립 그 프레임에 즉시 발화한다 (min_loop
+            # 미적용 — run94 실증). ⚠️ 반드시 stopline_mode 1 과 세트로만 켤 것
+            # (B 누출 스트림에선 B 가 #1 로 카운트되어 B 오발). 탈출 후 병합은
+            # run80 검증 체계(탈출락 2.5s + w_align) 그대로 인계.
+            if (int(self.cfg.get('ra_direct_fire', 0))
+                    and self._gate_just_counted):
+                self.turn_latch = self.cfg['roundabout_exit_side']
+                self.turn_latch_age = 0.0
+                self._fork_seen = False
+                self.roundabout_done = True
+                self._enter(State.DRIVE)
+                return steer, self.cfg['slow_throttle'], self.state.value
+
             if self.circle_t >= self.cfg['min_loop_time_s'] * self._speed_scale:
                 # 주(PRIMARY) 탈출: 출구 게이트를 충분히 통과함 -> 출구 브랜치로 락온
                 # (표지판 갈림길과 같은 메커니즘). 그러면 차선 추종이 링에 다시 붙는
