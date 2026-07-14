@@ -77,7 +77,10 @@ class LaneNode(Node):
         self.declare_parameter('use_yellow', True)            # 노란색 회전교차로 차선
         self.declare_parameter('white_hsv_lo', [0, 0, 180])   # H,S,V 하한 (OpenCV H 0-179)
         self.declare_parameter('white_hsv_hi', [179, 60, 255])
-        self.declare_parameter('yellow_hsv_lo', [18, 45, 110])   # 옅은/바랜 노란 선을 위해 S 하한을 낮춤
+        # 07-14 대회장 실측 박제: 바닥 반사 노이즈 H18~19/V114~142 vs 진짜 선 H28~30/V247+
+        # -> H 하한 22(주 판별자, 조명 강건) + V 하한 140(보조). S 는 겹쳐서 판별력 없음(45 유지).
+        # 검증: 곡선 반사 포즈(노이즈 전멸, yr 0.25->0.096) + 점선 구간(전 dash 80~93% 유지).
+        self.declare_parameter('yellow_hsv_lo', [22, 45, 140])
         self.declare_parameter('yellow_hsv_hi', [40, 255, 255])
         # 빨간 노면(ArUco 장애물 구간). 빨강은 H 양끝에 걸쳐 두 구간을 합쳐 잡는다.
         # red_ratio 만 계산하고 차선 mask 에는 넣지 않으므로 조향에 영향 없다.
