@@ -130,7 +130,7 @@ class DecisionNode(Node):
         self.declare_parameter('fork_vote_clear_s', 1.0)    # 표지판 끊긴 뒤 표결 초기화까지(떨림방지창; 홀드 아님)
 
         # ----- 회전교차로 (junction 카운트, IMU 없음) -----
-        self.declare_parameter('enter_sustain_s', 0.12)
+        self.declare_parameter('enter_sustain_s', 0.2)   # 07-15 run80 원값 복원 — run_c 실측: 접근 오발 2f vs 진짜 A 13f (0.2s=4f 로 오발 차단+A 여유)
         self.declare_parameter('ra_min_drive_s', 7.5)    # 출발 후 이 시간 전엔 RA 진입 금지 (입구 오진입 차단)
                                                          # 07-11 run12: 1L 진입 성공으로 진짜 정지선 도착이 9.3s 로
                                                          # 당겨져 10.0 이 진짜 진입을 차단 -> 7.5 (가짜 5.9s +1.6 여유,
