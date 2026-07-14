@@ -61,7 +61,7 @@ class DecisionNode(Node):
         #   정지->출발 임계(정지마찰): 0.20 (1602us, 틱328)
         #   굴러가는 중 유지 임계(운동마찰): 0.175 (1587us, 틱325) 로도 계속 주행
         # 배터리가 닳으면 두 임계 모두 올라간다 -> 반쯤 닳은 상태에서 재검증할 것.
-        self.declare_parameter('drive_throttle', 0.19)   # 흰 구간 순항 (07-11 오후: 팩 열화로 전 구간 +0.01)   # 1602us: DRIVE 기본(=직선 최고 속도).
+        self.declare_parameter('drive_throttle', 0.2)    # 흰 구간 순항 (07-15 사용자: 0.19→0.20)   # 1602us: DRIVE 기본(=직선 최고 속도).
                                                          # curve_slow/steer_slow 가 여기서 깎는다.
         self.declare_parameter('slow_throttle', 0.17)   # 07-14 사용자: 0.165→0.17 (전 주행 하한·RA 링 속도)
         # 노란 구간(DRIVE[Y]) 전용 상한: 접근/갈림길에서 저속·정밀 주행 (0=기능 off).
@@ -69,7 +69,7 @@ class DecisionNode(Node):
         # 하한은 slow(0.165) — 직선부는 0.18 로 달리고 커브는 곡률 감속이 0.165 까지
         # 깎는다. (07-12 의 0.165 고정은 상한=하한이 붙어 노란 직선까지 저속이던 상태.)
         # 주의: throttle_adj(±0.015)가 캡 뒤에 가산되므로 실효는 0.18+adj.
-        self.declare_parameter('yellow_drive_throttle', 0.18)
+        self.declare_parameter('yellow_drive_throttle', 0.19)  # 07-15 사용자: 0.18→0.19
         self.declare_parameter('yellow_slow_ratio', 0.03)   # 노란 구간 판정 문턱 (FOLLOW-Y 와 동일 값 유지 — 07-11 run8 후 0.03 복원에 동기화)   # 1587us: ROUNDABOUT 주행 + 감속 바닥.
                                                          # 유지는 되지만 정지에서 출발은 불가.
         self.declare_parameter('stop_throttle', 0.0)     # 1500us: 중립
