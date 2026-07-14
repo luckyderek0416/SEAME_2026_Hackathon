@@ -168,6 +168,10 @@ class LaneNode(Node):
         self.declare_parameter('sw_exit_mouth_top_frac', 0.40)
         self.declare_parameter('w_align_block_relatch', 1)          # w_align 중 Y 재래치 차단
         self.declare_parameter('merge_done_topic', '/perception/merge_done')
+        # --- P2 (07-15): 코스트/side 기억/진입턴 점선 ---
+        self.declare_parameter('sw_coast_max_frames', 10)   # 락 실패 관성 합성 한도 (~0.5s). 0=off
+        self.declare_parameter('sw_side_mem_frames', 40)    # 페어→단선 side 기억 유효 프레임. 0=off
+        self.declare_parameter('sw_turn_dash_mode', 1)      # 진입턴 실선소실 시 점선 전용 추종. 0=off
         self.declare_parameter('sw_entry_input', 'solid') # 진입 입력: solid(병합 사선 제거) | raw
         self.declare_parameter('sw_exit_input', 'raw')    # 탈출 입력: 좌측 경계가 점선 -> raw 필수
         self.declare_parameter('sw_num_boxes', 9)         # 상자 개수
@@ -314,6 +318,9 @@ class LaneNode(Node):
         self.detector.sw_exit_mouth_frames = int(gp('sw_exit_mouth_frames').value)
         self.detector.sw_exit_mouth_top_frac = float(gp('sw_exit_mouth_top_frac').value)
         self.detector.w_align_block_relatch = int(gp('w_align_block_relatch').value)
+        self.detector.sw_coast_max_frames = int(gp('sw_coast_max_frames').value)
+        self.detector.sw_side_mem_frames = int(gp('sw_side_mem_frames').value)
+        self.detector.sw_turn_dash_mode = int(gp('sw_turn_dash_mode').value)
         self.detector.oneline_release_min_hold = int(gp('oneline_release_min_hold').value)
         self.detector.exit_yellow_gone_instant = int(gp('exit_yellow_gone_instant').value)
         self.detector.exit_yellow_gone_frames = int(gp('exit_yellow_gone_frames').value)
@@ -374,7 +381,9 @@ class LaneNode(Node):
             f'exit={self.get_parameter("sw_exit_frames").value} '
             f'mouth={d.sw_exit_mouth_frames}/{d.sw_exit_mouth_top_frac:g} '
             f'w_event={d.sw_exit_white_min_span_px}/{d.sw_exit_white_solidity_min:g}'
-            f'/{d.sw_exit_white_confirm_frames} occ_max={d.sw_exit_dash_occupancy_max:g}')
+            f'/{d.sw_exit_white_confirm_frames} occ_max={d.sw_exit_dash_occupancy_max:g} '
+            f'coast={d.sw_coast_max_frames} side_mem={d.sw_side_mem_frames} '
+            f'turn_dash={d.sw_turn_dash_mode}')
 
     def _on_set_params(self, params):
         hsv_keys = {'white_hsv_lo', 'white_hsv_hi', 'yellow_hsv_lo', 'yellow_hsv_hi',

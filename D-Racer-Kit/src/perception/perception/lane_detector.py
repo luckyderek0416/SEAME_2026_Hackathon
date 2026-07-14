@@ -352,6 +352,23 @@ class LaneDetector:
         # 병합 원웨이 래치: 흰 인계 완료 후 Y 재래치 금지 (F5 플랩 수리) + w_align 중 차단.
         self._merge_done = False
         self.w_align_block_relatch = 1
+        # --- P2 (07-15 재설계): 코스트 + side 기억 + 진입턴 점선 서브모드 ---
+        # 코스트: 락 실패 프레임에서 직전 피팅으로 중심을 관성 합성 (nl=0 최소화).
+        # 신선도 컷오프 — 한도 내 100% 신뢰, 초과 시 즉시 중단 + 피팅/내부기하 무효화
+        # (스테일 접선이 crossline 헤딩/시드를 무기한 오염하던 것 동시 수리).
+        self.sw_coast_max_frames = 10   # ~0.5s. 0=off (킬스위치)
+        self.sw_interior_stale_frames = 30  # 분류기 내부기하 보존 한도 (~1.5s; 시드보다 길게)
+        self._sw_unlock_age = 0         # 마지막 락 성공 후 경과 프레임
+        self._sw_coast_snap = None      # 마지막 락 해석 스냅샷 ('pair',abc_l,abc_r,ylo,yhi) | ('single',abc,side,ylo,yhi)
+        self._sw_coast_dbg = False      # 이번 프레임이 코스트 출력인지
+        # side 기억: 페어→단선 전이 시 살아남은 쪽을 래치 (연속성보다 상위 prior).
+        self.sw_side_mem_frames = 40    # 기억 유효 프레임 (~2s). 0=off
+        self._sw_side_mem = 0.0         # +1=좌측 경계 / -1=우측 경계 / 0=무효
+        self._sw_side_mem_age = 999
+        self._sw_pair_xbots = None      # 직전 페어의 (x_l, x_r) — 생존측 판정용
+        # 진입턴 점선 서브모드: 급좌회전에서 안쪽 실선 소실(_dash_fallback_on) 시
+        # 점선 전용 입력 + side=우측(외측) 경계 고정 — 잔존 호 점선을 잃지 않기.
+        self.sw_turn_dash_mode = 1      # 0=off
         self._sw_len = 0                # 무장 시점의 창 길이 (age 계산용)
         self._sw_gate_dir = 0           # 이번 프레임의 방향 게이트 (0=게이트 없음)
         self._sw_wsteady = 0            # 흰 인계 연속 카운터
@@ -878,6 +895,10 @@ class LaneDetector:
             self._sw_dir = -1 if self._following_yellow else 0
             self._sw_kind = 'drive'
             self._sw_prev_fit = None
+            self._sw_coast_snap = None   # 코스트/신선도 폐기 (타겟 전환 엣지)
+            self._sw_unlock_age = 0
+            self._sw_side_mem = 0.0
+            self._sw_pair_xbots = None
             self._sw_prev_y_hi = None
             self._sw_interior = None
             self._sw_straight = 0
@@ -903,6 +924,10 @@ class LaneDetector:
                 self._sw_dir = -1            # 진입 = 좌향 기대
                 self._sw_kind = 'entry'
                 self._sw_prev_fit = None     # 직전 직선 주행 피팅 잔재 유입 방지
+                self._sw_coast_snap = None   # 코스트/신선도 폐기 (타겟 전환 엣지)
+                self._sw_unlock_age = 0
+                self._sw_side_mem = 0.0
+                self._sw_pair_xbots = None
                 self._sw_prev_y_hi = None
                 self._sw_interior = None
                 self._sw_straight = 0
@@ -914,6 +939,10 @@ class LaneDetector:
                 self._sw_dir = +1            # 탈출 = 우향 기대 (초반 한정, gate_frames 주석)
                 self._sw_kind = 'exit'
                 self._sw_prev_fit = None
+                self._sw_coast_snap = None   # 코스트/신선도 폐기 (타겟 전환 엣지)
+                self._sw_unlock_age = 0
+                self._sw_side_mem = 0.0
+                self._sw_pair_xbots = None
                 self._sw_prev_y_hi = None
                 self._sw_interior = None     # RA 밖에선 STOPLINE 분류기 비활성 보장
                 self._sw_straight = 0
@@ -947,6 +976,10 @@ class LaneDetector:
                             self._sw_kind = 'approach'
                         self._sw_dir = -1
                         self._sw_prev_fit = None
+                        self._sw_coast_snap = None   # 코스트/신선도 폐기 (타겟 전환 엣지)
+                        self._sw_unlock_age = 0
+                        self._sw_side_mem = 0.0
+                        self._sw_pair_xbots = None
                         self._sw_prev_y_hi = None
                         self._sw_interior = None
                         self._sw_straight = 0
@@ -1013,10 +1046,15 @@ class LaneDetector:
         if (getattr(self, '_sw_kind', '') == 'drive' and self._sw_left > 0
                 and self._following_yellow != self._sw_prev_yellow):
             self._sw_prev_fit = None
+            self._sw_coast_snap = None   # 코스트/신선도 폐기 (타겟 전환 엣지)
+            self._sw_unlock_age = 0
+            self._sw_side_mem = 0.0
+            self._sw_pair_xbots = None
             self._sw_prev_y_hi = None
             self._sw_interior = None
             self._sw_dir = -1 if self._following_yellow else 0
         self._sw_prev_yellow = self._following_yellow
+        self._sw_side_mem_age = min(999, self._sw_side_mem_age + 1)
         if self._sw_left > 0:
             live = {'entry': self.sw_entry_frames,
                     'exit': self.sw_exit_frames,
@@ -1050,6 +1088,15 @@ class LaneDetector:
                               * float(self.sw_exit_mouth_top_frac))
                     if top > 0:
                         sw_src[:top, :] = 0
+                elif (int(getattr(self, 'sw_turn_dash_mode', 0))
+                        and self._sw_dir < 0 and self._following_yellow
+                        and not self._ra_seen
+                        and self._dash_fallback_on):
+                    # 진입턴 점선 서브모드 (P2, 기하 검토): 급좌회전에서 안쪽 실선이
+                    # FOV 를 벗어난 동안, 잔존 우측 호 점선만 입력으로 추종.
+                    # 시드는 직전 피팅 연속 — "실선과 잘 이어지게" (07-15 사용자).
+                    sw_src = cv2.subtract(
+                        ymask, self._filter_yellow_dashes(ymask))
                 else:
                     mode_in = (self.sw_exit_input if self._sw_dir > 0
                                else self.sw_entry_input)
@@ -1080,6 +1127,46 @@ class LaneDetector:
                     band_windows = list(band_windows) + sw_boxes
                     sw_locked = True
                     self._sw_locked_dbg = True
+            self._sw_coast_dbg = False
+            if not sw_locked:
+                # 코스트 (P2, 사용자 설계 가이드): 락 실패 프레임 — 직전 피팅이
+                # 신선하면(≤ sw_coast_max_frames) 같은 규칙으로 중심을 합성해
+                # lane_found 를 유지한다. 관측 y범위 클램프 유지(외삽 금지),
+                # side/해석 동결. 한도 초과 시 즉시 중단 + 피팅/내부기하 무효화
+                # (스테일 접선의 crossline/시드 오염 차단 — 검토 finding #4).
+                self._sw_unlock_age += 1
+                cmax = int(getattr(self, 'sw_coast_max_frames', 0))
+                snap = getattr(self, '_sw_coast_snap', None)
+                if cmax > 0 and snap is not None and self._sw_unlock_age <= cmax:
+                    half_c = ((self._lane_width / 2.0) if self._lane_width > 0
+                              else (w * self.single_line_offset))
+                    kind_c = snap[0]
+                    y_lo_c, y_hi_c = snap[3], snap[4]
+
+                    def _ev_c(abc, y):
+                        yc2 = min(max(y, y_lo_c), y_hi_c)
+                        return abc[0] * yc2 * yc2 + abc[1] * yc2 + abc[2]
+                    cb = []
+                    for bi in range(self.num_bands):
+                        yc = roi_h - (bi + 0.5) * band_h
+                        if yc < y_lo_c - band_h or yc > y_hi_c + band_h:
+                            continue
+                        if kind_c == 'pair':
+                            cx = (_ev_c(snap[1], yc) + _ev_c(snap[2], yc)) / 2.0
+                        else:
+                            cx = _ev_c(snap[1], yc) + snap[2] * half_c
+                        cb.append((cx, float(self.num_bands - bi), bi))
+                    if cb:
+                        bands = cb
+                        near_lanes = 2 if kind_c == 'pair' else 1
+                        self._sw_coast_dbg = True
+                elif cmax > 0 and self._sw_unlock_age > cmax:
+                    self._sw_prev_fit = None
+                    self._sw_prev_y_hi = None
+                    self._sw_coast_snap = None
+                    if (self._sw_unlock_age
+                            > int(getattr(self, 'sw_interior_stale_frames', 30))):
+                        self._sw_interior = None
             # 탈출창 종료 = 흰 '실선' 이벤트 (P1, 항목2): 최하단에 끊김 없는 흰
             # 실선이 나타나면(스팬+점유율+N프레임) 그 프레임부터 창 종료 + Y래치
             # 해제 + 원웨이 병합 래치. 시간창이 아니라 위치 이벤트라 속도 무관.
@@ -1494,14 +1581,24 @@ class LaneDetector:
         if getattr(self, '_sw_mouth', False):
             pass   # 개구부: 점선 단선 전용 — 페어 해석 금지 (07-15 사용자 설계)
         else:
+            # 페어 게이트 (P2, 검토 반영): '최좌측 첫 페어' 대신 직전 중심 최근접 +
+            # 두 피팅의 곡률 부호 일치(가짜 페어: 링 실선+가지 점선은 부호 불일치).
+            best_d = None
             for i in range(len(fits) - 1):
                 for j in range(i + 1, len(fits)):
                     sep = fits[j]['x_bot'] - fits[i]['x_bot']
-                    if 0.7 * (2.0 * half) <= sep <= 1.4 * (2.0 * half):
-                        pair = (fits[i], fits[j])
-                        break
-                if pair:
-                    break
+                    if not (0.7 * (2.0 * half) <= sep <= 1.4 * (2.0 * half)):
+                        continue
+                    a_i, a_j = fits[i]['abc'][0], fits[j]['abc'][0]
+                    eps = 0.0008   # |a|<eps 는 직선 취급 (부호 판정 유보)
+                    if (abs(a_i) > eps and abs(a_j) > eps
+                            and (a_i > 0) != (a_j > 0)):
+                        continue   # 곡률 부호 불일치 = 이종 선 페어 기각
+                    mid = (fits[i]['x_bot'] + fits[j]['x_bot']) / 2.0
+                    d = (abs(mid - self._prev_center)
+                         if self._prev_center is not None else 0.0)
+                    if best_d is None or d < best_d:
+                        best_d, pair = d, (fits[i], fits[j])
 
         bands = []
         chosen = []
@@ -1539,6 +1636,24 @@ class LaneDetector:
             elif (self.drive_mode == 'ROUNDABOUT' and self.merge_zone
                     and self._reacq_right_active):
                 side = -1.0                      # 재획득 선 = 구조상 우측(바깥) 경계
+            elif (int(getattr(self, 'sw_turn_dash_mode', 0))
+                    and self._sw_dir < 0 and self._following_yellow
+                    and not self._ra_seen
+                    and self._dash_fallback_on):
+                # 진입턴 점선 서브모드 (P2 기하 검토): 잔존 호 점선 = 우측(외측)
+                # 경계 — 좌측경계로 두면 중심이 +차폭 반전 (기하 검증 CONFIRM).
+                side = -1.0
+            elif (int(getattr(self, 'sw_side_mem_frames', 0)) > 0
+                    and self._sw_side_mem != 0.0
+                    and self._sw_side_mem_age
+                    <= int(self.sw_side_mem_frames)):
+                # side 기억 (P2): 직전 페어에서 살아남은 쪽 — 연속성보다 상위.
+                side = float(self._sw_side_mem)
+            elif (self.drive_mode == 'ROUNDABOUT'
+                    and best['abc'][0] < -0.0008):
+                # 링 구조 prior (P2): 좌곡 단선 = 안쪽(좌측) 경계 (race_dir=left).
+                # 오분류 자기강화(run22~24)가 분류기 내부기하까지 오염하는 것 차단.
+                side = +1.0
             elif (self._yellow_dash_cx is not None
                     and abs(best['x_bot'] - self._yellow_dash_cx) > 0.5 * half):
                 side = (1.0 if best['x_bot'] < self._yellow_dash_cx else -1.0)
@@ -1561,12 +1676,48 @@ class LaneDetector:
 
         # 상태/디버그 갱신 (락 성공시에만 — 실패 프레임은 시드 연속성 유지)
         self._sw_last_side = float(side) if near_lanes == 1 else 0.0
+        side_src_confident = True
         if pair:
             self._sw_interior = ('pair', fl['abc'], fr['abc'], 0.0)
+            # side 기억 원천: 페어의 두 하단 교점 저장 (전이 시 생존측 판정용)
+            self._sw_pair_xbots = (fl['x_bot'], fr['x_bot'])
+            self._sw_side_mem = 0.0
+            self._sw_side_mem_age = 0
         else:
-            self._sw_interior = ('single', best['abc'], None, float(side))
+            # 페어→단선 전이: 살아남은 선이 직전 페어의 어느 쪽인지로 side 래치
+            if (self._sw_pair_xbots is not None
+                    and int(getattr(self, 'sw_side_mem_frames', 0)) > 0):
+                xl, xr = self._sw_pair_xbots
+                d_l, d_r = abs(best['x_bot'] - xl), abs(best['x_bot'] - xr)
+                if min(d_l, d_r) < 0.5 * half:
+                    self._sw_side_mem = +1.0 if d_l <= d_r else -1.0
+                    self._sw_side_mem_age = 0
+                self._sw_pair_xbots = None
+            # 분류기 신뢰 게이트 (P2, 검토 반영): side 가 연속성/기본값에서만 나온
+            # 프레임은 내부기하를 갱신하지 않는다 — 틀린 side 가 정지선 커버리지
+            # 창을 차폭만큼 옮겨 2번째 정지선 미발화로 번지는 경로 차단.
+            side_src_confident = (
+                getattr(self, '_sw_mouth', False)
+                or (self._sw_dir > 0)
+                or self._reacq_right_active
+                or (self._sw_side_mem != 0.0
+                    and self._sw_side_mem_age <= int(getattr(self, 'sw_side_mem_frames', 0)))
+                or (self.drive_mode == 'ROUNDABOUT' and best['abc'][0] < -0.0008)
+                or (self._yellow_dash_cx is not None
+                    and abs(best['x_bot'] - self._yellow_dash_cx) > 0.5 * half))
+            if side_src_confident:
+                self._sw_interior = ('single', best['abc'], None, float(side))
         self._sw_prev_fit = best['abc']
         self._sw_prev_y_hi = float(best['y_hi'])
+        # 코스트 스냅샷 + 신선도 리셋 (P2)
+        self._sw_unlock_age = 0
+        if pair:
+            self._sw_coast_snap = ('pair', fl['abc'], fr['abc'],
+                                   min(fl['y_lo'], fr['y_lo']),
+                                   max(fl['y_hi'], fr['y_hi']))
+        else:
+            self._sw_coast_snap = ('single', best['abc'], float(side),
+                                   best['y_lo'], best['y_hi'])
         self._sw_last_lean = best['lean']
         boxes_dbg = []
         for f in chosen:
