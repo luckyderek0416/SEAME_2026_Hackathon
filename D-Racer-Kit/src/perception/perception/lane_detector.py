@@ -199,6 +199,9 @@ class LaneDetector:
         self.w_align_gain = 0.4         # 기울기 -> offset 보정 게인. 0=보정만 off
         self.w_align_min_px = 80        # 점선 필터 결과 이 미만이면 raw 흰 폴백
         self.w_align_dash_fallback = 0  # 0(기본)=폴백 금지: 점선 잡지 말고 무검출 -> 결정층 브리지 바이어스에 위임
+        # 재래치 억제 (07-14 병합 플랩 대응 — lane_node 주석 참고): RA 후 w_align
+        # 창 활성 중 Y래치 재진입 차단. 창 track 이 노란 꼬리를 포함하므로 무손실.
+        self.w_align_block_relatch = 1
         # Y+W 선행 혼합 (07-13 run103, 사용자 설계): RA 후 DRIVE[Y] 중 흰 '실선'을
         # track 에 미리 합성. 높이 게이트(_filter_yellow_dashes)가 흰 점선(개구부
         # 표식)과 가로로 누운 먼 도로선을 걸러 평행해진 흰 실선만 통과 —
@@ -608,7 +611,10 @@ class LaneDetector:
             if self.drive_mode == 'ROUNDABOUT':
                 self._ra_seen = True
             if not self._following_yellow:
-                if yellow_ratio >= self.follow_yellow_ratio:
+                # 재래치 억제: RA 후 흰 인계 창 중에는 재진입 금지 (플랩 방지 — __init__ 주석)
+                relatch_blocked = (int(getattr(self, 'w_align_block_relatch', 0)) != 0
+                                   and self._ra_seen and self._w_align_left > 0)
+                if yellow_ratio >= self.follow_yellow_ratio and not relatch_blocked:
                     self._following_yellow = True
                     self._yellow_exit_count = 0
                     self._oneline_used = False   # 새 래치 -> 1L 1회 사용권 리셋
