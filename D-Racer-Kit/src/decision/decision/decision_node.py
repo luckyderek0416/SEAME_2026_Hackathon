@@ -61,14 +61,14 @@ class DecisionNode(Node):
         #   정지->출발 임계(정지마찰): 0.20 (1602us, 틱328)
         #   굴러가는 중 유지 임계(운동마찰): 0.175 (1587us, 틱325) 로도 계속 주행
         # 배터리가 닳으면 두 임계 모두 올라간다 -> 반쯤 닳은 상태에서 재검증할 것.
-        self.declare_parameter('drive_throttle', 0.19)   # 흰 구간 순항 (07-11 오후: 팩 열화로 전 구간 +0.01)   # 1602us: DRIVE 기본(=직선 최고 속도).
+        self.declare_parameter('drive_throttle', 0.20)   # 07-15 사용자 고정   # 1602us: DRIVE 기본(=직선 최고 속도).
                                                          # curve_slow/steer_slow 가 여기서 깎는다.
-        self.declare_parameter('slow_throttle', 0.165)
+        self.declare_parameter('slow_throttle', 0.17)    # 07-15 사용자 고정
         # 노란 구간(DRIVE[Y]) 전용 상한: 접근/갈림길에서 저속·정밀 주행 (0=기능 off).
         # 07-12 run47 실증 + 사용자 확정: 노란 구간은 0.165 고정. (0.17 이던 시절에도
         # 커브 감속이 하한 0.165 로 깎아 링에선 사실상 0.165 였음 — 카메라 재캘리 후
         # 곡률 추정이 정확해지며 상시 하한 도달. 변동 요소를 없애고 상수로 못 박는다.)
-        self.declare_parameter('yellow_drive_throttle', 0.18)
+        self.declare_parameter('yellow_drive_throttle', 0.19)  # 07-15 사용자 고정
         self.declare_parameter('yellow_slow_ratio', 0.03)   # 노란 구간 판정 문턱 (FOLLOW-Y 와 동일 값 유지 — 07-11 run8 후 0.03 복원에 동기화)   # 1587us: ROUNDABOUT 주행 + 감속 바닥.
                                                          # 유지는 되지만 정지에서 출발은 불가.
         self.declare_parameter('stop_throttle', 0.0)     # 1500us: 중립
@@ -174,8 +174,8 @@ class DecisionNode(Node):
         self.declare_parameter('ra_ref_drive_s', 20.5)
         # 스로틀 동적 보정 (G->Y래치 소요시간 -> 순항 스로틀 가산). gain 0=off.
         self.declare_parameter('throttle_ref_latch_s', 4.6)   # 적정 속도 기준 (run53/54/59 실측 4.4~4.7)
-        self.declare_parameter('throttle_adapt_gain', 0.06)   # 보정 = gain x (실측/기준 - 1)
-        self.declare_parameter('throttle_adapt_max', 0.015)   # 보정 절대 상한 (안전 클램프)
+        self.declare_parameter('throttle_adapt_gain', 0.0)    # 07-15 사용자: throttle_adj 폐기 (0=off)
+        self.declare_parameter('throttle_adapt_max', 0.0)     # 07-15 사용자: throttle_adj 폐기 — 스로틀은 고정값으로만
         self.declare_parameter('y_latch_ratio', 0.02)         # 래치 감지 yr 문턱 (perception 과 동일값 권장)
         self.declare_parameter('y_latch_frames', 10)          # 래치 감지 연속 틱
         # 비상구 (07-15 사용자 결정): 구 3-표결(yaw/시간/가로선 재등장) + max_loop
