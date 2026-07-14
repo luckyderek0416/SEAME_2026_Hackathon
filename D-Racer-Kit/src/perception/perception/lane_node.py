@@ -94,8 +94,10 @@ class LaneNode(Node):
         # 직선 구간 흰선 2개를 직선 피팅, y=0.342h/0.965h 의 차선 x 를 src 꼭짓점으로
         # (워프 후 0.20w/0.80w). 합격: 기둥 slope ~0, 폭 192±5px @x=64/256.
         self.declare_parameter('use_birdeye', True)
-        # 07-11 재캘리 (카메라 재조정 후): 워프 검증 좌 +0.003/우 +0.000, x=64/256 정확.
-        self.declare_parameter('birdeye_src_ratio', [0.2598, 0.342, 0.7320, 0.342, 0.9264, 0.965, 0.0376, 0.965])
+        # 07-14 대회장 재캘리 (카메라 각도 확정 후, 출발점 직선 프레임 피팅): 구 src 는
+        # 폭 164px 로 15% 부족 + 중심 154 편향 -> 재산출. 검산 좌 64.8/우 256.2/폭 191.4.
+        # 주의: crossline_bev_aspect(1.91)는 구 워프 실측값 — 정지선 포즈에서 재측정 필요.
+        self.declare_parameter('birdeye_src_ratio', [0.2705, 0.342, 0.6697, 0.342, 0.8579, 0.965, 0.0871, 0.965])
         self.declare_parameter('birdeye_dst_ratio', [0.20, 0.00, 0.80, 0.00, 0.80, 1.00, 0.20, 1.00])
         # --- 가이드 밴드 탐색 (기본 ON) ---
         self.declare_parameter('use_guided_band', True)
