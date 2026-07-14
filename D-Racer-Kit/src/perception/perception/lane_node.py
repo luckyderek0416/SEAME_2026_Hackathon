@@ -169,8 +169,8 @@ class LaneNode(Node):
         self.declare_parameter('oneline_release_pair_k', 5)      # 1L 조기해제 페어 연속 프레임. 0=이벤트 해제 off
         self.declare_parameter('sw_drive_always', 1)             # IN 전구간 코리도 (07-14 밤). 0=off(라이브 킬 → 기존 스택 복귀)
         self.declare_parameter('crossline_sw_heading', 1)        # 정지선 직교 게이트 헤딩 = 코리도 접선. 0=구식 EMA
-        self.declare_parameter('sw_exit_cut_frames', 40)         # 탈출 발화 직후 링쪽 컬럼 컷 프레임 (run_c 개구부 가짜페어 방어). 0=off
-        self.declare_parameter('sw_exit_cut_frac', 0.45)         # 컷 비율
+        self.declare_parameter('sw_exit_mouth_frames', 40)       # 탈출 개구부: 점선 전용 입력+좌경계 고정 프레임 (07-15 사용자 설계, run_c 방어). 0=off
+        self.declare_parameter('sw_exit_mouth_top_frac', 0.40)   # 개구부 입력 상단 제거 비율 (분기 너머 진입로 체인 차단)
         self.declare_parameter('oneline_release_min_hold', 20)   # 1L 최소 유지(쐐기 방어, ~1s)
         self.declare_parameter('sw_exit_frames', 150)     # RA 탈출 창 = 07-14 재설계 후 '순수 failsafe 상한'(≈7.5s@20fps). 종료는 흰 실선 이벤트가 담당 — 정상 주행에선 상한이 먼저 안 닿게, 그러나 미발화 시 구조 레이턴시라 과하게 길게도 금지. 리플레이로 확정. 0=off(라이브 킬)
         self.declare_parameter('sw_entry_input', 'solid') # 진입 입력: solid(병합 사선 제거) | raw
@@ -348,8 +348,8 @@ class LaneNode(Node):
         self.detector.oneline_release_pair_k = int(gp('oneline_release_pair_k').value)
         self.detector.sw_drive_always = int(gp('sw_drive_always').value)
         self.detector.crossline_sw_heading = int(gp('crossline_sw_heading').value)
-        self.detector.sw_exit_cut_frames = int(gp('sw_exit_cut_frames').value)
-        self.detector.sw_exit_cut_frac = float(gp('sw_exit_cut_frac').value)
+        self.detector.sw_exit_mouth_frames = int(gp('sw_exit_mouth_frames').value)
+        self.detector.sw_exit_mouth_top_frac = float(gp('sw_exit_mouth_top_frac').value)
         self.detector.oneline_release_min_hold = int(gp('oneline_release_min_hold').value)
         self.detector.sw_exit_dash_occupancy_max = float(gp('sw_exit_dash_occupancy_max').value)
         self.detector.sw_exit_white_bottom_px = int(gp('sw_exit_white_bottom_px').value)
@@ -397,7 +397,7 @@ class LaneNode(Node):
             f'[실효 접근SW] approach={d.sw_approach_frames} '
             f'1L_pair_k={d.oneline_release_pair_k} 1L_hold={d.oneline_release_min_hold} '
             f'drive_sw={d.sw_drive_always} xline_swhead={d.crossline_sw_heading} '
-            f'exit_cut={d.sw_exit_cut_frames}/{d.sw_exit_cut_frac:g}')
+            f'exit_mouth={d.sw_exit_mouth_frames}/{d.sw_exit_mouth_top_frac:g}')
 
     def _on_set_params(self, params):
         hsv_keys = {'white_hsv_lo', 'white_hsv_hi', 'yellow_hsv_lo', 'yellow_hsv_hi',

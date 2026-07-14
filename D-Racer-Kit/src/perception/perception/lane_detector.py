@@ -359,13 +359,19 @@ class LaneDetector:
         # 해제 + 시드 전체 높이(코리도가 정지선 너머 상단에만 있는 프레임 대응),
         # 대신 |기욺| 상한으로 정지선 대각선(실측 102~148px)만 기각 — 코리도는 완만.
         self.sw_exit_open_frames = 30   # 개방 구간 길이. 0=off(기존 동작과 동일)
-        # 탈출 개구부 링쪽 컬럼 컷 (07-14 밤 run_c 실측): 발화 순간 개구부에서 진입
-        # 커넥터 점선(링쪽)과 탈출 선이 '차폭 간격 가짜 페어'를 이뤄 코리도가 신목
-        # 한가운데를 추종 → 좌이탈. 발화 직후 이 프레임 수 동안 SW 입력에서 탈출
-        # 반대쪽(fork_dir 반대) 컬럼을 제거해 코리도가 탈출측 선만 보게 한다.
-        # 컷으로 락 실패 시 폴백 = 일반 파이프라인(fork 가이드 우측 시드) — 원 설계.
-        self.sw_exit_cut_frames = 40    # ~2s@20fps. 0=off
-        self.sw_exit_cut_frac = 0.45    # 제거 컬럼 비율
+        # 탈출 개구부(mouth) 점선 추종 (07-15 사용자 설계, run_c 실측): 발화 직후
+        # 개구부에서 코리도가 [좌측 점선 + 위쪽 실선]을 차폭 가짜 페어로 물어 중점
+        # (개구부 한가운데)을 추종하다가, 점선 분기·실선 시야이탈로 동시 소실 →
+        # 관성 직진 이탈. 수리 = 차 왼쪽 점선을 잃지 않고 진행 차선으로 쌓기:
+        #  · 입력을 점선 성분만으로 좁힘 (실선/링 배제 → 가짜 페어 원천 불가)
+        #  · 입력 상단 top_frac 제거 (분기점 너머 진입로쪽 체인 = '초록 상자' 차단)
+        #  · 단선 분류 좌측 경계 고정 (중심 = 점선 + 반차폭 우측 = 탈출 차선 중앙)
+        # 점선 틈은 상자 체인의 빈상자 추세 전진이 메꾼다. 락 실패 폴백 = 일반
+        # 파이프라인(fork 가이드 우측 시드). 만료 후엔 기존 검증 로직(occupancy
+        # 판별 + 우측 경계) 복귀. 0=off (라이브 킬스위치).
+        self.sw_exit_mouth_frames = 40      # ~2s@20fps
+        self.sw_exit_mouth_top_frac = 0.40  # 입력 상단 제거 비율 (원거리 차단)
+        self._sw_mouth = False              # 이번 프레임이 개구부 구간인지
         self.sw_open_max_lean_px = 90.0 # 개방 구간 |기욺| 상한 (정지선 대각선 실측 102+)
         self._sw_open = False           # 이번 프레임이 개방 구간인지
         self._sw_len = 0                # 무장 시점의 창 길이 (age 계산용)
@@ -1140,17 +1146,32 @@ class LaneDetector:
                 self._sw_left = 0
         if self._sw_left > 0:
             self._sw_left -= 1
+            # 개구부 구간 판정 (__init__ sw_exit_mouth_frames 주석): 발화 직후 N프레임
+            self._sw_mouth = (
+                self._sw_dir > 0
+                and int(getattr(self, 'sw_exit_mouth_frames', 0)) > 0
+                and (self._sw_len - self._sw_left)
+                <= int(self.sw_exit_mouth_frames))
             src = None
             # 탈출 창은 Y래치 해제 후에도 노란 입력 유지 (run53: 점선 꼬리가 병합
             # 방향의 마지막 정보 — 눈 감으면 직진 표류 13s). 꼬리 소진까지 추적,
             # 끝나면 락 자연 실패 -> 흰 추종 인계 (아래 wsteady 종결자).
             if ymask is not None and (self._following_yellow
                                       or self._sw_dir > 0):
-                # dir<=0 = 진입/접근/drive[Y] 계열: solid 입력 (병합 사선 노이즈 제거)
-                mode_in = (self.sw_exit_input if self._sw_dir > 0
-                           else self.sw_entry_input)
-                sw_src = (self._filter_yellow_dashes(ymask)
-                          if str(mode_in) == 'solid' else ymask)
+                if self._sw_mouth:
+                    # 개구부: 점선 성분만 + 상단 제거 (좌측 점선 단선 추종 전용)
+                    sw_src = cv2.subtract(
+                        ymask, self._filter_yellow_dashes(ymask))
+                    top = int(sw_src.shape[0]
+                              * float(self.sw_exit_mouth_top_frac))
+                    if top > 0:
+                        sw_src[:top, :] = 0
+                else:
+                    # dir<=0 = 진입/접근/drive[Y] 계열: solid 입력 (병합 사선 제거)
+                    mode_in = (self.sw_exit_input if self._sw_dir > 0
+                               else self.sw_entry_input)
+                    sw_src = (self._filter_yellow_dashes(ymask)
+                              if str(mode_in) == 'solid' else ymask)
                 src = (cv2.morphologyEx(sw_src, cv2.MORPH_OPEN, k)
                        if use_morph else sw_src)
             elif (self._sw_dir == 0 and wmask is not None
@@ -1167,19 +1188,6 @@ class LaneDetector:
                     src[:, src.shape[1] - wcut:] = 0
                 else:
                     src[:, :wcut] = 0
-            # 탈출 개구부 컷 (__init__ sw_exit_cut_frames 주석): 발화 직후 링쪽 제거
-            if (src is not None and self._sw_kind == 'exit' and self._sw_dir > 0
-                    and int(getattr(self, 'sw_exit_cut_frames', 0)) > 0
-                    and (self._sw_len - self._sw_left)
-                    <= int(self.sw_exit_cut_frames)
-                    and self.fork_dir in ('left', 'right')):
-                wcut = int(src.shape[1] * float(self.sw_exit_cut_frac))
-                if wcut > 0:
-                    src = src.copy()
-                    if self.fork_dir == 'right':
-                        src[:, :wcut] = 0                      # 링(좌) 제거
-                    else:
-                        src[:, src.shape[1] - wcut:] = 0       # 링(우) 제거
             if src is not None:
                 self._sw_gate_dir = self._sw_dir
                 self._sw_open = False
@@ -1224,6 +1232,7 @@ class LaneDetector:
                         self._w_align_left = int(self.w_align_frames)
         else:
             self._sw_dir = 0
+            self._sw_mouth = False
 
         mid = w / 2.0
         near_cx, la_cx = None, None
@@ -1588,7 +1597,9 @@ class LaneDetector:
         # (5) 코리도 해석: 두 경계(pair) 우선, 아니면 단선 + 연속성 분류
         fits.sort(key=lambda f: f['x_bot'])
         pair = None
-        if (getattr(self, '_sw_kind', '') == 'approach'
+        if getattr(self, '_sw_mouth', False):
+            pass   # 개구부 (07-15): 점선 단선 전용 — 페어 해석 금지
+        elif (getattr(self, '_sw_kind', '') == 'approach'
                 and self._prev_center is not None):
             # 접근 창 (07-14): 좌측 합류부 차선이 우리 왼선과 '차폭 간격 가짜 페어'를
             # 이룰 수 있다 — 첫 유효 페어(최좌측) 대신 직전 중심에 가장 가까운 페어.
@@ -1632,7 +1643,11 @@ class LaneDetector:
             # 좌/우 분류 우선순위 = _combine_lr 과 일치 (07-12 검증 리뷰):
             # 재획득 우측고정 > 점선 힌트(이격 조건) > 직전 중심 연속성 > 기본값.
             # 연속성만 쓰면 run22~24 오분류 서명이 SW 프레임에서 재발.
-            if self._sw_dir > 0:
+            if self._sw_dir > 0 and getattr(self, '_sw_mouth', False):
+                # 개구부 (07-15 사용자 설계): 입력이 점선 전용이므로 점유율 판별 불필요.
+                # 점선 = 탈출 차선의 좌측 경계 → 중심 = 점선 + 반차폭 우측.
+                side = +1.0
+            elif self._sw_dir > 0:
                 # 항목1 (07-14): 탈출 단선의 점선/실선 판별 (Y래치 상태 무관).
                 #  · 점선이면 → 무조건 바깥(우측) 경계 고정 (병합 굽이는 좌향, 남은
                 #    점선은 바깥선 — 인접 진입 커넥터 점선 오물림 방지, run83/84/95).
