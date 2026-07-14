@@ -164,6 +164,10 @@ class LaneNode(Node):
         # --- SW 코리도 추적 — 상세는 lane_detector.__init__ sw_* 주석. 락 프레임만
         # 밴드 대체(실패 = 폴백). 전부 라이브: ros2 param set /lane_node sw_entry_frames 440
         self.declare_parameter('sw_entry_frames', 1200)   # RA 진입 창(프레임). 0=off. run79: 저전압 랩 지연으로 440(22s) 만료 후 개구부 이탈 -> 60s
+        # --- IN 접근 코리도 + 1L 이벤트 인계 (07-14, 상세 lane_detector.__init__) ---
+        self.declare_parameter('sw_approach_frames', 600)        # 접근 코리도 failsafe 상한. 0=off(라이브 킬)
+        self.declare_parameter('oneline_release_pair_k', 5)      # 1L 조기해제 페어 연속 프레임. 0=이벤트 해제 off
+        self.declare_parameter('oneline_release_min_hold', 20)   # 1L 최소 유지(쐐기 방어, ~1s)
         self.declare_parameter('sw_exit_frames', 150)     # RA 탈출 창 = 07-14 재설계 후 '순수 failsafe 상한'(≈7.5s@20fps). 종료는 흰 실선 이벤트가 담당 — 정상 주행에선 상한이 먼저 안 닿게, 그러나 미발화 시 구조 레이턴시라 과하게 길게도 금지. 리플레이로 확정. 0=off(라이브 킬)
         self.declare_parameter('sw_entry_input', 'solid') # 진입 입력: solid(병합 사선 제거) | raw
         self.declare_parameter('sw_exit_input', 'raw')    # 탈출 입력: 좌측 경계가 점선 -> raw 필수
@@ -336,6 +340,9 @@ class LaneNode(Node):
         self.detector.sw_exit_open_frames = int(gp('sw_exit_open_frames').value)
         self.detector.sw_open_max_lean_px = float(gp('sw_open_max_lean_px').value)
         self.detector.sw_exit_straight_px = float(gp('sw_exit_straight_px').value)
+        self.detector.sw_approach_frames = int(gp('sw_approach_frames').value)
+        self.detector.oneline_release_pair_k = int(gp('oneline_release_pair_k').value)
+        self.detector.oneline_release_min_hold = int(gp('oneline_release_min_hold').value)
         self.detector.sw_exit_dash_occupancy_max = float(gp('sw_exit_dash_occupancy_max').value)
         self.detector.sw_exit_white_bottom_px = int(gp('sw_exit_white_bottom_px').value)
         self.detector.sw_exit_white_min_span_px = float(gp('sw_exit_white_min_span_px').value)
@@ -378,6 +385,9 @@ class LaneNode(Node):
             f'[실효 탈출병합] dash_occ_max={d.sw_exit_dash_occupancy_max:g} '
             f'w_span={d.sw_exit_white_min_span_px:g} w_sol={d.sw_exit_white_solidity_min:g} '
             f'w_confirm={d.sw_exit_white_confirm_frames} w_bottom={d.sw_exit_white_bottom_px}')
+        self.get_logger().info(
+            f'[실효 접근SW] approach={d.sw_approach_frames} '
+            f'1L_pair_k={d.oneline_release_pair_k} 1L_hold={d.oneline_release_min_hold}')
 
     def _on_set_params(self, params):
         hsv_keys = {'white_hsv_lo', 'white_hsv_hi', 'yellow_hsv_lo', 'yellow_hsv_hi',

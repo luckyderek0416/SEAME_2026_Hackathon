@@ -283,6 +283,22 @@ class LaneDetector:
         self.sw_entry_input = 'solid'   # 진입 창 입력: 'solid'(dash 제거) | 'raw'
         self.sw_out_always = 1          # OUT 코스: DRIVE 전 구간 코리도 상시 (S자 좌우 교대 소실 대응).
                                         # dir=0 -> 곡률가드/탈출규칙/STOPLINE 비활성, 입력 raw. in 코스 무영향
+        # IN 접근 코리도 (07-14 사용자 설계): DRIVE[Y] 첫 래치 + 첫 좌회전 완료(1L 종료
+        # + nl=2 연속 5f) 시점부터 RA 래치까지 노란 코리도. B 에서 좌측 합류부 차선이
+        # 밴드 '평균'을 당기던 것(런 실측)을 락 추적으로 대체하고, 코리도 활성 = crossline
+        # sw_gate 자동 무장이라 B 가짜 정지선도 함께 기각(run76~80 검증 게이트 재사용).
+        # dir=-1 무장 → 우곡률 가지 기각(sw_curv_max_a, run87)·실선 입력 자동 적용.
+        # 해제 = RA 래치 시 진입 코리도가 덮어씀. 0=off (라이브 킬스위치).
+        self.sw_approach_frames = 600   # failsafe 상한 (~30s@20fps; RA 래치가 정상 종료)
+        self._sw_kind = ''              # 활성 창 종류: entry/exit/approach/out (킬스위치 매핑)
+        self._sw_nl2_count = 0          # 접근 무장용 nl=2 연속 카운터
+        # 1L 조기 해제 → SW 인계 (07-14 사용자 설계): 1L 중 노란 실선 '페어'(차폭 간격
+        # 두 기둥)가 K프레임 연속 복원되면 = 좌회전 종료 이벤트 → 80f 만료를 안 기다리고
+        # 즉시 1L 종료 + 접근 코리도 무장 (시간창 속도의존 제거; 80f 만료는 failsafe 잔존).
+        # 분기 목 쐐기(run9/11) 오인 방어: min_hold(쐐기는 1L 초반에만) + 질량/간격 + K연속.
+        self.oneline_release_pair_k = 5    # 페어 연속 프레임 (0=이벤트 해제 off)
+        self.oneline_release_min_hold = 20 # 1L 최소 유지 프레임 (~1s, 쐐기 구간 통과)
+        self._oneline_pair_count = 0
         self.fork_blind_frac = 0.40     # OUT 갈림길: 확정 방향 반대쪽 컬럼 마스킹 비율 (0=off)
         self.fork_blind_frames = 60     # 마스킹 지속 상한(프레임, ~3s@20fps)
         self._fork_blind_left = 0
@@ -471,6 +487,31 @@ class LaneDetector:
                     break
         span = float(roi_h - top_y)
         return span, hit / max(1.0, span)
+
+    def _two_pillar_check(self, mask):
+        """하단 절반 히스토그램에서 '차폭 간격의 두 기둥'(페어) 존재 여부 (0/1).
+        SW 시드 피크 로직과 동일 철학 — 1L 조기 해제(좌회전 종료) 이벤트 판정 전용."""
+        h_m = mask.shape[0]
+        hist = np.count_nonzero(mask[h_m // 2:, :], axis=0)
+        col_on = np.nonzero(hist >= 2)[0]
+        if col_on.size == 0:
+            return False
+        splits = np.nonzero(np.diff(col_on) > 8)[0]
+        peaks = []
+        for g in np.split(col_on, splits + 1):
+            mass = int(hist[g].sum())
+            if mass >= int(self.sw_peak_min_px):
+                peaks.append(float((g * hist[g]).sum()) / mass)
+        if len(peaks) < 2:
+            return False
+        width = (self._lane_width if self._lane_width > 0
+                 else self._lane_width_init) or 192.0
+        for i in range(len(peaks) - 1):
+            for j in range(i + 1, len(peaks)):
+                sep = abs(peaks[j] - peaks[i])
+                if 0.7 * width <= sep <= 1.4 * width:
+                    return True
+        return False
 
     def _lane_heading_excluding(self, seg, fallback):
         """후보 선분 seg 의 픽셀을 뺀 나머지로 차선 주축 a_h 를 잰다 (순환 회피).
@@ -870,7 +911,54 @@ class LaneDetector:
             self._sw_left = 999999
             self._sw_len = self._sw_left
             self._sw_dir = 0
+            self._sw_kind = 'out'
             self._sw_straight = 0
+        # 1L 조기 해제 → SW 즉시 인계 (07-14, __init__ oneline_release_* 주석):
+        # 1L 진행 중 노란 실선 페어가 K프레임 연속 복원되면 좌회전 종료로 보고
+        # 1L 을 닫고 같은 프레임에 접근 코리도를 무장한다.
+        if (self.course == 'in' and not self._ra_seen
+                and int(getattr(self, 'oneline_release_pair_k', 0)) > 0
+                and self._oneline_left > 0 and self._following_yellow
+                and (int(self.entry_oneline_frames) - self._oneline_left)
+                >= int(getattr(self, 'oneline_release_min_hold', 20))):
+            if self._two_pillar_check(track):
+                self._oneline_pair_count += 1
+            else:
+                self._oneline_pair_count = 0
+            if self._oneline_pair_count >= int(self.oneline_release_pair_k):
+                self._oneline_left = 0
+                self._oneline_pair_count = 0
+                if (int(getattr(self, 'sw_approach_frames', 0)) > 0
+                        and self._sw_left <= 0):
+                    self._sw_left = int(self.sw_approach_frames)
+                    self._sw_len = self._sw_left
+                    self._sw_dir = -1
+                    self._sw_kind = 'approach'
+                    self._sw_prev_fit = None
+                    self._sw_interior = None
+                    self._sw_straight = 0
+        else:
+            self._oneline_pair_count = 0
+        # IN 접근 코리도 무장 (07-14, __init__ sw_approach_frames 주석): Y래치 중 +
+        # 1L 종료 후 + nl=2 연속 5f(첫 좌회전 완료 확인) + RA 전. dir=-1.
+        # (위 1L 이벤트 인계가 주 경로; 이 블록은 1L 이 만료로 끝났거나 아예 안 뜬
+        #  런의 예비 무장 경로.)
+        if (self.course == 'in'
+                and int(getattr(self, 'sw_approach_frames', 0)) > 0
+                and self.drive_mode == 'DRIVE' and not self._ra_seen
+                and self._following_yellow and self._oneline_left <= 0
+                and self._sw_left <= 0):
+            self._sw_nl2_count = self._sw_nl2_count + 1 if self._prev_nl == 2 else 0
+            if self._sw_nl2_count >= 5:
+                self._sw_left = int(self.sw_approach_frames)
+                self._sw_len = self._sw_left
+                self._sw_dir = -1            # 좌향 기대 (곡률 가드 + 실선 입력 자동)
+                self._sw_kind = 'approach'
+                self._sw_prev_fit = None
+                self._sw_interior = None
+                self._sw_straight = 0
+        else:
+            self._sw_nl2_count = 0
 
         if self.drive_mode != self._prev_drive_mode:
             if (self.drive_mode == 'ROUNDABOUT'
@@ -887,12 +975,14 @@ class LaneDetector:
                 self._sw_left = int(self.sw_entry_frames)
                 self._sw_len = self._sw_left
                 self._sw_dir = -1            # 진입 = 좌향 기대
+                self._sw_kind = 'entry'
                 self._sw_prev_fit = None     # 직전 직선 주행 피팅 잔재 유입 방지
                 self._sw_interior = None
                 self._sw_straight = 0
             elif (self._prev_drive_mode == 'ROUNDABOUT'
                     and self.drive_mode == 'DRIVE'
                     and int(self.sw_exit_frames) > 0):
+                self._sw_kind = 'exit'
                 self._sw_left = int(self.sw_exit_frames)
                 self._sw_len = self._sw_left
                 self._sw_dir = +1            # 탈출 = 우향 기대 (초반 한정, gate_frames 주석)
@@ -984,9 +1074,14 @@ class LaneDetector:
         # 라이브 킬스위치 (07-12 검증 리뷰): 창은 무장 시점에 _sw_left 로 래치되므로
         # 주행 중 `ros2 param set /lane_node sw_entry_frames 0` 만으로는 안 풀렸다.
         # 0=off 규약 일관성 + "끄면 즉시 run47 복귀" 보장을 위해 매 프레임 확인.
+        # 07-14: dir 기반 → 창 종류(_sw_kind) 매핑으로 교체 (approach 신설 + out 도
+        # 자기 파라미터로 꺼지도록 — 구 코드는 out 이 sw_exit_frames 에 잘못 묶임).
         if self._sw_left > 0:
-            live = (self.sw_entry_frames if self._sw_dir < 0
-                    else self.sw_exit_frames)
+            live = {'entry': self.sw_entry_frames,
+                    'exit': self.sw_exit_frames,
+                    'approach': getattr(self, 'sw_approach_frames', 0),
+                    'out': getattr(self, 'sw_out_always', 0)}.get(
+                        getattr(self, '_sw_kind', ''), 1)
             if int(live) <= 0:
                 self._sw_left = 0
         if self._sw_left > 0:
@@ -1423,14 +1518,28 @@ class LaneDetector:
         # (5) 코리도 해석: 두 경계(pair) 우선, 아니면 단선 + 연속성 분류
         fits.sort(key=lambda f: f['x_bot'])
         pair = None
-        for i in range(len(fits) - 1):
-            for j in range(i + 1, len(fits)):
-                sep = fits[j]['x_bot'] - fits[i]['x_bot']
-                if 0.7 * (2.0 * half) <= sep <= 1.4 * (2.0 * half):
-                    pair = (fits[i], fits[j])
+        if (getattr(self, '_sw_kind', '') == 'approach'
+                and self._prev_center is not None):
+            # 접근 창 (07-14): 좌측 합류부 차선이 우리 왼선과 '차폭 간격 가짜 페어'를
+            # 이룰 수 있다 — 첫 유효 페어(최좌측) 대신 직전 중심에 가장 가까운 페어.
+            best_d = None
+            for i in range(len(fits) - 1):
+                for j in range(i + 1, len(fits)):
+                    sep = fits[j]['x_bot'] - fits[i]['x_bot']
+                    if 0.7 * (2.0 * half) <= sep <= 1.4 * (2.0 * half):
+                        mid = (fits[i]['x_bot'] + fits[j]['x_bot']) / 2.0
+                        d = abs(mid - self._prev_center)
+                        if best_d is None or d < best_d:
+                            best_d, pair = d, (fits[i], fits[j])
+        else:
+            for i in range(len(fits) - 1):
+                for j in range(i + 1, len(fits)):
+                    sep = fits[j]['x_bot'] - fits[i]['x_bot']
+                    if 0.7 * (2.0 * half) <= sep <= 1.4 * (2.0 * half):
+                        pair = (fits[i], fits[j])
+                        break
+                if pair:
                     break
-            if pair:
-                break
 
         bands = []
         chosen = []
