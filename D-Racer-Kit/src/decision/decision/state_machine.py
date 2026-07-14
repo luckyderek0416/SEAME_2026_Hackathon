@@ -75,7 +75,6 @@ class RaceStateMachine:
         self._speed_scale = 1.0       # RA 진입 시 확정: clamp(race_t/ra_ref_drive_s)
         self._y_run = 0               # Y래치 감지 연속 카운터 (스로틀 보정용)
         self._latch_seen = False      # 런당 1회
-        self._y_latch_t = None        # Y래치 확정 시각(race_t) — RA 진입 블랭크 기준점
         self.throttle_adj = 0.0       # 순항 스로틀 가산 보정 (decision_node 가 적용)
         self.yaw_proxy = 0.0          # IMU 없는 헤딩 추정치 (조향 적분)
         self._merge_bridge_t = 0.0    # 병합 브리지 잔여 시간 (RA 탈출 시 무장; 07-14 이후 _exit_active 로 대체)
@@ -312,7 +311,6 @@ class RaceStateMachine:
                 self._y_run += 1
                 if self._y_run >= int(self.cfg.get('y_latch_frames', 10)):
                     self._latch_seen = True
-                    self._y_latch_t = self.race_t
                     ref = max(1e-3, float(self.cfg.get('throttle_ref_latch_s', 4.6)))
                     dev = self.race_t / ref - 1.0
                     lim = float(self.cfg.get('throttle_adapt_max', 0.015))
@@ -410,17 +408,7 @@ class RaceStateMachine:
             # 진짜 정지선 도달은 12초+ (auto2/3 실측 12.4~12.9초) 이므로 시간 가드.
             # 중간 배치 테스트 시 ra_min_drive_s=0 으로 끌 것.
             armed_t = self.race_t >= self.cfg.get('ra_min_drive_s', 0.0)
-            # Y래치 후 블랭크 (07-14 대회장): 첫 좌회전에서 노란 차선이 크로스라인으로
-            # 오인돼 race_t=11.8s 가짜 RA 진입(7/10 사고 재발 — 곡률 게이트는 7/11 에
-            # off). 첫 턴은 항상 Y래치 직후(실측 래치+3.2s 오발 시작)이므로, 래치
-            # '이벤트' 기준 블랭크가 출발선 기준 시간 가드보다 트랙/속도에 강건하다.
-            # 진짜 A 정지선은 래치 후 12s+ 라 여유 큼. 래치 미발생 시엔 미적용
-            # (ra_min_drive_s 가 출발선 오인식을 계속 커버).
-            lb = float(self.cfg.get('ra_latch_blank_s', 0.0))
-            in_latch_blank = (lb > 0.0 and self._y_latch_t is not None
-                              and (self.race_t - self._y_latch_t) < lb)
-            if (self.cfg['course'] == 'in' and not self.roundabout_done
-                    and armed_t and not in_latch_blank):
+            if self.cfg['course'] == 'in' and not self.roundabout_done and armed_t:
                 on_yellow = lane.yellow_ratio >= self.cfg['yellow_enter_ratio']
                 gate = on_yellow if self.cfg['use_yellow_entry'] else True
                 # 곡률 게이트: 급커브에서는 노란 차선 자체가 '수평에 가까운 선'으로 보여

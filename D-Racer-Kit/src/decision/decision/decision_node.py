@@ -142,10 +142,6 @@ class DecisionNode(Node):
         # 곡률 게이트 (0=off): 새 정지선 검출기(Hough+직교)가 차선 오인을 원리적으로
         # 차단해 불필요 -> 0. (0.5 게이트는 곡선 위 진짜 정지선 접근까지 막았었음)
         self.declare_parameter('enter_max_curvature', 0.0)
-        # Y래치 후 RA 진입 블랭크 (07-14 대회장): 래치 직후 오는 첫 좌회전에서 노란
-        # 차선이 크로스라인으로 오인돼 가짜 진입(래치+3.2s 실측). 턴 종료까지 덮게 6s.
-        # 진짜 A 정지선은 래치+12s 이후라 안전. 0=off, 라이브 변경 가능.
-        self.declare_parameter('ra_latch_blank_s', 6.0)
         # race_dir 마스터 (당일 설정): 'left' (CCW) 또는 'right' (CW). 여기서 회전교차로
         # turn_direction 을, 그리고 lane_node 의 junction_side 를 파생한다. 값 하나로
         # 방향 의존적인 모든 것이 뒤집힌다. 아래 turn_direction 은 race_dir 이
@@ -282,7 +278,6 @@ class DecisionNode(Node):
             'enter_sustain_s': float(g('enter_sustain_s').value),
             'ra_min_drive_s': float(g('ra_min_drive_s').value),
             'enter_max_curvature': float(g('enter_max_curvature').value),
-            'ra_latch_blank_s': float(g('ra_latch_blank_s').value),
             'turn_direction': turn_direction,
             'branch_bias': float(g('branch_bias').value),
             'branch_yellow_min': float(g('branch_yellow_min').value),
@@ -336,7 +331,6 @@ class DecisionNode(Node):
             'roundabout_exit_gates',              # 회전교차로 탈출 게이트 카운트 (트랙 실측)
             'enter_sustain_s', 'ra_min_drive_s',  # 진입 debounce / 진입 무장 지연
             'enter_max_curvature',                # 곡선 구간 크로스라인 오인식 차단
-            'ra_latch_blank_s',                   # Y래치 후 RA 진입 블랭크 (첫 턴 오진입 차단)
             'entry_lock_release_s', 'entry_steer_bias',   # 진입 락온 시간 / 진입 피드포워드
             'exit_lock_release_s', 'exit_steer_bias',     # 탈출 락 시간 / 탈출 피드포워드
             'gate_blank_s', 'gate_rearm_s', 'yaw_gate_min',
@@ -413,7 +407,7 @@ class DecisionNode(Node):
             f"[실효] direct_fire={cfg['ra_direct_fire']} cluster_on={cfg['gate_cluster_on_s']:g} "
             f"sustain={cfg['enter_sustain_s']:g} blank={cfg['gate_blank_s']:g} "
             f"yaw_lap={cfg['yaw_lap_threshold']:g} max_loop={cfg['max_loop_time_s']:g} "
-            f"merge_bias={cfg['merge_blind_bias']:g} latch_blank={cfg['ra_latch_blank_s']:g}")
+            f"merge_bias={cfg['merge_blind_bias']:g}")
 
     def _on_set_parameters(self, params):
         """ros2 param set 요청을 받아 state_machine 설정을 라이브로 갱신."""
