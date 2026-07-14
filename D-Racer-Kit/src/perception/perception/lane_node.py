@@ -157,7 +157,17 @@ class LaneNode(Node):
         # --- SW 코리도 추적 — 상세는 lane_detector.__init__ sw_* 주석. 락 프레임만
         # 밴드 대체(실패 = 폴백). 전부 라이브: ros2 param set /lane_node sw_entry_frames 440
         self.declare_parameter('sw_entry_frames', 1200)   # RA 진입 창(프레임). 0=off. run79: 저전압 랩 지연으로 440(22s) 만료 후 개구부 이탈 -> 60s
-        self.declare_parameter('sw_exit_frames', 0)       # RA 탈출 창. 0=off. 권장 60(~3s)
+        self.declare_parameter('sw_exit_frames', 150)     # RA 탈출 창 = 순수 failsafe 상한(≈7.5s). 종료는 흰 실선 이벤트. 0=off(라이브 킬)
+        # --- 탈출→흰병합 (P1 포팅, 07-15) ---
+        self.declare_parameter('sw_exit_dash_occupancy_max', 0.72)  # 단선 점선/실선 판별. ⚠️실측 캘리
+        self.declare_parameter('sw_exit_white_bottom_px', 40)
+        self.declare_parameter('sw_exit_white_min_span_px', 55)     # ⚠️점선 토막 실측과 정합 필요
+        self.declare_parameter('sw_exit_white_solidity_min', 0.80)
+        self.declare_parameter('sw_exit_white_confirm_frames', 4)
+        self.declare_parameter('sw_exit_mouth_frames', 40)          # 개구부 점선 전용 추종 상한. 0=off
+        self.declare_parameter('sw_exit_mouth_top_frac', 0.40)
+        self.declare_parameter('w_align_block_relatch', 1)          # w_align 중 Y 재래치 차단
+        self.declare_parameter('merge_done_topic', '/perception/merge_done')
         self.declare_parameter('sw_entry_input', 'solid') # 진입 입력: solid(병합 사선 제거) | raw
         self.declare_parameter('sw_exit_input', 'raw')    # 탈출 입력: 좌측 경계가 점선 -> raw 필수
         self.declare_parameter('sw_num_boxes', 9)         # 상자 개수
@@ -296,6 +306,14 @@ class LaneNode(Node):
         self.detector.sw_drive_always = int(gp('sw_drive_always').value)
         self.detector.sw_approach_frames = int(gp('sw_approach_frames').value)
         self.detector.crossline_sw_heading = int(gp('crossline_sw_heading').value)
+        self.detector.sw_exit_dash_occupancy_max = float(gp('sw_exit_dash_occupancy_max').value)
+        self.detector.sw_exit_white_bottom_px = int(gp('sw_exit_white_bottom_px').value)
+        self.detector.sw_exit_white_min_span_px = int(gp('sw_exit_white_min_span_px').value)
+        self.detector.sw_exit_white_solidity_min = float(gp('sw_exit_white_solidity_min').value)
+        self.detector.sw_exit_white_confirm_frames = int(gp('sw_exit_white_confirm_frames').value)
+        self.detector.sw_exit_mouth_frames = int(gp('sw_exit_mouth_frames').value)
+        self.detector.sw_exit_mouth_top_frac = float(gp('sw_exit_mouth_top_frac').value)
+        self.detector.w_align_block_relatch = int(gp('w_align_block_relatch').value)
         self.detector.oneline_release_min_hold = int(gp('oneline_release_min_hold').value)
         self.detector.exit_yellow_gone_instant = int(gp('exit_yellow_gone_instant').value)
         self.detector.exit_yellow_gone_frames = int(gp('exit_yellow_gone_frames').value)
@@ -344,8 +362,19 @@ class LaneNode(Node):
         # 라이브 튜닝: `ros2 param set /lane_node yellow_hsv_lo "[18,45,110]"` 등을 실행하면
         # detector 가 즉시 갱신되어 재시작 없이 반영된다. 튜닝하면서 대시보드로
         # HSV 마스크를 바로 확인할 수 있다.
+        # 병합 완료 이벤트 → decision (_exit_active 해제 트리거, P1)
+        self.merge_done_pub = self.create_publisher(
+            Bool, str(gp('merge_done_topic').value), 10)
         self.add_on_set_parameters_callback(self._on_set_params)
         self.get_logger().info(f'lane_node up. in={sub_topic} out={self.lane_topic}')
+        d = self.detector
+        self.get_logger().info(
+            f'[실효 재설계] drive_sw={d.sw_drive_always} approach={d.sw_approach_frames} '
+            f'xline_swhead={d.crossline_sw_heading} stopline_scope=Y래치+ '
+            f'exit={self.get_parameter("sw_exit_frames").value} '
+            f'mouth={d.sw_exit_mouth_frames}/{d.sw_exit_mouth_top_frac:g} '
+            f'w_event={d.sw_exit_white_min_span_px}/{d.sw_exit_white_solidity_min:g}'
+            f'/{d.sw_exit_white_confirm_frames} occ_max={d.sw_exit_dash_occupancy_max:g}')
 
     def _on_set_params(self, params):
         hsv_keys = {'white_hsv_lo', 'white_hsv_hi', 'yellow_hsv_lo', 'yellow_hsv_hi',
@@ -417,6 +446,7 @@ class LaneNode(Node):
         out.fork = bool(fork)
         out.red_ratio = float(red_ratio)
         self.pub.publish(out)
+        self.merge_done_pub.publish(Bool(data=bool(self.detector._merge_done)))
 
         if self.crossline_dbg_pub is not None:
             cands = getattr(self.detector, 'last_crossline_cands', [])

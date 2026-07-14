@@ -366,6 +366,9 @@ class DecisionNode(Node):
         self.create_subscription(ArucoState, str(g('aruco_topic').value), self.on_aruco, 10)
         self.create_subscription(Detections, str(g('detections_topic').value), self.on_dets, 10)
         self.create_subscription(Battery, str(g('battery_topic').value), self.on_battery, 10)
+        # 흰 실선 병합 이벤트 (P1): perception → _exit_active 종료 트리거
+        self._merge_done_sig = False
+        self.create_subscription(Bool, '/perception/merge_done', self.on_merge_done, 10)
         self.pub = self.create_publisher(Control, str(g('control_topic').value), 10)
         # 확정된 갈림길 방향을 perception(lane_node)에 전달 -> 브랜치 선택(guide 시드).
         self.fork_dir_pub = self.create_publisher(String, str(g('fork_dir_topic').value), 10)
@@ -427,6 +430,9 @@ class DecisionNode(Node):
         self.dets = list(msg.detections)
         self._vote_fork_sign(msg)
 
+    def on_merge_done(self, msg: Bool):
+        self._merge_done_sig = bool(msg.data)
+
     def on_battery(self, msg):
         """battery_node 는 퍼센트만 발행하므로 선형 매핑을 역산해 전압으로 되돌린다.
         0%/100% 에서 clamp 되므로 batt_min_v 아래는 구분이 안 된다(가드 임계는 그 위로 잡을 것)."""
@@ -475,6 +481,7 @@ class DecisionNode(Node):
     def on_timer(self):
         # 표결로 확정된 갈림길 방향을 상태머신에 전달(step 전). None 이면 무편향.
         self.sm.confirmed_fork_direction = self.confirmed_fork_direction
+        self.sm.merge_done_sig = self._merge_done_sig
         steer, throttle, state = self.sm.step(self.lane, self.aruco, self.dets, self.dt)
         # 스로틀 동적 보정 적용 (순항 값에만 — 정지/중립은 제외). 킥/램프 상류.
         adj = float(getattr(self.sm, 'throttle_adj', 0.0))

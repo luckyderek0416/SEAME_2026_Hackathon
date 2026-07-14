@@ -80,6 +80,13 @@ class RaceStateMachine:
         self._entry_votes = 0         # 마지막 회전교차로 진입 투표 수 (디버그/로그)
         self._entry_lock_active = False  # 진입측 락온이 걸려 있는 동안 True (one-shot)
         self._exit_lock_t = 0.0          # 탈출 락 남은 시간(초) — RA 탈출 순간 장전
+        # 탈출 구간 이벤트 플래그 (P1 포팅, 07-14 항목4 최종형): RA 탈출 발화 시
+        # True, perception 흰 실선 이벤트(/perception/merge_done) 수신 시 False.
+        # 이 동안: 소실 시 [락 창=우향 피드포워드 / 이후=마지막 조향 클램프 유지],
+        # 스로틀 slow 캡. 시간창이 아니라 이벤트라 속도 무관.
+        self._exit_active = False
+        self._last_lane_steer = None  # 직전 lane_found 프레임의 PID 조향 (클램프 저장)
+        self.merge_done_sig = False   # decision_node 가 매 틱 주입
         # DRIVE 소실 폴백용: 최근 조향의 EMA (07-12 run47 v47.6 실증 — 탈출로
         # 노랑->흰 전환부에서 소실 시 '직진' 폴백이 커브를 뚫고 이탈. 소실 중에는
         # 직전 조향 경향을 유지하고, 소실이 길어지면 서서히 중앙으로 감쇠).
@@ -123,6 +130,15 @@ class RaceStateMachine:
             # 차선 놓침: DRIVE 는 '직전 조향 EMA' 유지 (직진 폴백이 커브를 뚫던
             # run47 전환부 이탈 대응), 3s 시정수로 중앙 수렴. RA 는 ra_blind_bias
             # 전담 (중복 가산 방지).
+            if self.state == State.DRIVE and self._exit_active:
+                # 탈출 락 창: 기하 피드포워드(탈출측 호) — run76~80 검증 동작.
+                if self._exit_lock_t > 0.0:
+                    return float(self.cfg['steer_center']
+                                 + self.cfg['turn_direction']
+                                 * self.cfg.get('exit_steer_bias', 0.0))
+                # 락 이후 소실: 마지막 조향(클램프 저장분) 유지 — 이벤트 종료까지.
+                if self._last_lane_steer is not None:
+                    return float(self._last_lane_steer)
             if self.state == State.DRIVE and self._steer_hold is not None:
                 center = self.cfg['steer_center']
                 self._steer_hold += (center - self._steer_hold) * min(1.0, dt / 3.0)
@@ -138,6 +154,8 @@ class RaceStateMachine:
             s = max(c - 0.30, min(c + 0.30, steer))
             self._steer_hold = (s if self._steer_hold is None
                                 else 0.3 * s + 0.7 * self._steer_hold)
+            # 탈출 블라인드 유지용 — 클램프값 저장 (run_c: 원시 스파이크 2.4s 박제 방지)
+            self._last_lane_steer = s
         return steer
 
     def _turn_bias(self):
@@ -198,6 +216,7 @@ class RaceStateMachine:
             # 시간창 동안 post-PID 우측 편향을 유지한다 (합류부 보조와 같은 원리 —
             # 탈출 후엔 yaw 적분이 멈추므로 위치창 대신 시간창). 모든 탈출 경로 공통.
             self._exit_lock_t = float(self.cfg.get('exit_lock_release_s', 0.0))
+            self._exit_active = True   # 흰 실선 이벤트(merge_done)까지 유지
         self.state = state
         self.pid.reset()
         self.green_count = 0
@@ -267,7 +286,10 @@ class RaceStateMachine:
             return steer, throttle, 'LANE_ONLY'
 
         if self.state not in (State.WAIT_GREEN, State.DONE):
-            self.race_t += dt   # 출발 후 경과 시간 (FINISH 게이트용)
+            self.race_t += dt
+        # 흰 실선 병합 이벤트 (P1): perception 이 병합 완료를 알리면 탈출 구간 종료.
+        if self._exit_active and self.merge_done_sig:
+            self._exit_active = False   # 출발 후 경과 시간 (FINISH 게이트용)
         # 스로틀 동적 보정 (07-12): 같은 스로틀도 팩 상태로 런마다 속도가 널뜀
         # (run56 부족/run57~58 과속, 전부 0.19~0.21). G->Y래치(분기 노랑 첫 지속
         # 감지) 소요시간으로 이 런의 속도를 측정해 이후 순항 스로틀에 보정을
@@ -335,7 +357,9 @@ class RaceStateMachine:
         # 것만으로 서버리는 사고를 막는다.
         in_red_zone = self._in_red_zone(lane)
         if self.state == State.DRIVE and aruco.detected and (
-                in_red_zone or aruco.area_ratio >= self.cfg['marker_area_trigger']):
+                in_red_zone or (aruco.area_ratio >= self.cfg['marker_area_trigger']
+                                and (self.cfg.get('course') != 'in'
+                                     or self.roundabout_done))):
             self._enter(State.OBSTACLE_STOP)
 
         if self.state == State.OBSTACLE_STOP:
@@ -353,7 +377,7 @@ class RaceStateMachine:
             # 즉시 PID 인계). 무조건 가산은 추종 기회를 없앰(run25). 양수 = 탈출측(우).
             if self._exit_lock_t > 0.0:
                 self._exit_lock_t -= dt
-                if not lane.lane_found:
+                if not lane.lane_found and not self._exit_active:
                     steer = max(-1.0, min(1.0, steer + self.cfg['turn_direction']
                                           * self.cfg.get('exit_steer_bias', 0.0)))
             # 회전교차로 진입 (In 코스, 한 번 완료하기 전까지만).
@@ -407,6 +431,9 @@ class RaceStateMachine:
             # 노란 구간(DRIVE[Y] = 회전교차로 접근/갈림길)은 검출·조향이 가장 어려운
             # 구간이라 상한을 따로 둔다 (07-11: 노란 접근에서의 요동·이탈이 반복돼
             # 흰 구간과 속도를 분리). yellow_ratio 는 FOLLOW-Y 전환과 같은 문턱을 쓴다.
+            # 병합 감속 (P1): 탈출~병합 완료까지 무차선 고속 진입 방지. 이벤트 종료.
+            if self._exit_active:
+                throttle = min(throttle, self.cfg['slow_throttle'])
             ydt = self.cfg.get('yellow_drive_throttle', 0.0)
             if ydt > 0.0 and lane.yellow_ratio >= self.cfg.get('yellow_slow_ratio', 0.03):
                 throttle = min(throttle, ydt)
