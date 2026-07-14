@@ -1091,6 +1091,7 @@ class LaneDetector:
                 elif (int(getattr(self, 'sw_turn_dash_mode', 0))
                         and self._sw_dir < 0 and self._following_yellow
                         and not self._ra_seen
+                        and self._oneline_left > 0
                         and self._dash_fallback_on):
                     # 진입턴 점선 서브모드 (P2, 기하 검토): 급좌회전에서 안쪽 실선이
                     # FOV 를 벗어난 동안, 잔존 우측 호 점선만 입력으로 추종.
@@ -1639,6 +1640,7 @@ class LaneDetector:
             elif (int(getattr(self, 'sw_turn_dash_mode', 0))
                     and self._sw_dir < 0 and self._following_yellow
                     and not self._ra_seen
+                    and self._oneline_left > 0
                     and self._dash_fallback_on):
                 # 진입턴 점선 서브모드 (P2 기하 검토): 잔존 호 점선 = 우측(외측)
                 # 경계 — 좌측경계로 두면 중심이 +차폭 반전 (기하 검증 CONFIRM).
