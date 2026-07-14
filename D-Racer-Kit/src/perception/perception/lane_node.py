@@ -172,6 +172,7 @@ class LaneNode(Node):
         self.declare_parameter('sw_coast_max_frames', 10)   # 락 실패 관성 합성 한도 (~0.5s). 0=off
         self.declare_parameter('sw_side_mem_frames', 40)    # 페어→단선 side 기억 유효 프레임. 0=off
         self.declare_parameter('sw_turn_dash_mode', 1)      # 진입턴 실선소실 시 점선 전용 추종. 0=off
+        self.declare_parameter('sw_approach_input', 'raw')  # pre-RA Y구간 입력: raw=B 가장자리 점선 추종 (07-15)
         self.declare_parameter('sw_entry_input', 'solid') # 진입 입력: solid(병합 사선 제거) | raw
         self.declare_parameter('sw_exit_input', 'raw')    # 탈출 입력: 좌측 경계가 점선 -> raw 필수
         self.declare_parameter('sw_num_boxes', 9)         # 상자 개수
@@ -321,6 +322,7 @@ class LaneNode(Node):
         self.detector.sw_coast_max_frames = int(gp('sw_coast_max_frames').value)
         self.detector.sw_side_mem_frames = int(gp('sw_side_mem_frames').value)
         self.detector.sw_turn_dash_mode = int(gp('sw_turn_dash_mode').value)
+        self.detector.sw_approach_input = str(gp('sw_approach_input').value)
         self.detector.oneline_release_min_hold = int(gp('oneline_release_min_hold').value)
         self.detector.exit_yellow_gone_instant = int(gp('exit_yellow_gone_instant').value)
         self.detector.exit_yellow_gone_frames = int(gp('exit_yellow_gone_frames').value)

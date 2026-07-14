@@ -278,6 +278,11 @@ class LaneDetector:
         self.sw_entry_frames = 0        # RA 진입 창 길이(프레임). 0=off. 권장 140(~7s@20fps)
         self.sw_exit_frames = 0         # RA 탈출 창 길이(프레임). 0=off. 권장 60(~3s)
         self.sw_entry_input = 'solid'   # 진입 창 입력: 'solid'(dash 제거) | 'raw'
+        # pre-RA Y구간(drive/approach) 입력 (07-15 run2 후 사용자 설계): raw —
+        # B 개구부의 '도로 가장자리 점선'을 물고 직진 관통한다 (좌우 빨간 상자 그림).
+        # 대각선 커넥터 점선은 페어 차폭 일치 + 직전 피팅 연속성 + 곡률 부호 게이트가
+        # 걸러낸다 (run2 리플레이 실증: raw 에서 락 유지 관통, 다이빙 없음).
+        self.sw_approach_input = 'raw'
         self.sw_exit_input = 'raw'      # 탈출 창 입력: 점선이 좌측 경계라 raw 필수
         # --- 전구간 SW (07-15 재설계 P0, 4관점 검토 반영) ---
         # DRIVE 래치 순간부터 상시 코리도: W구간 = 흰 페어(양쪽 상자체인 → 중점),
@@ -1099,8 +1104,12 @@ class LaneDetector:
                     sw_src = cv2.subtract(
                         ymask, self._filter_yellow_dashes(ymask))
                 else:
-                    mode_in = (self.sw_exit_input if self._sw_dir > 0
-                               else self.sw_entry_input)
+                    if self._sw_dir > 0:
+                        mode_in = self.sw_exit_input
+                    elif getattr(self, '_sw_kind', '') in ('drive', 'approach'):
+                        mode_in = getattr(self, 'sw_approach_input', 'raw')
+                    else:
+                        mode_in = self.sw_entry_input
                     sw_src = (self._filter_yellow_dashes(ymask)
                               if str(mode_in) == 'solid' else ymask)
                 src = (cv2.morphologyEx(sw_src, cv2.MORPH_OPEN, k)
