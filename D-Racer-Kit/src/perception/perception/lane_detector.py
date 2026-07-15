@@ -1814,22 +1814,41 @@ class LaneDetector:
                         m, f['abc'], f['y_lo'], f['y_hi'])
                         <= float(self.sw_exit_dash_occupancy_max)]
                     if dash:
-                        best = max(dash, key=lambda f: f['x_bot'])
-                        # 07-16 (주행 3런 로그·영상 + 손굴림 450f 리플레이 A/B):
-                        # 화면 좌/우반 휴리스틱은 우반 점선에 -1 을 줘 링 유지/좌향
-                        # 폭주 명령. 기하 정답 = 점선은 항상 탈출 차선의 '좌측' 경계
-                        # → side=+1 고정 (중심 = 점선 + 반차폭, 통제된 우회전+굽이 추종).
+                        # 07-16 v2 (사용자 ㅇㅇ.jpg 확정): 쐐기 실선(빨강)과 탈출측
+                        # 점선 열(파랑)은 꼭짓점에서 이어지는 '하나의' 차선 경계다.
+                        # '최우측' 선택은 이 연속 궤적(4568 런 xbot 235→…→85 활강)을
+                        # 버리고 반대편 열(149)로 스냅했다 — 직전 락과 가장 가까운
+                        # 후보를 골라 실선→점선 인계를 연속으로 유지한다.
+                        # (시드는 아래 실선 폴백의 쐐기 규칙이 만든다)
+                        xb_prev = getattr(self, '_sw_mouth_prev_xbot', None)
+                        if xb_prev is not None:
+                            best = min(dash,
+                                       key=lambda f: abs(f['x_bot'] - xb_prev))
+                        else:
+                            best = max(dash, key=lambda f: f['x_bot'])
+                        # 기하 정답 = 이 경계는 탈출 차선의 '좌측' (07-16 3런 검증)
+                        # → side=+1 고정 (중심 = 선 + 반차폭 우측).
                         side = 1.0
                     else:
-                        # 07-16 (사용자 도면 캡처로 확정): 갈림길 꼭짓점 직후의
-                        # 쐐기 실선은 탈출로의 '좌측' 경계인데 점선이 아니라 실선
-                        # 이라 폴백으로 떨어진다 — 고정 -1 은 쐐기 안쪽 견인
-                        # (talkv f149~141: xbot 262→194 를 -1 로 → pc 191→128 좌향).
-                        # 규칙: 개구부 초반(age<=20f)은 실선 = 쐐기 = +1 고정,
-                        # 이후는 위치 기반 — 좌반(꼬리 조각)=+1 / 우반(바깥)=-1.
-                        age_m = self._sw_len - self._sw_left
-                        side = (1.0 if (age_m <= 20 or best['x_bot'] < w / 2.0)
-                                else -1.0)
+                        # 07-16 v3 (사용자 확정: 인계 방향은 점선→실선):
+                        # 탈출 중 추종하는 경계는 스템의 점선 열(파랑)이 꼭짓점에서
+                        # 쐐기 실선(빨강)으로 이어지는 '하나의' 선이다. 점선이
+                        # 끊기고 실선 폴백으로 떨어지는 인계 순간에 잔차 최소
+                        # 실선을 고르면 추종 궤적과 무관한 반대쪽 경계를 집는다 —
+                        # 직전 궤적과 가장 가까운 실선을 골라 같은 선으로 잇고,
+                        # 같은 선의 연장이므로 side=+1(좌측 경계)을 유지한다.
+                        xb_prev0 = getattr(self, '_sw_mouth_prev_xbot', None)
+                        if xb_prev0 is not None:
+                            best = min(fits,
+                                       key=lambda f: abs(f['x_bot'] - xb_prev0))
+                            side = 1.0
+                        else:
+                            # 궤적 없음(개구부 첫 락이 실선): 쐐기 규칙 유지 —
+                            # 초반(age<=20f)=쐐기=+1, 이후 좌반+1/우반-1 (fix2).
+                            age_m = self._sw_len - self._sw_left
+                            side = (1.0 if (age_m <= 20
+                                            or best['x_bot'] < w / 2.0)
+                                    else -1.0)
                     # 프레임간 선택 점프 가드: 0.5x차폭 초과 = 이웃 점선/노이즈 —
                     # 이 프레임 락 포기 (시드 연속성 유지, 기준값 미갱신)
                     xb_prev = getattr(self, '_sw_mouth_prev_xbot', None)
