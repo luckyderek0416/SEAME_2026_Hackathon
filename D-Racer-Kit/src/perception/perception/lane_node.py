@@ -175,7 +175,7 @@ class LaneNode(Node):
         self.declare_parameter('sw_exit_frames', 150)     # RA 탈출 창 = 07-14 재설계 후 '순수 failsafe 상한'(≈7.5s@20fps). 종료는 흰 실선 이벤트가 담당 — 정상 주행에선 상한이 먼저 안 닿게, 그러나 미발화 시 구조 레이턴시라 과하게 길게도 금지. 리플레이로 확정. 0=off(라이브 킬)
         self.declare_parameter('sw_entry_input', 'solid') # 진입 입력: solid(병합 사선 제거) | raw
         self.declare_parameter('sw_exit_input', 'raw')    # 탈출 입력: 좌측 경계가 점선 -> raw 필수
-        self.declare_parameter('sw_num_boxes', 5)         # 상자 개수
+        self.declare_parameter('sw_num_boxes', 9)         # 상자 개수 (07-15 사용자: 5→9, 전폭 110 유지)
         self.declare_parameter('sw_box_margin', 55)       # 상자 반폭(px)
         self.declare_parameter('sw_max_shift', 35)        # 상자당 이동 상한(px)
         self.declare_parameter('sw_min_box_px', 8)        # 상자 적중 최소 픽셀

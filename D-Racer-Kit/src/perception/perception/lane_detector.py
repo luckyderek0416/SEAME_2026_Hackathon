@@ -1159,9 +1159,10 @@ class LaneDetector:
             if ymask is not None and (self._following_yellow
                                       or self._sw_dir > 0):
                 if self._sw_mouth:
-                    # 개구부: 점선 성분만 + 상단 제거 (좌측 점선 단선 추종 전용)
-                    sw_src = cv2.subtract(
-                        ymask, self._filter_yellow_dashes(ymask))
+                    # 개구부 (07-15 사용자 재설계): 우측 실선 단선 추종으로 전환.
+                    # 정지선 2회째(직발화) 우회전 시 좌측 점선 대신 탈출로 우측
+                    # 실선을 물도록 실선 성분만 입력. 상단 제거는 유지(원거리 차단).
+                    sw_src = self._filter_yellow_dashes(ymask)
                     top = int(sw_src.shape[0]
                               * float(self.sw_exit_mouth_top_frac))
                     if top > 0:
@@ -1644,9 +1645,9 @@ class LaneDetector:
             # 재획득 우측고정 > 점선 힌트(이격 조건) > 직전 중심 연속성 > 기본값.
             # 연속성만 쓰면 run22~24 오분류 서명이 SW 프레임에서 재발.
             if self._sw_dir > 0 and getattr(self, '_sw_mouth', False):
-                # 개구부 (07-15 사용자 설계): 입력이 점선 전용이므로 점유율 판별 불필요.
-                # 점선 = 탈출 차선의 좌측 경계 → 중심 = 점선 + 반차폭 우측.
-                side = +1.0
+                # 개구부 (07-15 사용자 재설계): 입력이 실선 전용 → 점유율 판별 불필요.
+                # 실선 = 탈출 차선의 우측 경계 → 중심 = 실선 − 반차폭 (좌측).
+                side = -1.0
             elif self._sw_dir > 0:
                 # 항목1 (07-14): 탈출 단선의 점선/실선 판별 (Y래치 상태 무관).
                 #  · 점선이면 → 무조건 바깥(우측) 경계 고정 (병합 굽이는 좌향, 남은
