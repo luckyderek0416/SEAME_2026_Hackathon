@@ -66,10 +66,16 @@ def generate_launch_description():
              parameters=[{'dictionary': aruco_dict, 'inverted': aruco_inverted}]),
 
         # --- new: inference (YOLO via NCNN, ARM-friendly) ---
-        # juwon inference 패키지의 실행자는 yolo_node 하나 (ultralytics NCNN 디렉토리
-        # 방식, 기본 model_path=~/SEAME_2026_Hackathon/training/best_ncnn_model).
-        # 구 yolo_ncnn_node(model_param/model_bin) 참조는 실행자가 없어 기동 실패했음.
-        Node(package='inference', executable='yolo_node', name='yolo_node', output='screen'),
+        # 보드에 ultralytics(torch) 가 없어 yolo_node 는 모델 로드 실패 -> 빈 검출.
+        # 순수 ncnn 경로(yolo_ncnn_node, run80plus 검증)로 loun v3 가중치를 문다.
+        # 파일은 리포 내 training/best_ncnn_model 의 model.ncnn.{param,bin} (동일 가중치).
+        Node(package='inference', executable='yolo_ncnn_node', name='yolo_node', output='screen',
+             parameters=[{
+                 'model_param': '/home/topst/SEAME_2026_Hackathon-clone/training/'
+                                'best_ncnn_model/model.ncnn.param',
+                 'model_bin': '/home/topst/SEAME_2026_Hackathon-clone/training/'
+                              'best_ncnn_model/model.ncnn.bin',
+             }]),
 
         # --- new: decision (state machine + PID) ---
         Node(package='decision', executable='decision_node', name='decision_node', output='screen',
