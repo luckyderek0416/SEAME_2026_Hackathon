@@ -198,10 +198,21 @@ class LaneDetector:
         self.w_align_frames = 60        # 창 길이 (~3s@20fps, run59 리플레이: 2s 는 사선 구간 전에 만료). 0=off
         self.w_align_gain = 0.4         # 기울기 -> offset 보정 게인. 0=보정만 off
         self.w_align_min_px = 80        # 점선 필터 결과 이 미만이면 raw 흰 폴백
-        # 재래치 억제 (07-14 병합 플랩 대응): RA 후 w_align 창 활성 중 Y래치
-        # 재진입 차단. 창 track 이 노란 꼬리를 포함하므로 무손실.
-        self.w_align_block_relatch = 1
         self.w_align_dash_fallback = 0  # 0(기본)=폴백 금지: 점선 잡지 말고 무검출 -> 결정층 브리지 바이어스에 위임
+        # 재래치 억제 (07-14 병합 플랩 대응 — lane_node 주석 참고): RA 후 w_align
+        # 창 활성 중 Y래치 재진입 차단. 창 track 이 노란 꼬리를 포함하므로 무손실.
+        self.w_align_block_relatch = 1
+        # Y+W 선행 혼합 (07-13 run103, 사용자 설계): RA 후 DRIVE[Y] 중 흰 '실선'을
+        # track 에 미리 합성. 높이 게이트(_filter_yellow_dashes)가 흰 점선(개구부
+        # 표식)과 가로로 누운 먼 도로선을 걸러 평행해진 흰 실선만 통과 —
+        # ① 좌곡에서 안쪽 노랑 순간 소실 시 픽 유지 ② 해제 전 nl=2 인계 기하.
+        # 무장 게이트 (07-13 run105: 탈출 스윙 중 노랑이 시야를 벗어난 순간
+        # 아웃코스 흰 호를 혼합해 좌훅 이탈 — 높이 게이트만으론 부족):
+        # 탈출 코리도 창 밖 + 노란 실선 위에 실제로 앉은 프레임에서만 무장하고,
+        # 노랑 소실 시 carry 프레임 동안만 흰 실선이 픽을 인계한다(분기 딥 구제).
+        self.yw_premix = 0
+        self.yw_premix_carry_frames = 30   # ~1.5s@20fps (run103 딥 0.75s 커버)
+        self._yw_carry = 0
         self.follow_yellow_blind_release_frames = 12  # 흰 우세 없이도 노랑 소실 지속 시 해제 (0=off)
         self._yellow_blind_count = 0
         self._w_align_left = 0
@@ -246,6 +257,7 @@ class LaneDetector:
         # 단선 좌/우 분류용 점선 힌트: 실선은 항상 점선의 반대편 경계 — 화면 기준이
         # 아니라 점선 대비 위치로 분류. None = 힌트 없음.
         self._yellow_dash_cx = None
+        self._yellow_dash_px = 0
         # 현재 주행 모드(상태머신 상태 문자열). decision 이 publish 하고 lane_node 가
         # 매 프레임 갱신 -> BEV 디버그 화면에 표시. '' 면 표시 안 함(decision 미실행).
         self.drive_mode = ''
@@ -271,6 +283,22 @@ class LaneDetector:
         self.sw_entry_input = 'solid'   # 진입 창 입력: 'solid'(dash 제거) | 'raw'
         self.sw_out_always = 1          # OUT 코스: DRIVE 전 구간 코리도 상시 (S자 좌우 교대 소실 대응).
                                         # dir=0 -> 곡률가드/탈출규칙/STOPLINE 비활성, 입력 raw. in 코스 무영향
+        # IN 접근 코리도 (07-14 사용자 설계): DRIVE[Y] 첫 래치 + 첫 좌회전 완료(1L 종료
+        # + nl=2 연속 5f) 시점부터 RA 래치까지 노란 코리도. B 에서 좌측 합류부 차선이
+        # 밴드 '평균'을 당기던 것(런 실측)을 락 추적으로 대체하고, 코리도 활성 = crossline
+        # sw_gate 자동 무장이라 B 가짜 정지선도 함께 기각(run76~80 검증 게이트 재사용).
+        # dir=-1 무장 → 우곡률 가지 기각(sw_curv_max_a, run87)·실선 입력 자동 적용.
+        # 해제 = RA 래치 시 진입 코리도가 덮어씀. 0=off (라이브 킬스위치).
+        self.sw_approach_frames = 600   # failsafe 상한 (~30s@20fps; RA 래치가 정상 종료)
+        self._sw_kind = ''              # 활성 창 종류: entry/exit/approach/out (킬스위치 매핑)
+        self._sw_nl2_count = 0          # 접근 무장용 nl=2 연속 카운터
+        # 1L 조기 해제 → SW 인계 (07-14 사용자 설계): 1L 중 노란 실선 '페어'(차폭 간격
+        # 두 기둥)가 K프레임 연속 복원되면 = 좌회전 종료 이벤트 → 80f 만료를 안 기다리고
+        # 즉시 1L 종료 + 접근 코리도 무장 (시간창 속도의존 제거; 80f 만료는 failsafe 잔존).
+        # 분기 목 쐐기(run9/11) 오인 방어: min_hold(쐐기는 1L 초반에만) + 질량/간격 + K연속.
+        self.oneline_release_pair_k = 5    # 페어 연속 프레임 (0=이벤트 해제 off)
+        self.oneline_release_min_hold = 20 # 1L 최소 유지 프레임 (~1s, 쐐기 구간 통과)
+        self._oneline_pair_count = 0
         self.fork_blind_frac = 0.40     # OUT 갈림길: 확정 방향 반대쪽 컬럼 마스킹 비율 (0=off)
         self.fork_blind_frames = 60     # 마스킹 지속 상한(프레임, ~3s@20fps)
         self._fork_blind_left = 0
@@ -320,9 +348,46 @@ class LaneDetector:
         self._sw_open = False           # 이번 프레임이 개방 구간인지
         self._sw_len = 0                # 무장 시점의 창 길이 (age 계산용)
         self._sw_gate_dir = 0           # 이번 프레임의 방향 게이트 (0=게이트 없음)
-        self._sw_wsteady = 0            # 흰 인계 연속 카운터
+        self._sw_wsteady = 0            # 흰 인계 연속 카운터 (구 종결자 — 07-14 흰이벤트로 대체, 미사용)
         self._sw_last_lean = 0.0        # 마지막 락 프레임의 기욺(top_x - bottom_x, px)
         self._sw_locked_dbg = False     # 디버그 표기용: 이번 프레임 락 여부
+        # --- 탈출→흰병합 재구현 (07-14 사용자 설계, _sw_dir>0 한정) ---
+        # 항목1: 탈출 단선 락의 점선/실선 판별. 피팅 곡선을 따라 마스크 점유율을 재
+        # (curve occupancy) 이 문턱 초과면 '실선' → SW 락 포기(None, 일반 파이프라인
+        # 인계). 이하면 '점선' → 무조건 바깥(우측) 경계 고정. ⚠️ 실측 캘리 필요.
+        self.sw_exit_dash_occupancy_max = 1.1   # 07-15: 1.0 초과 = 실선 판별 무력화
+        #  → 탈출 단선은 점선/실선 무관 항상 SW 주행 (side 는 아래 조향 prior 가 결정).
+        # 조향 부호 side prior (07-15): 회전 중 안쪽 선이 시야에서 먼저 이탈 →
+        # 좌조향 중 단선 = 우측(바깥) 경계, 우조향(탈출 스윙) 중 단선 = 좌측 경계.
+        # 조향 규약: steer > steer_center = 좌 (07-11 실측 3중, state_machine 참조).
+        # last_steer 는 lane_node 가 /control 구독으로 주입 (None=미수신 → prior off).
+        self.last_steer = None
+        self.steer_center = 0.26         # control 의 steer_center 와 동일값
+        self.steer_side_deadband = 0.06  # |defl| 이하(직진 근처)면 prior 미적용. ⚠️캘리
+        self.steer_side_prior = 1        # 0=off (기존 우측 고정 복귀 — 킬스위치)
+        # 탈출(점선) 창 전용 상자 기하 (07-15): 점선 틈 브리징 위해 탈출 창만 확대.
+        # 전역 확대는 링 급곡률 추적을 깸(07-15 실측) → dir>0(탈출)만 사용, 링/진입은
+        # 베이스 유지. 0=베이스(sw_box_margin 등) 상속.
+        self.sw_exit_box_margin = 55
+        self.sw_exit_num_boxes = 5
+        self.sw_exit_max_shift = 35.0
+        # 항목2: 탈출창 종료 = 흰 '실선' 이벤트. 최하단 흰 후보를 위로 추적한 연속
+        # 스팬(점선 토막 최대길이 초과 = 실선)이 문턱 이상 + 스팬 내 점유율 이상이
+        # 연속 confirm_frames 프레임. 방향 무관(bbox 높이 아님, 스팬 기반).
+        # ⚠️ 네 값 전부 임시 — BEV 점선 토막 길이/흰선 두께로 실측 캘리 필요.
+        self.sw_exit_white_bottom_px = 40     # 최하단 밴드 흰 최소 픽셀 (후보 성립)
+        self.sw_exit_white_min_span_px = 55   # 연속 스팬 하한 (점선 토막 최대길이 초과)
+        self.sw_exit_white_solidity_min = 0.80  # 스팬 내 점유율 하한 (long-but-sparse 배제)
+        self.sw_exit_white_confirm_frames = 4   # 발화 디바운스 (공간=스팬 / 시간=이 값 이중방어)
+        self._sw_white_confirm = 0      # 흰 실선 이벤트 연속 카운터
+        # 노랑 소실 즉시 전환 (07-15): 탈출창 중 ROI 노랑이 사라지면(yr<ratio) 흰 실선
+        # 이벤트를 안 기다리고 즉시 흰 전환. 흰 실선 이벤트의 보조 트리거. 0=off.
+        self.exit_yellow_gone_instant = 1
+        self.exit_yellow_gone_frames = 2   # 소실 연속 프레임 (즉시=1, 노이즈여유 2~3)
+        self._yellow_gone_run = 0
+        # 원웨이 병합 래치 (항목2): post-RA 에서 Y→W 전환이 한 번 일어나면(경로 무관)
+        # 남은 런 동안 Y 재래치 금지. 런 시작(디텍터 인스턴스)마다 False.
+        self._merge_done = False
         self._sw_fit_dbg = []           # 디버그 오버레이용 피팅 곡선 [(x,y),...] 리스트
 
     def _build_mask(self, roi):
@@ -396,6 +461,78 @@ class LaneDetector:
         hit |= (mask[np.clip(yi + 1, 0, h - 1), xi] > 0)
         return float(np.mean(hit))
 
+    def _curve_occupancy(self, mask, abc, y_lo, y_hi):
+        """피팅 곡선 x=a·y²+b·y+c 를 y_lo~y_hi 로 샘플링해 마스크 점유율(0..1) 반환.
+        _segment_solidity 와 같은 철학이되 직선 대신 곡선을 따라간다. 점선은 토막 사이
+        공백으로 점유율이 낮고, 실선은 ~1.0 (탈출 단선 점선/실선 판별용, _sw_dir>0 전용)."""
+        a, b, c = abc
+        n = max(8, int(abs(y_hi - y_lo)))
+        ys = np.linspace(y_lo, y_hi, n)
+        xs = a * ys * ys + b * ys + c
+        h, w = mask.shape[:2]
+        xi = np.clip(np.rint(xs).astype(np.int32), 0, w - 1)
+        yi = np.clip(np.rint(ys).astype(np.int32), 0, h - 1)
+        hit = (mask[yi, xi] > 0)
+        # ±1px 가로 오차 허용 (피팅 미세 오프셋; 점선의 세로 공백은 그대로 드러남)
+        hit |= (mask[yi, np.clip(xi - 1, 0, w - 1)] > 0)
+        hit |= (mask[yi, np.clip(xi + 1, 0, w - 1)] > 0)
+        return float(np.mean(hit))
+
+    def _white_solid_span(self, wmask, roi_h, band_h):
+        """최하단 밴드의 흰 후보를 위로 한 행씩 추적해 (연속 스팬 px, 점유율) 반환.
+        점선 토막은 gap 에서 끊겨 스팬이 짧고, 실선은 밴드 너머로 이어진다 —
+        bbox 높이(방향 의존) 대신 스팬(방향 무관)이 진짜 판별자. 탈출창 종료 전용."""
+        h, w = wmask.shape[:2]
+        y0 = max(0, roi_h - band_h)
+        if int(np.count_nonzero(wmask[y0:roi_h, :])) < int(self.sw_exit_white_bottom_px):
+            return 0.0, 0.0
+        cols = np.count_nonzero(wmask[y0:roi_h, :], axis=0)
+        x = float(np.argmax(cols))      # 최하단 밴드에서 가장 두꺼운 흰 열
+        margin = 12
+        gap = 0
+        top_y = roi_h
+        hit = 0
+        for y in range(roi_h - 1, -1, -1):
+            x0 = int(max(0, x - margin))
+            x1 = int(min(w, x + margin + 1))
+            nz = np.nonzero(wmask[y, x0:x1])[0]
+            if nz.size > 0:
+                x = x0 + float(nz.mean())
+                top_y = y
+                gap = 0
+                hit += 1
+            else:
+                gap += 1
+                if gap > 3:             # 3px 연속 공백 = 연속 스팬 종료 (점선 gap)
+                    break
+        span = float(roi_h - top_y)
+        return span, hit / max(1.0, span)
+
+    def _two_pillar_check(self, mask):
+        """하단 절반 히스토그램에서 '차폭 간격의 두 기둥'(페어) 존재 여부 (0/1).
+        SW 시드 피크 로직과 동일 철학 — 1L 조기 해제(좌회전 종료) 이벤트 판정 전용."""
+        h_m = mask.shape[0]
+        hist = np.count_nonzero(mask[h_m // 2:, :], axis=0)
+        col_on = np.nonzero(hist >= 2)[0]
+        if col_on.size == 0:
+            return False
+        splits = np.nonzero(np.diff(col_on) > 8)[0]
+        peaks = []
+        for g in np.split(col_on, splits + 1):
+            mass = int(hist[g].sum())
+            if mass >= int(self.sw_peak_min_px):
+                peaks.append(float((g * hist[g]).sum()) / mass)
+        if len(peaks) < 2:
+            return False
+        width = (self._lane_width if self._lane_width > 0
+                 else self._lane_width_init) or 192.0
+        for i in range(len(peaks) - 1):
+            for j in range(i + 1, len(peaks)):
+                sep = abs(peaks[j] - peaks[i])
+                if 0.7 * width <= sep <= 1.4 * width:
+                    return True
+        return False
+
     def _lane_heading_excluding(self, seg, fallback):
         """후보 선분 seg 의 픽셀을 뺀 나머지로 차선 주축 a_h 를 잰다 (순환 회피).
         정지선이 차선 피팅을 끌어당겨 a_h 부호가 뒤집히던 것(07-10) 대응:
@@ -456,6 +593,14 @@ class LaneDetector:
                            and self.drive_mode == 'ROUNDABOUT'
                            and self._sw_left > 0
                            and getattr(self, '_sw_interior', None) is not None)
+        # 분류기 비활성 억제 (07-13 run102, 사용자 방어 설계): stopline_mode 1 인데
+        # RA 중 분류기 전제(코리도 락/내부 기하)가 안 서는 프레임은 구식 경로로
+        # 폴백하지 않고 crossline 자체를 억제한다. B 누출(0.06~0.18s 가변)은 전부
+        # "분류기가 눈 감은 프레임"에서 나왔다 — 눈 감은 검출은 신뢰하지 않는다.
+        # A 재도달 순간 코리도가 하필 언락이면 미발화 -> 2랩 자가복구 (늦는 쪽 안전).
+        if (int(getattr(self, 'stopline_mode', 0)) == 1
+                and self.drive_mode == 'ROUNDABOUT' and not stopline_active):
+            return False
         span_ivs = []
         if stopline_active:
             _im, _ia, _ib, _iside = self._sw_interior
@@ -590,16 +735,24 @@ class LaneDetector:
                 and ymask is not None and wmask is not None):
             if self.drive_mode == 'ROUNDABOUT':
                 self._ra_seen = True
+            # 탈출창 활성 여부 (07-14 항목2): 흰 실선 이벤트가 유일 전환 트리거인 구간.
+            # 이 동안 아래 레거시 해제 2종을 억제하고, 원웨이 래치 후 재래치를 막는다.
+            # 창 만료(failsafe, _sw_left→0) 후에만 레거시가 되살아난다. RA 전엔 전부 무영향.
+            exit_active = (self._ra_seen and self._sw_dir > 0 and self._sw_left > 0)
             if not self._following_yellow:
-                # 재래치 억제: RA 후 흰 인계 창 중에는 재진입 금지 (플랩 방지 — __init__ 주석)
-                relatch_blocked = (int(getattr(self, 'w_align_block_relatch', 0)) != 0
-                                   and self._ra_seen and self._w_align_left > 0)
+                # 재래치 억제 ①구설계(w_align 창 중) ②원웨이(post-RA 병합 완료 후)
+                relatch_blocked = (
+                    (int(getattr(self, 'w_align_block_relatch', 0)) != 0
+                     and self._ra_seen and self._w_align_left > 0)
+                    or (self._ra_seen and self._merge_done))
                 if yellow_ratio >= self.follow_yellow_ratio and not relatch_blocked:
                     self._following_yellow = True
                     self._yellow_exit_count = 0
                     self._oneline_used = False   # 새 래치 -> 1L 1회 사용권 리셋
-            elif self.drive_mode != 'ROUNDABOUT':
+            elif self.drive_mode != 'ROUNDABOUT' and not exit_active:
                 # WHITE 복귀 = "노랑 소실" AND "흰 우세" 연속 N프레임 (__init__ 주석).
+                # ⚠️ 탈출창(exit_active) 중에는 평가 금지 — 흰 실선 이벤트가 전담.
+                # 창 failsafe 만료 후에만 이 경로가 구조 수단으로 되살아난다.
                 wcount = int(np.count_nonzero(wmask))
                 ycount = int(np.count_nonzero(ymask))
                 # 해제 문턱 스코프 (07-13 run100 분석): exit_yellow_frac 3.0
@@ -614,14 +767,14 @@ class LaneDetector:
                 if yellow_gone and white_dom:
                     self._yellow_exit_count += 1
                     eff_k = int(self.follow_yellow_exit_frames)
-                    if self._sw_dir > 0 and int(self.follow_yellow_exit_frames_exit) > 0:
-                        eff_k = int(self.follow_yellow_exit_frames_exit)
                     if self._yellow_exit_count >= eff_k:
                         self._following_yellow = False
                         self._yellow_exit_count = 0
                         self._oneline_left = 0   # 래치 해제 -> 병합 모드도 종료
-                        if self._ra_seen and int(self.w_align_frames) > 0:
-                            self._w_align_left = int(self.w_align_frames)
+                        if self._ra_seen:
+                            self._merge_done = True   # 원웨이: 이후 Y 재래치 금지
+                            if int(self.w_align_frames) > 0:
+                                self._w_align_left = int(self.w_align_frames)
                 else:
                     self._yellow_exit_count = 0
                 # 블라인드 해제 (07-13): 병합부에서 노랑도 흰도 안 보이면 흰 우세
@@ -635,8 +788,10 @@ class LaneDetector:
                         self._yellow_exit_count = 0
                         self._yellow_blind_count = 0
                         self._oneline_left = 0
-                        if self._ra_seen and int(self.w_align_frames) > 0:
-                            self._w_align_left = int(self.w_align_frames)
+                        if self._ra_seen:
+                            self._merge_done = True
+                            if int(self.w_align_frames) > 0:
+                                self._w_align_left = int(self.w_align_frames)
                 else:
                     self._yellow_blind_count = 0
             else:
@@ -675,10 +830,35 @@ class LaneDetector:
                 # 점선 힌트 갱신: 필터로 제거된 점선 픽셀들의 평균 x (track 과 같은
                 # BEV 공간). 폴백으로 sel=ymask 면 차분이 비어 힌트 없음(기존 동작).
                 dash = cv2.subtract(ymask, sel)
-                if cv2.countNonZero(dash) >= 30:
+                self._yellow_dash_px = int(cv2.countNonZero(dash))
+                if self._yellow_dash_px >= 30:
                     self._yellow_dash_cx = float(np.nonzero(dash)[1].mean())
                 else:
                     self._yellow_dash_cx = None
+                # Y+W 선행 혼합 (__init__ yw_premix 주석): 병합 접근에서만.
+                # 점선 힌트(dash) 계산 뒤에 섞어 노랑 전용 신호는 오염되지 않는다.
+                # _prev_drive_mode 조건 = RA->DRIVE 전이 프레임 차단 (코리도 창이
+                # 같은 프레임 뒤쪽에서 무장되므로 _sw_left 만으론 엣지가 새어든다).
+                if (int(getattr(self, 'yw_premix', 0))
+                        and self._ra_seen and self.drive_mode != 'ROUNDABOUT'
+                        and self._prev_drive_mode != 'ROUNDABOUT'):
+                    if (self._sw_left <= 0
+                            and cv2.countNonZero(solid)
+                            >= int(self.yellow_dash_fallback_px)):
+                        self._yw_carry = int(self.yw_premix_carry_frames)
+                    elif self._yw_carry > 0:
+                        self._yw_carry -= 1
+                    if self._yw_carry > 0:
+                        wf_pre = self._filter_yellow_dashes(wmask)
+                        # 근거리 한정 (07-13 run108): 분기 너머 원거리 흰 도로가
+                        # 세로 성분으로 높이 게이트를 통과, S커브에서 직선 오추종
+                        # -> 우곡 이탈. 병합 표적 흰 실선은 하단 절반에 크게
+                        # 들어오므로 상단 절반은 버린다.
+                        wf_pre[:wf_pre.shape[0] // 2, :] = 0
+                        if cv2.countNonZero(wf_pre) >= int(self.w_align_min_px):
+                            sel = cv2.bitwise_or(sel, wf_pre)
+                else:
+                    self._yw_carry = 0
             else:
                 sel = wmask
                 if self._w_align_left > 0:
@@ -694,6 +874,7 @@ class LaneDetector:
                 self._yellow_dash_cx = None
                 self._dash_fallback_on = False
                 self._solid_ok_count = 0
+                self._yw_carry = 0
             track = cv2.morphologyEx(sel, cv2.MORPH_OPEN, k) if use_morph else sel
         else:
             self._following_yellow = False
@@ -702,6 +883,7 @@ class LaneDetector:
             self._yellow_dash_cx = None
             self._dash_fallback_on = False
             self._solid_ok_count = 0
+            self._yw_carry = 0
 
         # 차선 주축 a_h = dx/dy 갱신 (다음 프레임 정지선 직교 게이트용). 정지선 스캔
         # 창과 '같은 행 범위'에서만 잰다 — 전체 피팅은 휜 실선에서 국소 접선이 아닌
@@ -749,7 +931,54 @@ class LaneDetector:
             self._sw_left = 999999
             self._sw_len = self._sw_left
             self._sw_dir = 0
+            self._sw_kind = 'out'
             self._sw_straight = 0
+        # 1L 조기 해제 → SW 즉시 인계 (07-14, __init__ oneline_release_* 주석):
+        # 1L 진행 중 노란 실선 페어가 K프레임 연속 복원되면 좌회전 종료로 보고
+        # 1L 을 닫고 같은 프레임에 접근 코리도를 무장한다.
+        if (self.course == 'in' and not self._ra_seen
+                and int(getattr(self, 'oneline_release_pair_k', 0)) > 0
+                and self._oneline_left > 0 and self._following_yellow
+                and (int(self.entry_oneline_frames) - self._oneline_left)
+                >= int(getattr(self, 'oneline_release_min_hold', 20))):
+            if self._two_pillar_check(track):
+                self._oneline_pair_count += 1
+            else:
+                self._oneline_pair_count = 0
+            if self._oneline_pair_count >= int(self.oneline_release_pair_k):
+                self._oneline_left = 0
+                self._oneline_pair_count = 0
+                if (int(getattr(self, 'sw_approach_frames', 0)) > 0
+                        and self._sw_left <= 0):
+                    self._sw_left = int(self.sw_approach_frames)
+                    self._sw_len = self._sw_left
+                    self._sw_dir = -1
+                    self._sw_kind = 'approach'
+                    self._sw_prev_fit = None
+                    self._sw_interior = None
+                    self._sw_straight = 0
+        else:
+            self._oneline_pair_count = 0
+        # IN 접근 코리도 무장 (07-14, __init__ sw_approach_frames 주석): Y래치 중 +
+        # 1L 종료 후 + nl=2 연속 5f(첫 좌회전 완료 확인) + RA 전. dir=-1.
+        # (위 1L 이벤트 인계가 주 경로; 이 블록은 1L 이 만료로 끝났거나 아예 안 뜬
+        #  런의 예비 무장 경로.)
+        if (self.course == 'in'
+                and int(getattr(self, 'sw_approach_frames', 0)) > 0
+                and self.drive_mode == 'DRIVE' and not self._ra_seen
+                and self._following_yellow and self._oneline_left <= 0
+                and self._sw_left <= 0):
+            self._sw_nl2_count = self._sw_nl2_count + 1 if self._prev_nl == 2 else 0
+            if self._sw_nl2_count >= 5:
+                self._sw_left = int(self.sw_approach_frames)
+                self._sw_len = self._sw_left
+                self._sw_dir = -1            # 좌향 기대 (곡률 가드 + 실선 입력 자동)
+                self._sw_kind = 'approach'
+                self._sw_prev_fit = None
+                self._sw_interior = None
+                self._sw_straight = 0
+        else:
+            self._sw_nl2_count = 0
 
         if self.drive_mode != self._prev_drive_mode:
             if (self.drive_mode == 'ROUNDABOUT'
@@ -766,12 +995,14 @@ class LaneDetector:
                 self._sw_left = int(self.sw_entry_frames)
                 self._sw_len = self._sw_left
                 self._sw_dir = -1            # 진입 = 좌향 기대
+                self._sw_kind = 'entry'
                 self._sw_prev_fit = None     # 직전 직선 주행 피팅 잔재 유입 방지
                 self._sw_interior = None
                 self._sw_straight = 0
             elif (self._prev_drive_mode == 'ROUNDABOUT'
                     and self.drive_mode == 'DRIVE'
                     and int(self.sw_exit_frames) > 0):
+                self._sw_kind = 'exit'
                 self._sw_left = int(self.sw_exit_frames)
                 self._sw_len = self._sw_left
                 self._sw_dir = +1            # 탈출 = 우향 기대 (초반 한정, gate_frames 주석)
@@ -863,9 +1094,14 @@ class LaneDetector:
         # 라이브 킬스위치 (07-12 검증 리뷰): 창은 무장 시점에 _sw_left 로 래치되므로
         # 주행 중 `ros2 param set /lane_node sw_entry_frames 0` 만으로는 안 풀렸다.
         # 0=off 규약 일관성 + "끄면 즉시 run47 복귀" 보장을 위해 매 프레임 확인.
+        # 07-14: dir 기반 → 창 종류(_sw_kind) 매핑으로 교체 (approach 신설 + out 도
+        # 자기 파라미터로 꺼지도록 — 구 코드는 out 이 sw_exit_frames 에 잘못 묶임).
         if self._sw_left > 0:
-            live = (self.sw_entry_frames if self._sw_dir < 0
-                    else self.sw_exit_frames)
+            live = {'entry': self.sw_entry_frames,
+                    'exit': self.sw_exit_frames,
+                    'approach': getattr(self, 'sw_approach_frames', 0),
+                    'out': getattr(self, 'sw_out_always', 0)}.get(
+                        getattr(self, '_sw_kind', ''), 1)
             if int(live) <= 0:
                 self._sw_left = 0
         if self._sw_left > 0:
@@ -912,32 +1148,41 @@ class LaneDetector:
                     band_windows = list(band_windows) + sw_boxes
                     sw_locked = True
                     self._sw_locked_dbg = True
-            # 탈출 창 조기 해제: 락된 선이 K프레임 '연속' 직선(코리도 통과 완료
-            # 신호)이면 창을 닫는다. 비락/곡선 프레임 모두 카운터 리셋 — 흩어진
-            # 직선 락의 누적으로 곡선 한복판에서 조기 폐쇄되는 것 방지
-            # (07-12 검증 리뷰). 해제가 늦어도 무해: 직선은 방향 게이트를 통과한다.
+            # 탈출창 종료 = 흰 '실선' 이벤트 (07-14 재설계, 항목2). 시간/프레임 창이
+            # 아니라 "끊김 없이 이어지는 흰 실선이 최하단에 나타나면" 전환한다.
+            # 판별: 연속 스팬(점선 토막 최대길이 초과 = 실선) + 스팬내 점유율 + N프레임
+            # 디바운스(공간·시간 이중방어). bbox 높이 필터는 세로 점선을 실선으로 오판해
+            # 부적합 — 스팬 추적을 쓴다. sw_exit_input='raw'라 SW 입력엔 흰이 안 들어오므로
+            # 흰 검출은 여기서 wmask 를 직접 본다.
             if self._sw_dir > 0:
-                if (sw_locked and abs(self._sw_last_lean)
-                        <= float(self.sw_exit_straight_px)):
-                    self._sw_straight += 1
-                    if self._sw_straight >= int(self.sw_exit_straight_k):
-                        self._sw_left = 0
-                else:
-                    self._sw_straight = 0
-                # 흰 인계 종결자 (07-12): Y래치 해제 후, SW 락 없이 흰 추종이
-                # K프레임 연속 성립하면 창을 닫는다. 병합 완료 후 흰 구간에서
-                # 잔여 노란 노이즈(≤400px)가 뒤늦게 유령 락을 만드는 것 방지.
-                # 0=off.
-                if not self._following_yellow:
-                    if sw_locked:
-                        self._sw_wsteady = 0
-                    elif bands:
-                        self._sw_wsteady += 1
-                        if (int(self.sw_exit_wsteady_k) > 0 and self._sw_wsteady
-                                >= int(self.sw_exit_wsteady_k)):
-                            self._sw_left = 0
-                else:
-                    self._sw_wsteady = 0
+                wsolid = False
+                if wmask is not None:
+                    wsrc = (cv2.morphologyEx(wmask, cv2.MORPH_OPEN, k)
+                            if use_morph else wmask)
+                    span, sol = self._white_solid_span(wsrc, roi_h, band_h)
+                    wsolid = (span >= float(self.sw_exit_white_min_span_px)
+                              and sol >= float(self.sw_exit_white_solidity_min))
+                self._sw_white_confirm = self._sw_white_confirm + 1 if wsolid else 0
+                # 노랑 소실 즉시 트리거 (07-15, __init__ 주석): ROI 노랑이 사라지면
+                # 흰 실선 이벤트를 안 기다리고 즉시 종료. 흰 이벤트와 OR 병렬.
+                _ygone = False
+                if int(getattr(self, 'exit_yellow_gone_instant', 0)):
+                    if yellow_ratio < self.follow_yellow_ratio:
+                        self._yellow_gone_run += 1
+                    else:
+                        self._yellow_gone_run = 0
+                    _ygone = self._yellow_gone_run >= int(self.exit_yellow_gone_frames)
+                if (self._sw_white_confirm >= int(self.sw_exit_white_confirm_frames)
+                        or _ygone):
+                    # 확정: 그 프레임부터 탈출창 종료 + Y래치 해제. 다음 프레임부터
+                    # 기존 흰 추종(else: sel=wmask)이 자연 인계. 원웨이 병합 래치 장전.
+                    self._following_yellow = False
+                    self._sw_left = 0
+                    self._sw_white_confirm = 0
+                    self._yellow_gone_run = 0
+                    self._merge_done = True
+                    if self._ra_seen and int(self.w_align_frames) > 0:
+                        self._w_align_left = int(self.w_align_frames)
         else:
             self._sw_dir = 0
 
@@ -1066,6 +1311,15 @@ class LaneDetector:
         if self._yellow_dash_cx is not None:
             if line < self._yellow_dash_cx:
                 return line + half, 1   # 실선이 점선보다 왼쪽 = 왼쪽 경계
+            # RA 순환 개구부 유출 차단 (07-13 run105): 개구부 점선 호 '너머'
+            # (오른쪽)의 단독 실선은 링 밖 접선 도로 실선이다 — 우측 경계로
+            # 해석해 반차폭 왼쪽을 지켜도 선 자체가 밖으로 뻗어 유출된다(실측).
+            # 프레임 기각 -> 무검출 관성으로 개구부 통과 (개구부에서 아무것도
+            # 안 보일 때와 같은 검증된 경로). 점선 질량/여유 하한으로 잡음 배제.
+            if (self.drive_mode == 'ROUNDABOUT'
+                    and int(getattr(self, '_yellow_dash_px', 0)) >= 150
+                    and line - self._yellow_dash_cx > 25.0):
+                return None, 0
             return line - half, 1       # 실선이 점선보다 오른쪽 = 오른쪽 경계
         # 시간 연속성 분류: 직전 중심에 더 가까운 해석을 고른다 — 화면 반쪽 기준은
         # 단선이 중앙을 넘나드는 커브에서 좌/우가 매 프레임 뒤집혀 이탈 (07-11 첫
@@ -1158,9 +1412,17 @@ class LaneDetector:
         # (1) 정지선(가로줄) 행 제거
         row_on = np.count_nonzero(m, axis=1)
         m[row_on > int(w * float(self.sw_cross_row_frac)), :] = 0
-        nb = max(3, int(self.sw_num_boxes))
+        # 창 종류별 상자 기하 (07-15): 탈출(dir>0)만 확대, 링/진입은 베이스. 0=상속.
+        _exk = self._sw_dir > 0
+        _nbv = (int(self.sw_exit_num_boxes) if _exk and int(getattr(self, 'sw_exit_num_boxes', 0)) > 0
+                else int(self.sw_num_boxes))
+        nb = max(3, _nbv)
         bh = max(2, roi_h // nb)
-        margin = max(4, int(self.sw_box_margin))
+        _mgv = (int(self.sw_exit_box_margin) if _exk and int(getattr(self, 'sw_exit_box_margin', 0)) > 0
+                else int(self.sw_box_margin))
+        margin = max(4, _mgv)
+        _max_shift = (float(self.sw_exit_max_shift) if _exk and float(getattr(self, 'sw_exit_max_shift', 0.0)) > 0.0
+                      else float(self.sw_max_shift))
         half = ((self._lane_width / 2.0) if self._lane_width > 0
                 else (w * self.single_line_offset))
 
@@ -1207,8 +1469,7 @@ class LaneDetector:
                 # 만들어 체인이 오염된다 (07-12 검증 리뷰 — 실차에서 노드 사망 경로)
                 if xs_w.size >= max(1, int(self.sw_min_box_px)):
                     raw_cx = float(xs_w.mean()) + x0
-                    trend = float(np.clip(raw_cx - x, -float(self.sw_max_shift),
-                                          float(self.sw_max_shift)))
+                    trend = float(np.clip(raw_cx - x, -_max_shift, _max_shift))
                     x += trend
                     cx = x
                     pxs.append(xs_w.astype(np.float64) + x0)
@@ -1295,14 +1556,28 @@ class LaneDetector:
         # (5) 코리도 해석: 두 경계(pair) 우선, 아니면 단선 + 연속성 분류
         fits.sort(key=lambda f: f['x_bot'])
         pair = None
-        for i in range(len(fits) - 1):
-            for j in range(i + 1, len(fits)):
-                sep = fits[j]['x_bot'] - fits[i]['x_bot']
-                if 0.7 * (2.0 * half) <= sep <= 1.4 * (2.0 * half):
-                    pair = (fits[i], fits[j])
+        if (getattr(self, '_sw_kind', '') == 'approach'
+                and self._prev_center is not None):
+            # 접근 창 (07-14): 좌측 합류부 차선이 우리 왼선과 '차폭 간격 가짜 페어'를
+            # 이룰 수 있다 — 첫 유효 페어(최좌측) 대신 직전 중심에 가장 가까운 페어.
+            best_d = None
+            for i in range(len(fits) - 1):
+                for j in range(i + 1, len(fits)):
+                    sep = fits[j]['x_bot'] - fits[i]['x_bot']
+                    if 0.7 * (2.0 * half) <= sep <= 1.4 * (2.0 * half):
+                        mid = (fits[i]['x_bot'] + fits[j]['x_bot']) / 2.0
+                        d = abs(mid - self._prev_center)
+                        if best_d is None or d < best_d:
+                            best_d, pair = d, (fits[i], fits[j])
+        else:
+            for i in range(len(fits) - 1):
+                for j in range(i + 1, len(fits)):
+                    sep = fits[j]['x_bot'] - fits[i]['x_bot']
+                    if 0.7 * (2.0 * half) <= sep <= 1.4 * (2.0 * half):
+                        pair = (fits[i], fits[j])
+                        break
+                if pair:
                     break
-            if pair:
-                break
 
         bands = []
         chosen = []
@@ -1325,11 +1600,25 @@ class LaneDetector:
             # 좌/우 분류 우선순위 = _combine_lr 과 일치 (07-12 검증 리뷰):
             # 재획득 우측고정 > 점선 힌트(이격 조건) > 직전 중심 연속성 > 기본값.
             # 연속성만 쓰면 run22~24 오분류 서명이 SW 프레임에서 재발.
-            if self._sw_dir > 0 and not self._following_yellow:
-                # 탈출 점선 꼬리 (Y래치 해제 후): 구조상 우측(바깥) 경계 고정 —
-                # 병합 굽이는 좌향이고 남은 점선은 바깥선 (사용자 지정 설계,
-                # 진입 1L의 "점선=바깥" 구조 근거와 동일)
-                side = float(self.sw_side_default)
+            if self._sw_dir > 0:
+                # 항목1 (07-14): 탈출 단선의 점선/실선 판별 (Y래치 상태 무관).
+                #  · 점선이면 → 무조건 바깥(우측) 경계 고정 (병합 굽이는 좌향, 남은
+                #    점선은 바깥선 — 인접 진입 커넥터 점선 오물림 방지, run83/84/95).
+                #  · 실선이면 → SW 락 포기(None). 탈출 중 보이는 노란 실선은 두고 떠나는
+                #    링 본선/커넥터 안쪽 선일 확률이 높아 '바깥 경계' 가정이 틀림 —
+                #    일반 파이프라인(점선힌트/연속성/run105 유출차단, 76~80 검증)에 위임.
+                occ = self._curve_occupancy(m, best['abc'], best['y_lo'], best['y_hi'])
+                if occ > float(self.sw_exit_dash_occupancy_max):
+                    return None                      # 실선 판별 무력화(1.1) 시 미발동
+                side = float(self.sw_side_default)   # 기본: 바깥(우측) 경계
+                # 조향 부호 prior (07-15, __init__ 주석): 데드밴드 밖 좌조향=우측 유지,
+                # 우조향(탈출 스윙)=좌측 경계로 교정. 미수신/직진 근처는 기존 고정 폴백.
+                if (int(getattr(self, 'steer_side_prior', 0))
+                        and getattr(self, 'last_steer', None) is not None):
+                    defl = float(self.last_steer) - float(self.steer_center)
+                    if abs(defl) > float(self.steer_side_deadband):
+                        side = (float(self.sw_side_default) if defl > 0.0
+                                else -float(self.sw_side_default))
             elif (self.drive_mode == 'ROUNDABOUT' and self.merge_zone
                     and self._reacq_right_active):
                 side = -1.0                      # 재획득 선 = 구조상 우측(바깥) 경계
