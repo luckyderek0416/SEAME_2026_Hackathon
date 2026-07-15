@@ -401,14 +401,6 @@ class LaneDetector:
         self._sw_raw_frame = False          # 이번 프레임 입력이 raw 폴백인지
         # crossline Y래치 전 억제 (감사 handover-1): 1=Y래치 전 crossline 평가 금지
         self.crossline_require_y = 1
-        # 곡률 기반 side 판별 (07-15 도면 환산): 좌커브 단선의 안/바깥 경계를
-        # |a| 로 구분 — min 미만은 직선(정보 없음→휴리스틱), split 이상=안쪽(+1).
-        self.sw_side_curv_min = 0.0015    # 0=off (새 각도 스케일 a=1.995/R)
-        self.sw_side_curv_split = 0.00215
-        # 동심원 보정: 단선 중앙선 산출 시 a 도 평행 곡선으로 보정. 0=off
-        self.sw_concentric = 1
-        self._sw_mouth_jumpfail = 0       # 개구부 점프가드 연속 실패 (라이브락 해제용)
-        self._sw_last_a = 0.0             # 마지막 락 피팅의 a (텔레메트리)
         self.sw_open_max_lean_px = 90.0 # 개방 구간 |기욺| 상한 (정지선 대각선 실측 102+)
         self._sw_open = False           # 이번 프레임이 개방 구간인지
         self._sw_len = 0                # 무장 시점의 창 길이 (age 계산용)
@@ -842,6 +834,7 @@ class LaneDetector:
                         self._oneline_used = False   # 새 래치 -> 1L 1회 사용권 리셋
                         self._y_conf_count = 0
                         self._y_arrive_count = 0
+                        self._y_latch_hold = 20      # 플랩 디바운스 min-hold (1s@20fps)
             elif self.drive_mode != 'ROUNDABOUT' and not exit_active:
                 # WHITE 복귀 = "노랑 소실" AND "흰 우세" 연속 N프레임 (__init__ 주석).
                 # ⚠️ 탈출창(exit_active) 중에는 평가 금지 — 흰 실선 이벤트가 전담.
@@ -857,11 +850,14 @@ class LaneDetector:
                             else min(0.75, float(self.follow_yellow_exit_yellow_frac)))
                 yellow_gone = yellow_ratio < (self.follow_yellow_ratio * eff_frac)
                 white_dom = wcount > self.follow_yellow_exit_white_ratio * max(1, ycount)
-                # 07-16 (6런 연속 Y래치 플랩 봉합): 실선 기근 폴백이 켜진 프레임은
-                # 노랑이 점선 과도기라 '노랑 소실'이 순간 성립한다 — 해제/블라인드
-                # 카운트 모두 동결 (증가도 리셋도 안 함). 런 A 실측: 플랩 직후
-                # 요잉 → 글레어 존 가짜 crossline 오진입의 방아쇠였음.
+                # 07-16 플랩 디바운스 (6런 전수: 플랩=전부 실선 기근 창 내 발생,
+                # 런A에선 플랩→요동→오진입 방아쇠): ① 기근 폴백 활성 중 '노랑
+                # 소실' 동결 ② 래치 후 1초(min-hold) 해제 금지. yellow_gone 을
+                # 끄면 해제/블라인드 카운터가 공통 차단된다 (step 외란 제거).
                 if getattr(self, '_sw_starve_on', False):
+                    yellow_gone = False
+                if getattr(self, '_y_latch_hold', 0) > 0:
+                    self._y_latch_hold -= 1
                     yellow_gone = False
                 if yellow_gone and white_dom:
                     self._yellow_exit_count += 1
@@ -1819,21 +1815,28 @@ class LaneDetector:
                         <= float(self.sw_exit_dash_occupancy_max)]
                     if dash:
                         best = max(dash, key=lambda f: f['x_bot'])
-                        # 07-15 20:09 런 실증(로그+영상 교차검증): 화면 좌/우반
-                        # 휴리스틱은 우반 점선에 -1 을 줘 링 유지 조향(중심 174)
-                        # → 갈림길 중간 직진. 기하 정답은 run_c 실측/감사대로
-                        # 점선 = 탈출 차선의 '좌측' 경계 고정 → 중심 = 점선 + 반차폭
-                        # (offset 우측 포화 = 개구부 우회전 권위).
+                        # 07-16 (주행 3런 로그·영상 + 손굴림 450f 리플레이 A/B):
+                        # 화면 좌/우반 휴리스틱은 우반 점선에 -1 을 줘 링 유지/좌향
+                        # 폭주 명령. 기하 정답 = 점선은 항상 탈출 차선의 '좌측' 경계
+                        # → side=+1 고정 (중심 = 점선 + 반차폭, 통제된 우회전+굽이 추종).
                         side = 1.0
                     else:
-                        side = -1.0   # 실선 폴백 (best = min-resid 유지)
+                        # 07-16 (사용자 도면 캡처로 확정): 갈림길 꼭짓점 직후의
+                        # 쐐기 실선은 탈출로의 '좌측' 경계인데 점선이 아니라 실선
+                        # 이라 폴백으로 떨어진다 — 고정 -1 은 쐐기 안쪽 견인
+                        # (talkv f149~141: xbot 262→194 를 -1 로 → pc 191→128 좌향).
+                        # 규칙: 개구부 초반(age<=20f)은 실선 = 쐐기 = +1 고정,
+                        # 이후는 위치 기반 — 좌반(꼬리 조각)=+1 / 우반(바깥)=-1.
+                        age_m = self._sw_len - self._sw_left
+                        side = (1.0 if (age_m <= 20 or best['x_bot'] < w / 2.0)
+                                else -1.0)
                     # 프레임간 선택 점프 가드: 0.5x차폭 초과 = 이웃 점선/노이즈 —
-                    # 이 프레임 락 포기 (시드 연속성 유지). 07-15 20:09 런에서
-                    # 기준 미갱신이 15프레임 라이브락(287 동결)을 만들어, 연속
-                    # 3회 실패 시 기준을 리셋해 다음 락을 신선 채택한다.
+                    # 이 프레임 락 포기 (시드 연속성 유지, 기준값 미갱신)
                     xb_prev = getattr(self, '_sw_mouth_prev_xbot', None)
                     if (xb_prev is not None
                             and abs(best['x_bot'] - xb_prev) > 1.0 * half):
+                        # 07-16: 실패 시 기준 미갱신이 라이브락(실측 14f 동결)을
+                        # 만들어, 연속 3회 실패면 기준을 리셋해 재획득을 허용한다.
                         self._sw_mouth_jumpfail = getattr(self, '_sw_mouth_jumpfail', 0) + 1
                         if self._sw_mouth_jumpfail >= 3:
                             self._sw_mouth_prev_xbot = None
@@ -1860,19 +1863,6 @@ class LaneDetector:
             elif (self.drive_mode == 'ROUNDABOUT' and self.merge_zone
                     and self._reacq_right_active):
                 side = -1.0                      # 재획득 선 = 구조상 우측(바깥) 경계
-            elif (self._sw_dir < 0
-                    and float(getattr(self, 'sw_side_curv_min', 0.0)) > 0.0
-                    and best['abc'][0] < 0.0
-                    and abs(best['abc'][0]) >= float(self.sw_side_curv_min)):
-                # v2.1 곡률 기반 side (07-15 도면 환산 — 좌붙음 뿌리 수술):
-                # 노랑 구간은 항상 좌커브(a<0). 도면 반경 → BEV: |a|=4.53/R(mm),
-                # 안쪽 경계 R784~798 → |a|≈0.0057~0.0058 / 바깥 R1134~1146 →
-                # |a|≈0.0040 (실측 대조: run87 B가지 0.006, curv_max 0.0035 정합).
-                # 위치/연속성 휴리스틱의 오분류(20:09 런: 좌실선을 -1 로 → 중심
-                # 63px 좌측 견인)를 기하로 대체. 직선(|a|<min)은 정보 없음 → 폴백.
-                side = (1.0 if abs(best['abc'][0])
-                        >= float(getattr(self, 'sw_side_curv_split', 0.0049))
-                        else -1.0)
             elif (self._yellow_dash_cx is not None
                     and abs(best['x_bot'] - self._yellow_dash_cx) > 0.5 * half):
                 side = (1.0 if best['x_bot'] < self._yellow_dash_cx else -1.0)
@@ -1892,30 +1882,11 @@ class LaneDetector:
                 self._sw_fail = 'rawdev'
                 return None
             chosen = [best]
-            # v2.1 동심원 보정 (07-15 도면 환산): 단선→중앙선을 상수 x이동이 아니라
-            # 평행(동심) 곡선으로 — a' = a/(1 − side·a·K), K = 차폭px/aspect².
-            # (검산: 링 안쪽 a=−0.00578, side=+1 → a'=−0.00473 = 도면 중앙선값.)
-            # 하단 교점(+side·half)과 하단 접선은 유지, 곡률만 보정 — 커브 원거리
-            # 밴드가 경계 곡률을 물려받아 안쪽으로 끌리던 것(상단 ~10px) 제거.
-            # sw_concentric=0 이면 구 동작(상수 이동).
-            aa, bb, cc = best['abc']
-            K = (2.0 * half) / max(1e-6, float(
-                getattr(self, 'crossline_bev_aspect', 1.91)) ** 2)
-            den = 1.0 - side * aa * K
-            if int(getattr(self, 'sw_concentric', 1)) == 1 and abs(den) > 0.2:
-                yb = best['y_hi']
-                a2 = aa / den
-                b2 = (2.0 * aa * yb + bb) - 2.0 * a2 * yb
-                c2 = (aa * yb * yb + bb * yb + cc + side * half) \
-                    - a2 * yb * yb - b2 * yb
-            else:
-                a2, b2, c2 = aa, bb, cc + side * half
             for i in range(self.num_bands):
                 yc = roi_h - (i + 0.5) * band_h
                 if yc < best['y_lo'] - band_h or yc > best['y_hi'] + band_h:
                     continue
-                ycl = min(max(yc, best['y_lo']), best['y_hi'])
-                bands.append((a2 * ycl * ycl + b2 * ycl + c2,
+                bands.append((ev(best, yc) + side * half,
                               float(self.num_bands - i), i))
             near_lanes = 1
         if not bands:
@@ -1939,7 +1910,6 @@ class LaneDetector:
         self._sw_prev_fit = best['abc']
         self._sw_last_lean = best['lean']
         self._sw_last_xbot = float(best['x_bot'])   # 텔레메트리 (07-15)
-        self._sw_last_a = float(best['abc'][0])     # 텔레메트리 — 곡률 side 검증용
         boxes_dbg = []
         for f in chosen:
             boxes_dbg += f.get('boxes', [])
