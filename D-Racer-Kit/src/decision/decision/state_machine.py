@@ -493,8 +493,12 @@ class RaceStateMachine:
             # 3런) 소실로 중앙 수렴이면 링 유지 호(|bias|)까지만 끌어올린다. 코리도가
             # 엉뚱한 선을 물어 우향 명령이 나와도 강제 좌향 (진입 1~3s 는 기하 확정).
             # entry_ff_floor=0 이면 구 동작(무조건 가산) 복귀.
-            if self._entry_lock_active:
-                ff = self.cfg['turn_direction'] * self.cfg.get('entry_steer_bias', 0.0)
+            # 07-15 밤 (사용자): 카메라 하향+재캘리로 차체 위치 관측이 정확해져,
+            # 진입 0~3s 전체를 PID 자율 조향으로 전환 — entry_steer_bias 0.0 이
+            # FF 완전 비활성 (추종 프레임 = PID, 소실 프레임 = 아래 ra_blind 전담).
+            # 값을 되살리면(-0.15 등) 하한/가산 동작이 그대로 복귀한다.
+            ff = self.cfg['turn_direction'] * self.cfg.get('entry_steer_bias', 0.0)
+            if self._entry_lock_active and ff != 0.0:
                 if int(self.cfg.get('entry_ff_floor', 1)):
                     want = center + ff
                     steer = max(steer, want) if ff >= 0.0 else min(steer, want)
@@ -510,7 +514,9 @@ class RaceStateMachine:
             # 항상 오답 — RA+3.5s 소실 후 19초 직진 이탈 실측. 소실 프레임에는 링 유지
             # 호(-0.15 = 링 실측 요구 편차)를 얹는다. 단 진입 락이 이미 활성인
             # 프레임에는 중복 가산하지 않는다 (겹치면 과회전). 정상 추종 프레임 미적용.
-            if not lane.lane_found and not self._entry_lock_active:
+            # 07-15 밤: 진입 FF 가 꺼져 있으면(bias 0) 진입락 중 소실 프레임도
+            # 블라인드 링 호가 전담한다 (FF 활성 시엔 기존대로 중복 가산 방지).
+            if not lane.lane_found and not (self._entry_lock_active and ff != 0.0):
                 steer = steer + self.cfg['turn_direction'] * self.cfg.get('ra_blind_bias', 0.0)
             steer = max(-1.0, min(1.0, steer))
 

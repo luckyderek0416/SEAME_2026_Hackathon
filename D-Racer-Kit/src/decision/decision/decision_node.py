@@ -215,7 +215,7 @@ class DecisionNode(Node):
         self.declare_parameter('exit_lock_release_s', 2.5)
         # 진입 락온 중 조향 피드포워드 (음수 = 링 안쪽/좌). 진입 급좌회전 언더스티어
         # 대응 — 총 편향 0.15 는 언더스티어 재발(run15), -0.22 사용자 지정.
-        self.declare_parameter('entry_steer_bias', -0.15)
+        self.declare_parameter('entry_steer_bias', 0.0)   # 07-15 밤 사용자: 진입 0~3s 자율 조향 (0=FF off, 복원값 -0.15)
         # RA 진입 후 게이트 카운트 금지 시간(진입선 오카운트 방어). 길어서 손해는
         # "한 바퀴 더"뿐(과회전 허용), 짧으면 조기 탈출=실격 위험 -> 길게 잡는다.
         # 단, 실측 한 바퀴 시간보다는 반드시 짧아야 함 (트랙에서 라이브 조정).
