@@ -132,7 +132,7 @@ class LaneNode(Node):
         self.declare_parameter('follow_yellow_ratio', 0.03)         # 이 노란비율 이상 -> YELLOW 모드 진입
                                                                     # (노란선이 점선이라 yr 이 낮음)
         self.declare_parameter('follow_yellow_exit_white_ratio', 1.0)  # 흰픽셀 > 이 배율*노란픽셀 (해제 조건 일부)
-        self.declare_parameter('follow_yellow_exit_yellow_frac', 0.5)  # 해제 노랑문턱 = 진입문턱*이 비율 (노랑 보이면 유지)
+        self.declare_parameter('follow_yellow_exit_yellow_frac', 3.0)  # 해제 노랑문턱 = 진입문턱*이 비율 (run95 처방 3.0 — 병합 전용 스코프는 detector 가 담당, RA 전엔 0.75 캡)
         self.declare_parameter('follow_yellow_exit_frames', 10)        # 해제 조건 연속 프레임 (플리커 방지)
         self.declare_parameter('follow_yellow_exit_frames_exit', 4)    # 탈출(SW)창 내 해제 연속 프레임 (0=전역값)
         # 흰 인계 창 (run59 병합 관통 대응) — 상세는 lane_detector 주석
@@ -153,7 +153,7 @@ class LaneNode(Node):
         # --- SW 코리도 추적 — 상세는 lane_detector.__init__ sw_* 주석. 락 프레임만
         # 밴드 대체(실패 = 폴백). 전부 라이브: ros2 param set /lane_node sw_entry_frames 440
         self.declare_parameter('sw_entry_frames', 1200)   # RA 진입 창(프레임). 0=off. run79: 저전압 랩 지연으로 440(22s) 만료 후 개구부 이탈 -> 60s
-        self.declare_parameter('sw_exit_frames', 0)       # RA 탈출 창. 0=off. 권장 60(~3s)
+        self.declare_parameter('sw_exit_frames', 40)      # RA 탈출 창 ~2s (run95 처방: 분기 목 점선 오추종 봉합)
         self.declare_parameter('sw_entry_input', 'solid') # 진입 입력: solid(병합 사선 제거) | raw
         self.declare_parameter('sw_exit_input', 'raw')    # 탈출 입력: 좌측 경계가 점선 -> raw 필수
         self.declare_parameter('sw_num_boxes', 9)         # 상자 개수

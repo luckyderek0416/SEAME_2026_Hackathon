@@ -198,6 +198,9 @@ class LaneDetector:
         self.w_align_frames = 60        # 창 길이 (~3s@20fps, run59 리플레이: 2s 는 사선 구간 전에 만료). 0=off
         self.w_align_gain = 0.4         # 기울기 -> offset 보정 게인. 0=보정만 off
         self.w_align_min_px = 80        # 점선 필터 결과 이 미만이면 raw 흰 폴백
+        # 재래치 억제 (07-14 병합 플랩 대응): RA 후 w_align 창 활성 중 Y래치
+        # 재진입 차단. 창 track 이 노란 꼬리를 포함하므로 무손실.
+        self.w_align_block_relatch = 1
         self.w_align_dash_fallback = 0  # 0(기본)=폴백 금지: 점선 잡지 말고 무검출 -> 결정층 브리지 바이어스에 위임
         self.follow_yellow_blind_release_frames = 12  # 흰 우세 없이도 노랑 소실 지속 시 해제 (0=off)
         self._yellow_blind_count = 0
@@ -588,7 +591,10 @@ class LaneDetector:
             if self.drive_mode == 'ROUNDABOUT':
                 self._ra_seen = True
             if not self._following_yellow:
-                if yellow_ratio >= self.follow_yellow_ratio:
+                # 재래치 억제: RA 후 흰 인계 창 중에는 재진입 금지 (플랩 방지 — __init__ 주석)
+                relatch_blocked = (int(getattr(self, 'w_align_block_relatch', 0)) != 0
+                                   and self._ra_seen and self._w_align_left > 0)
+                if yellow_ratio >= self.follow_yellow_ratio and not relatch_blocked:
                     self._following_yellow = True
                     self._yellow_exit_count = 0
                     self._oneline_used = False   # 새 래치 -> 1L 1회 사용권 리셋
@@ -596,8 +602,14 @@ class LaneDetector:
                 # WHITE 복귀 = "노랑 소실" AND "흰 우세" 연속 N프레임 (__init__ 주석).
                 wcount = int(np.count_nonzero(wmask))
                 ycount = int(np.count_nonzero(ymask))
-                yellow_gone = yellow_ratio < (self.follow_yellow_ratio
-                                              * self.follow_yellow_exit_yellow_frac)
+                # 해제 문턱 스코프 (07-13 run100 분석): exit_yellow_frac 3.0
+                # (yr<0.06 조기 해제)은 병합(RA 후) 전용. 진입/북상 구간은 yr 이
+                # 0.05대라 전역 적용 시 래치가 12프레임마다 플랩한다 — RA 전에는
+                # 검증값(0.75) 상한으로 캡.
+                eff_frac = (float(self.follow_yellow_exit_yellow_frac)
+                            if self._ra_seen
+                            else min(0.75, float(self.follow_yellow_exit_yellow_frac)))
+                yellow_gone = yellow_ratio < (self.follow_yellow_ratio * eff_frac)
                 white_dom = wcount > self.follow_yellow_exit_white_ratio * max(1, ycount)
                 if yellow_gone and white_dom:
                     self._yellow_exit_count += 1

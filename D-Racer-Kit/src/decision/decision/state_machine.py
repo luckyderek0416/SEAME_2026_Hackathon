@@ -424,6 +424,11 @@ class RaceStateMachine:
             ydt = self.cfg.get('yellow_drive_throttle', 0.0)
             if ydt > 0.0 and lane.yellow_ratio >= self.cfg.get('yellow_slow_ratio', 0.03):
                 throttle = min(throttle, ydt)
+            # 병합 감속 (07-13 run94): 브리지 창(RA 탈출 후 merge_bridge_s) 동안은
+            # 블라인드 구간 최고속(0.19) 진입을 막는다 — 고속 밴드에서 무차선 주파
+            # 거리가 길어져 흰 획득 전에 이탈 (run94: 좌모서리). 상한 = slow.
+            if self._merge_bridge_t > 0.0:
+                throttle = min(throttle, self.cfg['slow_throttle'])
             # 빨간 도로(장애물 구간)가 보이기 시작하면 저속주행. 마커 앞에서 제동 거리를
             # 줄여 정지 성공률을 높인다. 이 구간은 직선이라 curve_slow 로는 감속되지 않는다.
             if in_red_zone:
