@@ -291,7 +291,7 @@ class LaneDetector:
         self.stopline_sol_min = 0.55    # 정면 후보 solidity 하한 (레거시 0.80 대비 완화 = 재현율)
         self.last_stopline_cov = 0.0    # 디버그: 직전 프레임 커버리지
         self._sw_interior = None        # ('pair',fl,fr,_)|('single',abc,None,side) — 차로내부 정의
-        self.sw_box_margin = 50         # 상자 반폭(px) — 전폭 100 (07-15 사용자)
+        self.sw_box_margin = 52         # 상자 반폭(px) — 전폭 ~105 (07-15 사용자)
         self.sw_max_shift = 20          # 상자당 중심 이동 상한(px) — 누운 실선 끌림/반대 가지 점프 차단
         self.sw_min_box_px = 8          # 상자 '적중' 최소 픽셀
         self.sw_min_boxes = 3           # 유효 피팅 최소 적중 상자 수 (2상자 노이즈로 곡선 금지)
