@@ -176,6 +176,12 @@ class LaneNode(Node):
         self.declare_parameter('crossline_sw_heading', 1)        # 정지선 직교 게이트 헤딩 = 코리도 접선. 0=구식 EMA
         self.declare_parameter('sw_exit_mouth_frames', 40)       # 탈출 개구부: 점선 전용 입력+좌경계 고정 프레임 (07-15 사용자 설계, run_c 방어). 0=off
         self.declare_parameter('sw_exit_mouth_top_frac', 0.40)   # 개구부 입력 상단 제거 비율 (분기 너머 진입로 체인 차단)
+        # --- 07-15 v2.1 (전 코스 감사 반영) ---
+        self.declare_parameter('sw_exit_mouth_input', 'raw')     # 개구부 입력: raw(점선 프리필터+최우측+동적 side) | solid(구 bc3f325)
+        self.declare_parameter('sw_exit_reseed', 1)              # 탈출 무장 엣지 재시드 (직전 우측 경계 피팅 승계, 신선도 10f). 0=구 동작
+        self.declare_parameter('sw_solid_starve_px', 120)        # dir<0 창 실선 기근 raw 폴백 문턱(px). 0=off
+        self.declare_parameter('crossline_require_y', 1)         # Y래치 전 crossline 평가 금지 (분기 누운 노랑 가짜 RA 진입 차단). 0=구 동작
+        self.declare_parameter('yw_handover_arrive_frames', 2)   # 크로스페이드 '도달' 연속 프레임 (하단 반사광 1f 방어)
         self.declare_parameter('oneline_release_min_hold', 20)   # 1L 최소 유지(쐐기 방어, ~1s)
         self.declare_parameter('sw_exit_frames', 150)     # RA 탈출 창 = 07-14 재설계 후 '순수 failsafe 상한'(≈7.5s@20fps). 종료는 흰 실선 이벤트가 담당 — 정상 주행에선 상한이 먼저 안 닿게, 그러나 미발화 시 구조 레이턴시라 과하게 길게도 금지. 리플레이로 확정. 0=off(라이브 킬)
         self.declare_parameter('sw_entry_input', 'solid') # 진입 입력: solid(병합 사선 제거) | raw
@@ -359,6 +365,11 @@ class LaneNode(Node):
         self.detector.crossline_sw_heading = int(gp('crossline_sw_heading').value)
         self.detector.sw_exit_mouth_frames = int(gp('sw_exit_mouth_frames').value)
         self.detector.sw_exit_mouth_top_frac = float(gp('sw_exit_mouth_top_frac').value)
+        self.detector.sw_exit_mouth_input = str(gp('sw_exit_mouth_input').value)
+        self.detector.sw_exit_reseed = int(gp('sw_exit_reseed').value)
+        self.detector.sw_solid_starve_px = int(gp('sw_solid_starve_px').value)
+        self.detector.crossline_require_y = int(gp('crossline_require_y').value)
+        self.detector.yw_handover_arrive_frames = int(gp('yw_handover_arrive_frames').value)
         self.detector.oneline_release_min_hold = int(gp('oneline_release_min_hold').value)
         self.detector.sw_exit_dash_occupancy_max = float(gp('sw_exit_dash_occupancy_max').value)
         self.detector.sw_exit_white_bottom_px = int(gp('sw_exit_white_bottom_px').value)
@@ -407,6 +418,10 @@ class LaneNode(Node):
             f'1L_pair_k={d.oneline_release_pair_k} 1L_hold={d.oneline_release_min_hold} '
             f'drive_sw={d.sw_drive_always} xline_swhead={d.crossline_sw_heading} '
             f'exit_mouth={d.sw_exit_mouth_frames}/{d.sw_exit_mouth_top_frac:g}')
+        self.get_logger().info(
+            f'[실효 v2.1] mouth_in={d.sw_exit_mouth_input} reseed={d.sw_exit_reseed} '
+            f'starve_px={d.sw_solid_starve_px} xline_reqY={d.crossline_require_y} '
+            f'arrive_f={d.yw_handover_arrive_frames}')
 
     def _on_set_params(self, params):
         hsv_keys = {'white_hsv_lo', 'white_hsv_hi', 'yellow_hsv_lo', 'yellow_hsv_hi',

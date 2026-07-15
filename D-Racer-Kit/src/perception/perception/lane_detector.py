@@ -198,8 +198,10 @@ class LaneDetector:
         self.yw_handover = 1
         self.yw_handover_bottom_frac = 0.33   # '도달' 판정 하단 밴드 높이 비율
         self.yw_handover_arrive_ratio = 0.03  # 하단 밴드 노란 비율 문턱 (도달=확정 래치)
+        self.yw_handover_arrive_frames = 2    # 도달 연속 프레임 (v2.1 — 하단 반사광 1f 방어)
         self.follow_yellow_confirm_frames = 3 # 래치 후보 연속 프레임 (반사광 1프레임 방어)
         self._y_conf_count = 0                # 래치 후보 연속 카운터 (pending 판정용)
+        self._y_arrive_count = 0              # 도달 연속 카운터 (확정 래치 판정용)
         # 흰 인계(핸드오버) 창 (07-12 run59 실증): RA 탈출 후 Y래치 해제 순간부터
         # N프레임 동안 ① 흰 track 점선 제거 — 이 트랙 흰 도로는 양측 실선뿐, 점선은
         # 합류부 개구부 표식이라 차선이 아님 ② 노란 꼬리를 track 에 유지 — 병합
@@ -383,6 +385,22 @@ class LaneDetector:
         self.sw_exit_mouth_frames = 40      # ~2s@20fps
         self.sw_exit_mouth_top_frac = 0.40  # 입력 상단 제거 비율 (원거리 차단)
         self._sw_mouth = False              # 이번 프레임이 개구부 구간인지
+        # --- v2.1 (07-15 전 코스 감사 반영) ---
+        # 개구부 입력: 'raw'=점선 포함(프리필터+최우측+동적 side, 감사 exitmouth-1/2)
+        #             / 'solid'=구(bc3f325) 실선 전용 + side -1. 라이브 A/B 겸용.
+        self.sw_exit_mouth_input = 'raw'
+        self._sw_mouth_prev_xbot = None     # 개구부 선택 점프 가드 기준 (프레임간)
+        # ②b 무장 엣지 재시드: 1=직전 우측 경계 피팅 승계 (신선도 10f), 0=구 동작
+        self.sw_exit_reseed = 1
+        self._sw_interior_age = 999         # _sw_interior 마지막 갱신 후 경과 프레임
+        # ① 실선 기근 raw 폴백 (dir<0 창): 실선 필터 결과 픽셀이 이 값 미만이면
+        # raw 입력 전환 (0=off). 히스테리시스: 진입 즉시 / 해제 = 실선 5f 연속.
+        self.sw_solid_starve_px = 120
+        self._sw_starve_on = False          # 기근 폴백 활성 (코리도 로컬 상태)
+        self._sw_solid_ok = 0               # 기근 해제용 실선 연속 카운터
+        self._sw_raw_frame = False          # 이번 프레임 입력이 raw 폴백인지
+        # crossline Y래치 전 억제 (감사 handover-1): 1=Y래치 전 crossline 평가 금지
+        self.crossline_require_y = 1
         self.sw_open_max_lean_px = 90.0 # 개방 구간 |기욺| 상한 (정지선 대각선 실측 102+)
         self._sw_open = False           # 이번 프레임이 개방 구간인지
         self._sw_len = 0                # 무장 시점의 창 길이 (age 계산용)
@@ -588,6 +606,15 @@ class LaneDetector:
         30/30 검출. 직교 게이트는 차선을 원리적으로 배제(차선 선분은 a_h 와 평행).
         """
         self.last_crossline_cands = []
+        # v2.1 (감사 handover-1): 코스상 B/A 정지선은 전부 Y래치 후에만 존재한다.
+        # 크로스페이드가 pending(W추종) 구간을 길게 만들면서, 분기의 누운 노란
+        # 실선이 '흰 코리도 접선 기준 직교'로 아래 게이트들을 정당 통과해 가짜
+        # RA 진입(22:10 런 서명, race_t 11.8s > ra_min_drive 7.5s)을 재노출 —
+        # Y래치 전에는 평가 자체를 끈다. 0 이면 구 동작.
+        if (self.course == 'in'
+                and int(getattr(self, 'crossline_require_y', 1)) == 1
+                and not self._following_yellow and not self._ra_seen):
+            return False
         h_m, w_m = ymask.shape[:2]
         y1 = int(h_m * self.crossline_roi_top_ratio)
         y2 = int(h_m * self.crossline_roi_bottom_ratio)
@@ -777,6 +804,7 @@ class LaneDetector:
                     self._y_conf_count += 1
                 else:
                     self._y_conf_count = 0
+                    self._y_arrive_count = 0
                 if (self._y_conf_count
                         >= max(1, int(self.follow_yellow_confirm_frames))):
                     # 인계 크로스페이드 (__init__ yw_handover 주석): pending 동안은
@@ -789,12 +817,20 @@ class LaneDetector:
                         band = ymask[hb0:, :]
                         yr_b = (float(np.count_nonzero(band))
                                 / float(max(1, band.size)))
-                        arrived = yr_b >= float(self.yw_handover_arrive_ratio)
+                        # v2.1 (감사): 도달 판정 2f 연속 — 하단 밴드 반사광
+                        # 1프레임에 조기 확정(비가역 래치)되는 구멍 봉합.
+                        if yr_b >= float(self.yw_handover_arrive_ratio):
+                            self._y_arrive_count += 1
+                        else:
+                            self._y_arrive_count = 0
+                        arrived = (self._y_arrive_count >= max(1, int(
+                            getattr(self, 'yw_handover_arrive_frames', 2))))
                     if arrived:
                         self._following_yellow = True
                         self._yellow_exit_count = 0
                         self._oneline_used = False   # 새 래치 -> 1L 1회 사용권 리셋
                         self._y_conf_count = 0
+                        self._y_arrive_count = 0
             elif self.drive_mode != 'ROUNDABOUT' and not exit_active:
                 # WHITE 복귀 = "노랑 소실" AND "흰 우세" 연속 N프레임 (__init__ 주석).
                 # ⚠️ 탈출창(exit_active) 중에는 평가 금지 — 흰 실선 이벤트가 전담.
@@ -1075,8 +1111,22 @@ class LaneDetector:
                 self._sw_left = int(self.sw_exit_frames)
                 self._sw_len = self._sw_left
                 self._sw_dir = +1            # 탈출 = 우향 기대 (초반 한정, gate_frames 주석)
-                self._sw_prev_fit = None
+                # v2.1 ②b: 무장 엣지 재시드 — 직전 프레임까지 물고 있던 '우측
+                # 경계' 피팅(페어의 fr, 또는 단선 side=-1)이 신선하면(마지막 락
+                # 후 10f 이내) 시드로 승계해 히스토그램 재탐색 공백을 없앤다.
+                # 좌측 실선(fl 단독 해석)/스테일은 승계 금지 — None(구 동작).
+                # 시드는 히스토그램 피크와 동열 경쟁(체인+잔차 게이트 동일 적용).
+                reseed = None
+                if (int(getattr(self, 'sw_exit_reseed', 1)) == 1
+                        and self._sw_interior is not None
+                        and int(getattr(self, '_sw_interior_age', 999)) <= 10):
+                    if self._sw_interior[0] == 'pair':
+                        reseed = self._sw_interior[2]        # fr = 우측 경계
+                    elif float(self._sw_interior[3]) == -1.0:
+                        reseed = self._sw_interior[1]        # 단선 & 우측 경계
+                self._sw_prev_fit = reseed
                 self._sw_interior = None     # RA 밖에선 STOPLINE 분류기 비활성 보장
+                self._sw_mouth_prev_xbot = None   # 개구부 점프 가드 기준 초기화
                 self._sw_straight = 0
             self._prev_drive_mode = self.drive_mode
 
@@ -1174,6 +1224,10 @@ class LaneDetector:
             self._sw_interior = None
             self._sw_dir = -1 if self._following_yellow else 0
         self._sw_prev_yellow = self._following_yellow
+        # v2.1 상태 갱신: raw 폴백 플래그는 매 프레임 리셋(입력 선택부가 재설정),
+        # _sw_interior 나이는 매 프레임 가산(락 성공 시 0 리셋 — ②b 재시드 신선도).
+        self._sw_raw_frame = False
+        self._sw_interior_age = min(int(getattr(self, '_sw_interior_age', 999)) + 1, 999)
         if self._sw_left > 0:
             live = {'entry': self.sw_entry_frames,
                     'exit': self.sw_exit_frames,
@@ -1198,10 +1252,14 @@ class LaneDetector:
             if ymask is not None and (self._following_yellow
                                       or self._sw_dir > 0):
                 if self._sw_mouth:
-                    # 개구부 (07-15 사용자 재설계): 우측 실선 단선 추종으로 전환.
-                    # 정지선 2회째(직발화) 우회전 시 좌측 점선 대신 탈출로 우측
-                    # 실선을 물도록 실선 성분만 입력. 상단 제거는 유지(원거리 차단).
-                    sw_src = self._filter_yellow_dashes(ymask)
+                    # 개구부 v2.1 (07-15, 감사 exitmouth-1/2): raw 입력(점선 포함).
+                    # 초기 개구부의 유일 단서는 '점선'인데 실선 전용 입력(bc3f325)은
+                    # 그 프레임들이 기근 → 일반 폴백이었다. 실선 배제·최우측 선택·
+                    # side 는 _sw_corridor_bands 의 개구부 분기가 담당. 상단 제거
+                    # 유지(원거리 차단). 'solid' 로 되돌리면 구(bc3f325) 동작.
+                    sw_src = (ymask.copy()
+                              if str(getattr(self, 'sw_exit_mouth_input', 'raw'))
+                              == 'raw' else self._filter_yellow_dashes(ymask))
                     top = int(sw_src.shape[0]
                               * float(self.sw_exit_mouth_top_frac))
                     if top > 0:
@@ -1212,6 +1270,32 @@ class LaneDetector:
                                else self.sw_entry_input)
                     sw_src = (self._filter_yellow_dashes(ymask)
                               if str(mode_in) == 'solid' else ymask)
+                    # v2.1 ① 실선 기근 폴백 (dir<0 = 진입/접근/drive[Y] 한정):
+                    # 점선 구간에서 실선 필터 결과가 기근이면 그 구간만 raw 입력 —
+                    # '실선 소실 → 코리도 침묵 → 추종 상실' 공백을 점선 직접 락으로
+                    # 메운다. 코리도 로컬 히스테리시스(진입 즉시 / 해제 = 실선 5f
+                    # 연속), _dash_fallback_on(1L 파이프라인)과 완전 분리. 가드:
+                    # 1L 활성 중 금지(검증 스택 선점 방지, 감사 regression-1),
+                    # raw 프레임은 |lean| 상한 + 페어 금지 + 중심 이탈 포기 +
+                    # 분류기(_sw_interior) 갱신 금지 (_sw_corridor_bands 쪽).
+                    starve = int(getattr(self, 'sw_solid_starve_px', 0))
+                    if (starve > 0 and self._sw_dir < 0
+                            and str(mode_in) == 'solid'
+                            and self._oneline_left <= 0):
+                        npx = cv2.countNonZero(sw_src)
+                        if self._sw_starve_on:
+                            if npx >= starve:
+                                self._sw_solid_ok += 1
+                                if self._sw_solid_ok >= 5:
+                                    self._sw_starve_on = False
+                            else:
+                                self._sw_solid_ok = 0
+                        elif npx < starve:
+                            self._sw_starve_on = True
+                            self._sw_solid_ok = 0
+                        if self._sw_starve_on:
+                            sw_src = ymask
+                            self._sw_raw_frame = True
                 src = (cv2.morphologyEx(sw_src, cv2.MORPH_OPEN, k)
                        if use_morph else sw_src)
             elif (self._sw_dir == 0 and wmask is not None
@@ -1593,8 +1677,12 @@ class LaneDetector:
             if lean * float(self._sw_gate_dir) < -float(self.sw_wrongdir_px):
                 return None
             # 개방 구간: 방향 게이트 대신 절대 기욺 상한 — BEV 를 비스듬히
-            # 가로지르는 정지선(실측 |lean| 102~148)을 기각, 코리도는 통과
-            if self._sw_open and abs(lean) > float(self.sw_open_max_lean_px):
+            # 가로지르는 정지선(실측 |lean| 102~148)을 기각, 코리도는 통과.
+            # v2.1: 개구부 전 구간(mouth 31~40f 포함) + ① raw 폴백 프레임으로
+            # 확장 — raw 입력엔 정지선 행 제거가 못 거르는 대각 성분이 들어온다.
+            if ((self._sw_open or getattr(self, '_sw_mouth', False)
+                    or getattr(self, '_sw_raw_frame', False))
+                    and abs(lean) > float(self.sw_open_max_lean_px)):
                 return None
             return {'abc': (float(a), float(b), float(c)),
                     'y_lo': y_lo, 'y_hi': y_hi, 'resid': resid,
@@ -1637,8 +1725,9 @@ class LaneDetector:
         # (5) 코리도 해석: 두 경계(pair) 우선, 아니면 단선 + 연속성 분류
         fits.sort(key=lambda f: f['x_bot'])
         pair = None
-        if getattr(self, '_sw_mouth', False):
-            pass   # 개구부 (07-15): 점선 단선 전용 — 페어 해석 금지
+        if getattr(self, '_sw_mouth', False) or getattr(self, '_sw_raw_frame', False):
+            pass   # 개구부/raw 폴백 (07-15): 단선 전용 — 페어 해석 금지
+                   # (raw 점선 2열이 차폭 간격 가짜 페어를 이루는 것 차단, v2.1 ①)
         elif (getattr(self, '_sw_kind', '') == 'approach'
                 and self._prev_center is not None):
             # 접근 창 (07-14): 좌측 합류부 차선이 우리 왼선과 '차폭 간격 가짜 페어'를
@@ -1679,14 +1768,39 @@ class LaneDetector:
             best = fl if fl['resid'] <= fr['resid'] else fr
         else:
             best = min(fits, key=lambda f: f['resid'])
-            chosen = [best]
             # 좌/우 분류 우선순위 = _combine_lr 과 일치 (07-12 검증 리뷰):
             # 재획득 우측고정 > 점선 힌트(이격 조건) > 직전 중심 연속성 > 기본값.
             # 연속성만 쓰면 run22~24 오분류 서명이 SW 프레임에서 재발.
             if self._sw_dir > 0 and getattr(self, '_sw_mouth', False):
-                # 개구부 (07-15 사용자 재설계): 입력이 실선 전용 → 점유율 판별 불필요.
-                # 실선 = 탈출 차선의 우측 경계 → 중심 = 실선 − 반차폭 (좌측).
-                side = -1.0
+                if str(getattr(self, 'sw_exit_mouth_input', 'raw')) == 'raw':
+                    # 개구부 v2.1 (07-15, 감사 exitmouth-1/2 반영):
+                    # ① occupancy 는 '선택 후 기각'이 아니라 후보 프리필터 —
+                    #   raw 입력의 최우측은 대부분 우측 실선이라, 선택→기각이면
+                    #   매 프레임 락 전체가 포기되는 자기 봉쇄.
+                    # ② 점선 후보 중 '최우측 x_bot' = 탈출 방향 점선.
+                    # ③ side 동적: 개구부 점선은 run_c 실측상 탈출 차선의 '좌측'
+                    #   경계(차 오른쪽에 보여도) — 화면 좌반이면 +1(중심=점선+
+                    #   반차폭 우측), 우반이면 -1. 고정 -1 은 정답 대비 1차폭
+                    #   좌측 오조준(링/섬 방향 역조향)이었다.
+                    # ④ 점선 후보가 없으면 실선=우측 경계(bc3f325 검증 동작) 폴백.
+                    dash = [f for f in fits if self._curve_occupancy(
+                        m, f['abc'], f['y_lo'], f['y_hi'])
+                        <= float(self.sw_exit_dash_occupancy_max)]
+                    if dash:
+                        best = max(dash, key=lambda f: f['x_bot'])
+                        side = 1.0 if best['x_bot'] < w / 2.0 else -1.0
+                    else:
+                        side = -1.0   # 실선 폴백 (best = min-resid 유지)
+                    # 프레임간 선택 점프 가드: 0.5x차폭 초과 = 이웃 점선/노이즈 —
+                    # 이 프레임 락 포기 (시드 연속성 유지, 기준값 미갱신)
+                    xb_prev = getattr(self, '_sw_mouth_prev_xbot', None)
+                    if (xb_prev is not None
+                            and abs(best['x_bot'] - xb_prev) > 1.0 * half):
+                        return None
+                    self._sw_mouth_prev_xbot = float(best['x_bot'])
+                else:
+                    # 구(bc3f325): 실선 전용 입력 → 점유율 판별 불필요, 우측 경계.
+                    side = -1.0
             elif self._sw_dir > 0:
                 # 항목1 (07-14): 탈출 단선의 점선/실선 판별 (Y래치 상태 무관).
                 #  · 점선이면 → 무조건 바깥(우측) 경계 고정 (병합 굽이는 좌향, 남은
@@ -1711,6 +1825,14 @@ class LaneDetector:
                         <= abs(cand_r - self._prev_center) else -1.0)
             else:
                 side = float(self.sw_side_default)   # -1 = 추적선이 우측 경계
+            # v2.1 ① 가드(c): raw 폴백 락의 중심 해석이 직전 중심에서 0.7x차폭
+            # 이상 이탈하면 포기 — 이웃 점선을 물고 차선 밖으로 견인되는 것 차단.
+            if (getattr(self, '_sw_raw_frame', False)
+                    and self._prev_center is not None
+                    and abs((best['x_bot'] + side * half) - self._prev_center)
+                    > 1.4 * half):
+                return None
+            chosen = [best]
             for i in range(self.num_bands):
                 yc = roi_h - (i + 0.5) * band_h
                 if yc < best['y_lo'] - band_h or yc > best['y_hi'] + band_h:
@@ -1723,10 +1845,18 @@ class LaneDetector:
 
         # 상태/디버그 갱신 (락 성공시에만 — 실패 프레임은 시드 연속성 유지)
         self._sw_last_side = float(side) if near_lanes == 1 else 0.0
-        if pair:
+        if getattr(self, '_sw_raw_frame', False):
+            # v2.1 ① 가드(d): raw 폴백 락은 분류기 기준(_sw_interior) 갱신 금지 —
+            # B 점선 체인에 락된 기하가 정지선 분류기의 관통/헤딩 기준을 오염해
+            # B 를 정면으로 오판(직발화 오발)하는 경로 차단. 시드(_sw_prev_fit)는
+            # 유지해 입력 모드 전환 프레임에도 체인이 이어진다.
+            pass
+        elif pair:
             self._sw_interior = ('pair', fl['abc'], fr['abc'], 0.0)
+            self._sw_interior_age = 0
         else:
             self._sw_interior = ('single', best['abc'], None, float(side))
+            self._sw_interior_age = 0
         self._sw_prev_fit = best['abc']
         self._sw_last_lean = best['lean']
         boxes_dbg = []

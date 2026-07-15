@@ -41,6 +41,11 @@ class ControlNode(Node):
         # ESC 는 시동(arming)을 위해 시작 시 몇 초간 중립 throttle 신호를 유지해야 한다.
         # 그 전까지 들어오는 throttle 은 무시(중립 유지)하며, 그렇지 않으면 ESC 가 arm 되지 않는다.
         self.declare_parameter('esc_arm_sec', 3.0)
+        # 명령 스테일 워치독 (07-15): decision_node 가 죽으면 이 노드는 마지막 /control
+        # (예: 링 좌조향 + slow)을 영원히 반복 출력해 차가 폭주한다. 자율 모드에서
+        # 명령이 이 시간 이상 끊기면 throttle 을 중립으로 강제한다 (조향은 유지 —
+        # 급격한 조향 복귀가 더 위험). 명령이 다시 오면 자동 복귀. 0 = off.
+        self.declare_parameter('cmd_stale_s', 0.5)
 
         i2c_bus = int(self.get_parameter('i2c_bus').value)
         pca9685_addr = int(self.get_parameter('pca9685_addr').value)
@@ -58,6 +63,9 @@ class ControlNode(Node):
 
         self.command_hz = command_hz
         self.esc_arm_sec = float(self.get_parameter('esc_arm_sec').value)
+        self.cmd_stale_s = float(self.get_parameter('cmd_stale_s').value)
+        self._last_cmd_time = None   # 마지막 /control 수신 시각 (워치독용)
+        self._stale_active = False   # 워치독 발동 중 (로그 1회용)
         self.steer_trim = self.load_steer_trim()
 
         # PCA9685 초기화. respawn 재시작 시 직전 인스턴스가 아직 I2C fd 를 놓지 않아
@@ -137,6 +145,23 @@ class ControlNode(Node):
             self.arming = False
             self.get_logger().info(f'ESC arming complete ({self.esc_arm_sec:g}s neutral). Throttle enabled.')
 
+        # 워치독: 자율 모드에서 /control 이 cmd_stale_s 이상 끊기면 throttle 중립.
+        # 첫 명령 수신 전에는 미적용 (throttle 초기값이 이미 0.0 이라 무해).
+        if (self.cmd_stale_s > 0.0 and not self.use_joystick_control
+                and self._last_cmd_time is not None):
+            age = (self.get_clock().now() - self._last_cmd_time).nanoseconds / 1e9
+            if age >= self.cmd_stale_s:
+                if not self._stale_active:
+                    self._stale_active = True
+                    self.get_logger().warning(
+                        f'/control 스테일 {age:.2f}s >= {self.cmd_stale_s:g}s — '
+                        'throttle 중립 강제 (decision 사망 의심)')
+                self.apply_actuation(self.steering, 0.0)
+                return
+            if self._stale_active:
+                self._stale_active = False
+                self.get_logger().info('/control 재개 — throttle 복귀')
+
         self.apply_actuation(self.steering, self.throttle)
 
     def apply_actuation(self, steering, throttle):
@@ -169,6 +194,7 @@ class ControlNode(Node):
         if self.e_stop_active or self.use_joystick_control:
             return
 
+        self._last_cmd_time = self.get_clock().now()
         self.steering = float(msg.steering)
         self.throttle = float(msg.throttle)
 
