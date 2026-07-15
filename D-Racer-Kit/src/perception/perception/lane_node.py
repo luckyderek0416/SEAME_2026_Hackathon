@@ -186,8 +186,10 @@ class LaneNode(Node):
         self.declare_parameter('sw_exit_frames', 150)     # RA 탈출 창 = 07-14 재설계 후 '순수 failsafe 상한'(≈7.5s@20fps). 종료는 흰 실선 이벤트가 담당 — 정상 주행에선 상한이 먼저 안 닿게, 그러나 미발화 시 구조 레이턴시라 과하게 길게도 금지. 리플레이로 확정. 0=off(라이브 킬)
         self.declare_parameter('sw_entry_input', 'solid') # 진입 입력: solid(병합 사선 제거) | raw
         self.declare_parameter('sw_exit_input', 'raw')    # 탈출 입력: 좌측 경계가 점선 -> raw 필수
-        self.declare_parameter('sw_num_boxes', 9)         # 상자 개수 (07-15 사용자: 5→9, 전폭 110 유지)
-        self.declare_parameter('sw_box_margin', 55)       # 상자 반폭(px)
+        self.declare_parameter('sw_num_boxes', 9)         # 상자 개수 (07-15 사용자: 5→9)
+        self.declare_parameter('sw_box_margin', 55)       # 상자 반폭(px) — 흰/기타(dir=0)
+        self.declare_parameter('sw_box_margin_yellow', 45)  # 노란 코리도(dir<0) 반폭 = 전폭 90 (07-15 사용자)
+        self.declare_parameter('sw_box_margin_exit', 55)    # 탈출 창(dir>0) 반폭 = 전폭 110 (07-15 사용자)
         self.declare_parameter('sw_max_shift', 35)        # 상자당 이동 상한(px)
         self.declare_parameter('sw_min_box_px', 8)        # 상자 적중 최소 픽셀
         self.declare_parameter('sw_min_boxes', 3)         # 유효 피팅 최소 적중 상자
@@ -343,6 +345,8 @@ class LaneNode(Node):
         self.detector.sw_exit_input = str(gp('sw_exit_input').value)
         self.detector.sw_num_boxes = int(gp('sw_num_boxes').value)
         self.detector.sw_box_margin = int(gp('sw_box_margin').value)
+        self.detector.sw_box_margin_yellow = int(gp('sw_box_margin_yellow').value)
+        self.detector.sw_box_margin_exit = int(gp('sw_box_margin_exit').value)
         self.detector.sw_max_shift = int(gp('sw_max_shift').value)
         self.detector.sw_min_box_px = int(gp('sw_min_box_px').value)
         self.detector.sw_min_boxes = int(gp('sw_min_boxes').value)
