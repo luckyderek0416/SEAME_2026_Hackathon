@@ -112,7 +112,7 @@ class DecisionNode(Node):
         # 이 시간(초) 경과 시 장애물 미완이어도 빨간불 인식을 켠다.
         # 실측 코스 소요시간보다 여유 있게 길게 설정할 것. 신호등 bbox 최소 면적
         # (정규화 w*h, 0=off)도 함께 — 멀리 있는 작은 오검출 박스 필터.
-        self.declare_parameter('finish_min_drive_s', 60.0)
+        self.declare_parameter('finish_min_drive_s', 70.0)  # 07-15 사용자
         self.declare_parameter('light_min_area', 0.0)
         # 빨간 도로(ArUco 장애물 구간) 감지 임계. ROI 중 빨간 픽셀 비율이 이 값 이상이면
         # (1) DRIVE 스로틀을 slow_throttle 로 묶어 미리 감속하고,
@@ -132,7 +132,7 @@ class DecisionNode(Node):
         # ----- 회전교차로 (junction 카운트, IMU 없음) -----
         self.declare_parameter('enter_sustain_s', 0.2)   # 07-15 run80 원값 복원 — run_c 실측: 접근 오발 2f vs 진짜 A 13f (0.2s=4f 로 오발 차단+A 여유)
         self.declare_parameter('ra_latch_blank_s', 10.0)  # Y래치 후 이 시간 RA 진입 무시 (07-15 사용자: 10s). 0=off
-        self.declare_parameter('ra_min_drive_s', 7.5)    # 출발 후 이 시간 전엔 RA 진입 금지 (입구 오진입 차단)
+        self.declare_parameter('ra_min_drive_s', 11.0)  # 07-15 사용자: 대회장 첫턴 직전까지 커버    # 출발 후 이 시간 전엔 RA 진입 금지 (입구 오진입 차단)
                                                          # 07-11 run12: 1L 진입 성공으로 진짜 정지선 도착이 9.3s 로
                                                          # 당겨져 10.0 이 진짜 진입을 차단 -> 7.5 (가짜 5.9s +1.6 여유,
                                                          # 진짜 9.3s -1.8 여유)    # 가로선이 이 시간 지속 보이면 -> 회전 진입
@@ -172,7 +172,7 @@ class DecisionNode(Node):
         # 속도 스케일 기준: G->RA 접근 소요시간이 이 값일 때 스케일 1.0 (run54=20.5s 밴드,
         # 절대 임계 3.6/18.5 가 실측 정합했던 밴드). 시간/적분 임계 전부에 s 를 곱한다 —
         # run53(16.8s)/54(20.5)/55(15.0) 오프라인 재검산 전부 가짜 차단+진짜 통과.
-        self.declare_parameter('ra_ref_drive_s', 20.5)
+        self.declare_parameter('ra_ref_drive_s', 25.0)  # 07-15 대회장 실측 G→A (min_loop 스케일 경합 해소)
         # 스로틀 동적 보정 (G->Y래치 소요시간 -> 순항 스로틀 가산). gain 0=off.
         self.declare_parameter('throttle_ref_latch_s', 4.6)   # 적정 속도 기준 (run53/54/59 실측 4.4~4.7)
         self.declare_parameter('throttle_adapt_gain', 0.0)   # 보정 = gain x (실측/기준 - 1)
