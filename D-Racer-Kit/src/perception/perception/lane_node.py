@@ -182,9 +182,6 @@ class LaneNode(Node):
         self.declare_parameter('sw_solid_starve_px', 120)        # dir<0 창 실선 기근 raw 폴백 문턱(px). 0=off
         self.declare_parameter('crossline_require_y', 1)         # Y래치 전 crossline 평가 금지 (분기 누운 노랑 가짜 RA 진입 차단). 0=구 동작
         self.declare_parameter('yw_handover_arrive_frames', 2)   # 크로스페이드 '도달' 연속 프레임 (하단 반사광 1f 방어)
-        self.declare_parameter('sw_side_curv_min', 0.0035)       # 곡률 side 판별 하한 |a| (직선=정보없음→휴리스틱). 0=off
-        self.declare_parameter('sw_side_curv_split', 0.0049)     # 안(+1)/바깥(-1) 경계 |a| — 도면: 안 0.0058 / 밖 0.0040
-        self.declare_parameter('sw_concentric', 1)               # 단선 중앙선 동심원 보정 (a 평행곡선화). 0=off
         self.declare_parameter('oneline_release_min_hold', 20)   # 1L 최소 유지(쐐기 방어, ~1s)
         self.declare_parameter('sw_exit_frames', 150)     # RA 탈출 창 = 07-14 재설계 후 '순수 failsafe 상한'(≈7.5s@20fps). 종료는 흰 실선 이벤트가 담당 — 정상 주행에선 상한이 먼저 안 닿게, 그러나 미발화 시 구조 레이턴시라 과하게 길게도 금지. 리플레이로 확정. 0=off(라이브 킬)
         self.declare_parameter('sw_entry_input', 'solid') # 진입 입력: solid(병합 사선 제거) | raw
@@ -373,9 +370,6 @@ class LaneNode(Node):
         self.detector.sw_solid_starve_px = int(gp('sw_solid_starve_px').value)
         self.detector.crossline_require_y = int(gp('crossline_require_y').value)
         self.detector.yw_handover_arrive_frames = int(gp('yw_handover_arrive_frames').value)
-        self.detector.sw_side_curv_min = float(gp('sw_side_curv_min').value)
-        self.detector.sw_side_curv_split = float(gp('sw_side_curv_split').value)
-        self.detector.sw_concentric = int(gp('sw_concentric').value)
         self.detector.oneline_release_min_hold = int(gp('oneline_release_min_hold').value)
         self.detector.sw_exit_dash_occupancy_max = float(gp('sw_exit_dash_occupancy_max').value)
         self.detector.sw_exit_white_bottom_px = int(gp('sw_exit_white_bottom_px').value)
@@ -427,9 +421,7 @@ class LaneNode(Node):
         self.get_logger().info(
             f'[실효 v2.1] mouth_in={d.sw_exit_mouth_input} reseed={d.sw_exit_reseed} '
             f'starve_px={d.sw_solid_starve_px} xline_reqY={d.crossline_require_y} '
-            f'arrive_f={d.yw_handover_arrive_frames} '
-            f'curvside={d.sw_side_curv_min:g}/{d.sw_side_curv_split:g} '
-            f'concentric={d.sw_concentric}')
+            f'arrive_f={d.yw_handover_arrive_frames}')
 
     def _on_set_params(self, params):
         hsv_keys = {'white_hsv_lo', 'white_hsv_hi', 'yellow_hsv_lo', 'yellow_hsv_hi',
@@ -488,7 +480,6 @@ class LaneNode(Node):
                 f'side={float(getattr(d, "_sw_last_side", 0.0)):g} '
                 f'xbot={float(getattr(d, "_sw_last_xbot", 0.0)):.0f} '
                 f'lean={float(getattr(d, "_sw_last_lean", 0.0)):.0f} '
-                f'a={float(getattr(d, "_sw_last_a", 0.0)):.4f} '
                 f'fail={getattr(d, "_sw_fail", None)}/{getattr(d, "_sw_fitrej", None)} '
                 f'pc={"-" if pc is None else int(pc)}')
 
