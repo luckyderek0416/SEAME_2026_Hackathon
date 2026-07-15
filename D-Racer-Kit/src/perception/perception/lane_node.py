@@ -33,7 +33,9 @@ class LaneNode(Node):
         # 0 = 비활성(측정 모드). 곡선 위에서 비스듬히 접근해도 통과한다.
         self.declare_parameter('crossline_perp_tol_deg', 20.0)
         # BEV 가로/세로 스케일비(sx/sy). 07-10 실측 r=1.91. dst_ratio 변경 시 재측정.
-        self.declare_parameter('crossline_bev_aspect', 2.23)   # 07-15 대회장 재측정 (보드 로컬 튜닝 회수)
+        # 07-15 저녁 워프 재캘리로 x스케일 x1.038 → 2.23 x 1.038 = 2.31 비례 갱신
+        # (해석적 — 시간 나면 정지선 포즈로 실측 재확인).
+        self.declare_parameter('crossline_bev_aspect', 2.31)
         self.declare_parameter('lane_heading_alpha', 0.2)
         self.declare_parameter('crossline_exclude_px', 6.0)  # 후보 선분 배제 반경(px)
         # HoughLinesP 파라미터 (정지선 선분 검출).
@@ -94,10 +96,10 @@ class LaneNode(Node):
         # 직선 구간 흰선 2개를 직선 피팅, y=0.342h/0.965h 의 차선 x 를 src 꼭짓점으로
         # (워프 후 0.20w/0.80w). 합격: 기둥 slope ~0, 폭 192±5px @x=64/256.
         self.declare_parameter('use_birdeye', True)
-        # 07-14 대회장 재캘리 (카메라 각도 확정 후, 출발점 직선 프레임 피팅): 구 src 는
-        # 폭 164px 로 15% 부족 + 중심 154 편향 -> 재산출. 검산 좌 64.8/우 256.2/폭 191.4.
-        # 주의: crossline_bev_aspect(1.91)는 구 워프 실측값 — 정지선 포즈에서 재측정 필요.
-        self.declare_parameter('birdeye_src_ratio', [0.2705, 0.342, 0.6697, 0.342, 0.8579, 0.965, 0.0871, 0.965])
+        # 07-15 저녁 재캘리 (카메라 각도 재조정 후, 차선 중앙 정치 프레임): 07-14 워프가
+        # 폭 185px(-3.6%) + 중심 166.5 편향 → BEV 아핀 보정(x1.038, 중심 160) 합성으로
+        # 재산출. 검산(전 행): 좌 62~65 / 우 255.5~256 / 폭 191~193.5 / 중심 159~160.5.
+        self.declare_parameter('birdeye_src_ratio', [0.2913, 0.342, 0.6759, 0.342, 0.8699, 0.965, 0.1272, 0.965])
         self.declare_parameter('birdeye_dst_ratio', [0.20, 0.00, 0.80, 0.00, 0.80, 1.00, 0.20, 1.00])
         # --- 가이드 밴드 탐색 (기본 ON) ---
         self.declare_parameter('use_guided_band', True)
