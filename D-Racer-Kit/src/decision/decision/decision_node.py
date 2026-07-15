@@ -131,7 +131,7 @@ class DecisionNode(Node):
 
         # ----- 회전교차로 (junction 카운트, IMU 없음) -----
         self.declare_parameter('enter_sustain_s', 0.12)
-        self.declare_parameter('ra_min_drive_s', 11.0)    # 출발 후 이 시간 전엔 RA 진입 금지 (입구 오진입 차단)
+        self.declare_parameter('ra_min_drive_s', 7.5)    # 출발 후 이 시간 전엔 RA 진입 금지 (입구 오진입 차단)
                                                          # 07-11 run12: 1L 진입 성공으로 진짜 정지선 도착이 9.3s 로
                                                          # 당겨져 10.0 이 진짜 진입을 차단 -> 7.5 (가짜 5.9s +1.6 여유,
                                                          # 진짜 9.3s -1.8 여유)    # 가로선이 이 시간 지속 보이면 -> 회전 진입
@@ -179,7 +179,7 @@ class DecisionNode(Node):
         self.declare_parameter('throttle_adapt_gain', 0.0)   # 보정 = gain x (실측/기준 - 1)
         self.declare_parameter('throttle_adapt_max', 0.0)   # 보정 절대 상한 (안전 클램프)
         self.declare_parameter('y_latch_ratio', 0.02)         # 래치 감지 yr 문턱 (perception 과 동일값 권장)
-        self.declare_parameter('y_latch_frames', 5)           # 래치 감지 연속 틱 (07-15 사용자: 10→5)
+        self.declare_parameter('y_latch_frames', 10)           # 래치 감지 연속 틱 (07-15 사용자: 10→5)
         self.declare_parameter('max_loop_time_s', 75.0)   # 모든 추정치 실패 시 failsafe 탈출
         self.declare_parameter('crossline_cooldown_s', 2.0)  # 게이트 카운트 간 최소 간격 (재카운트 디바운스)
         # --- 탈출 failsafe 3-표결 (조향 적분 + 시간 + 가로선 재등장), IMU/마커 없음 ---
