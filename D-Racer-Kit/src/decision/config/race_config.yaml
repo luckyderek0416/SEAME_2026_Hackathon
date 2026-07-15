@@ -1,37 +1,61 @@
-# Sample params. Use with:
-#   ros2 launch decision auto_race.launch.py   (defaults)
-# or override a single node, e.g.:
+# ⚠️ 주의: auto_race.launch.py 는 이 파일을 로드하지 않는다!
+# 실전 시작값은 각 노드 소스의 declare_parameter 기본값이다.
+# 이 파일은 "노드 단독 실행 시 --params-file 로 쓰는 참고 사본"이며,
+# 아래 값들은 2026-07-03 기준 소스 기본값과 동기화돼 있다.
+#
 #   ros2 run decision decision_node --ros-args --params-file race_config.yaml
+#
+# 주행 중 라이브 튜닝은:  ros2 param set /decision_node drive_throttle 0.16
+# 확정값은 소스 기본값에 반영 후 colcon build --packages-select <pkg>
 
 lane_node:
   ros__parameters:
-    roi_top_ratio: 0.55      # use bottom 45% of the frame
-    # NOTE: the HSV lane_node tunes color via node defaults (mode / lookahead /
-    # single_line_offset). The old brightness params (bright_thresh, min_pixels)
-    # were removed -- the HSV detector does not declare or read them.
+    roi_top_ratio: 0.55        # 아래 45% 만 분석
+    bright_thresh: 160         # gray 모드용 (기본은 hsv 모드)
+    min_pixels: 40
+    race_dir: left             # 당일 주행 방향: left(반시계)/right(시계)
+    # --- 신규 인지 기능 (기본 ON) ---
+    use_birdeye: true          # ⚠️ birdeye_src_ratio 는 트랙에서 튜닝 필요
+    use_guided_band: true
+    use_lookahead_control: true
+    near_weight: 0.7
+    lookahead_weight: 0.3
 
 aruco_node:
   ros__parameters:
-    dictionary: DICT_4X4_50  # match the marker dictionary the organisers use
+    dictionary: DICT_6X6_50    # 주최측 마커 사전과 일치 확인 (tools/identify_aruco.py)
+    inverted: true             # 흰 바탕/검정 반전 마커
 
 yolo_node:
   ros__parameters:
-    model_path: /home/topst/D-Racer/models/best.pt
+    model_param: /home/topst/D-Racer/models/model.ncnn.param
+    model_bin: /home/topst/D-Racer/models/model.ncnn.bin
     conf_threshold: 0.5
-    infer_hz: 10.0           # YOLO runs slower than lane following on purpose
+    infer_hz: 6.0             # YOLO 는 차선추종보다 느리게 돌린다 (의도적)
     imgsz: 320
 
 decision_node:
   ros__parameters:
-    course: out              # 'out' or 'in'
+    course: out                # 'out' (S자+갈림길) / 'in' (회전교차로)
+    race_dir: left
     kp: 0.6
     ki: 0.0
     kd: 0.15
-    steer_center: 0.0        # = STEER_TRIM
-    steer_scale: 1.0         # flip to negative if it steers the wrong way
-    drive_throttle: 0.18
+    steer_center: 0.2          # 직진 편향 보정
+    steer_scale: -1.0          # 트랙 검증: 이 차는 부호 반대 (양수로 두면 역조향)
+    drive_throttle: 0.20
     slow_throttle: 0.12
-    fork_bias: 0.4
-    marker_area_trigger: 0.02
-    marker_clear_frames: 5
-    roundabout_seconds: 8.0  # TODO: replace with IMU yaw integration
+    stop_throttle: 0.0
+    curve_slow: 0.5            # |curvature| 비례 감속
+    max_steering_delta: 0.0    # 0=off. 조향 튐 방지 rate limit (0.08~0.15 권장)
+    steer_slow: 0.0            # 0=off. |조향| 비례 감속 (0.3~0.5 권장)
+    fork_bias: 0.4             # 갈림길 표지판 방향 편향
+    fork_hold_s: 6.0           # 표지판 마지막 인식 후 편향 유지 시간
+    marker_area_trigger: 0.02  # 아루코 면적비 이 이상 -> 정지
+    marker_clear_frames: 8     # 마커 소실 연속 프레임 -> 재출발
+    # --- 회전교차로 (In 코스) ---
+    target_loops: 1
+    min_loop_time_s: 3.0       # 이 전엔 절대 탈출 안 함 (미달 = 미션 실패)
+    nominal_loop_time_s: 8.0   # ⚠️ 트랙에서 실측 후 보정
+    yaw_lap_threshold: 6.0     # ⚠️ 트랙에서 실측 후 보정
+    max_loop_time_s: 20.0      # 전부 실패 시 강제 탈출

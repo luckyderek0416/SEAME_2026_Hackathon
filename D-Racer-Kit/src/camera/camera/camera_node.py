@@ -1,3 +1,4 @@
+import glob
 import os
 from pathlib import Path
 
@@ -140,6 +141,19 @@ class CameraNode(Node):
 
         return usb_cam, mipi_cam
 
+    @staticmethod
+    def get_candidate_devices(configured_device):
+        devices = []
+        for device in [configured_device, '/dev/video0', '/dev/video1', '/dev/video2']:
+            if not device:
+                continue
+            if device not in devices and os.path.exists(device):
+                devices.append(device)
+        for device in sorted(glob.glob('/dev/video*')):
+            if device not in devices:
+                devices.append(device)
+        return devices
+
     def build_candidate_pipelines(self, camera_device, flip_method):
         if self.usb_cam_enabled:
             # Many USB webcams expose MJPG by default.
@@ -172,16 +186,46 @@ class CameraNode(Node):
             self.cap.release()
             self.cap = None
 
-        for candidate_pipeline in self.build_candidate_pipelines(self.camera_device, self.flip_method):
-            cap = cv2.VideoCapture(candidate_pipeline, cv2.CAP_GSTREAMER)
-            if cap.isOpened():
-                self.cap = cap
-                self.pipeline = candidate_pipeline
-                self.get_logger().info(f'Camera capture opened with pipeline: {candidate_pipeline}')
-                return True
+        for candidate_device in self.get_candidate_devices(self.camera_device):
+            self.get_logger().info(f'Trying camera device: {candidate_device}')
+            for candidate_pipeline in self.build_candidate_pipelines(candidate_device, self.flip_method):
+                cap = cv2.VideoCapture(candidate_pipeline, cv2.CAP_GSTREAMER)
+                if cap.isOpened():
+                    self.cap = cap
+                    self.pipeline = candidate_pipeline
+                    self.camera_device = candidate_device
+                    self.get_logger().info(
+                        f'Camera capture opened with device={candidate_device} pipeline={candidate_pipeline}'
+                    )
+                    return True
 
-            cap.release()
-            self.get_logger().warning(f'Failed to open candidate pipeline: {candidate_pipeline}')
+                cap.release()
+                self.get_logger().warning(
+                    f'Failed to open candidate pipeline on {candidate_device}: {candidate_pipeline}'
+                )
+
+        # If GStreamer pipelines failed, try a plain v4l2/OpenCV fallback.
+        for candidate_device in self.get_candidate_devices(self.camera_device):
+            try:
+                self.get_logger().info(f'Trying v4l2 fallback on {candidate_device}')
+                cap = cv2.VideoCapture(candidate_device, cv2.CAP_V4L2)
+                if cap.isOpened():
+                    # Try to apply requested frame size; not all cameras honor it.
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.image_width)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.image_height)
+                    # Validate by grabbing a frame.
+                    ret, frame = cap.read()
+                    if ret and frame is not None:
+                        self.cap = cap
+                        self.pipeline = None
+                        self.camera_device = candidate_device
+                        self.get_logger().info(
+                            f'Camera capture opened via v4l2 on {candidate_device}'
+                        )
+                        return True
+                cap.release()
+            except Exception as exc:
+                self.get_logger().warning(f'v4l2 fallback failed on {candidate_device}: {exc}')
 
         self.cap = None
         self.pipeline = None
