@@ -179,7 +179,7 @@ class DecisionNode(Node):
         self.declare_parameter('throttle_adapt_gain', 0.0)   # 보정 = gain x (실측/기준 - 1)
         self.declare_parameter('throttle_adapt_max', 0.0)   # 보정 절대 상한 (안전 클램프)
         self.declare_parameter('y_latch_ratio', 0.02)         # 래치 감지 yr 문턱 (perception 과 동일값 권장)
-        self.declare_parameter('y_latch_frames', 10)          # 래치 감지 연속 틱
+        self.declare_parameter('y_latch_frames', 5)           # 래치 감지 연속 틱 (07-15 사용자: 10→5)
         self.declare_parameter('max_loop_time_s', 75.0)   # 모든 추정치 실패 시 failsafe 탈출
         self.declare_parameter('crossline_cooldown_s', 2.0)  # 게이트 카운트 간 최소 간격 (재카운트 디바운스)
         # --- 탈출 failsafe 3-표결 (조향 적분 + 시간 + 가로선 재등장), IMU/마커 없음 ---
