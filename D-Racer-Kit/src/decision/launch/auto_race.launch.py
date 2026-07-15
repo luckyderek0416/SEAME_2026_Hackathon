@@ -31,8 +31,6 @@ def generate_launch_description():
     race_dir = LaunchConfiguration('race_dir')
     aruco_dict = LaunchConfiguration('aruco_dict')
     aruco_inverted = LaunchConfiguration('aruco_inverted')
-    model_param = LaunchConfiguration('model_param')
-    model_bin = LaunchConfiguration('model_bin')
     skip_missions = LaunchConfiguration('skip_missions')
     vehicle_config = LaunchConfiguration('vehicle_config')
 
@@ -46,10 +44,6 @@ def generate_launch_description():
         # Confirm with tools/identify_aruco.py on the board and override here if different.
         DeclareLaunchArgument('aruco_dict', default_value='DICT_6X6_50'),
         DeclareLaunchArgument('aruco_inverted', default_value='true'),
-        DeclareLaunchArgument('model_param',
-                              default_value='/home/topst/D-Racer/models/model.ncnn.param'),
-        DeclareLaunchArgument('model_bin',
-                              default_value='/home/topst/D-Racer/models/model.ncnn.bin'),
         DeclareLaunchArgument('skip_missions', default_value='false',
                               description='true = pure lane-following test (no green light / roundabout / '
                                           'obstacle missions); starts driving immediately.'),
@@ -72,8 +66,10 @@ def generate_launch_description():
              parameters=[{'dictionary': aruco_dict, 'inverted': aruco_inverted}]),
 
         # --- new: inference (YOLO via NCNN, ARM-friendly) ---
-        Node(package='inference', executable='yolo_ncnn_node', name='yolo_node', output='screen',
-             parameters=[{'model_param': model_param, 'model_bin': model_bin}]),
+        # juwon inference 패키지의 실행자는 yolo_node 하나 (ultralytics NCNN 디렉토리
+        # 방식, 기본 model_path=~/SEAME_2026_Hackathon/training/best_ncnn_model).
+        # 구 yolo_ncnn_node(model_param/model_bin) 참조는 실행자가 없어 기동 실패했음.
+        Node(package='inference', executable='yolo_node', name='yolo_node', output='screen'),
 
         # --- new: decision (state machine + PID) ---
         Node(package='decision', executable='decision_node', name='decision_node', output='screen',
