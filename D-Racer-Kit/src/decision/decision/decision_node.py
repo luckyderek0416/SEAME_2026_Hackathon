@@ -106,13 +106,13 @@ class DecisionNode(Node):
         # 3프레임(0.1s)이 뚫려 조기 출발한 사례 -> 10프레임(0.33s) 연속 요구.
         # 진짜 초록불은 상시 점등이라 출발 지연 영향은 ~0.2s 뿐.
         self.declare_parameter('green_frames', 10)
-        self.declare_parameter('red_frames', 3)
+        self.declare_parameter('red_frames', 8)   # 07-14: 3→8틱 (0.27s) — YOLO 6Hz 에서 추론 1건이 5틱 지속되므로 3은 오추론 1건에 뚫림; 8은 독립 추론 2건 연속 요구
         # 빨간불 대기 무장: 주 조건은 장애물 미션 완료(obstacle_done, 코스 순서 고정).
         # finish_min_drive_s 는 아루코를 통째로 놓친 비상 주행용 예비 무장 —
         # 이 시간(초) 경과 시 장애물 미완이어도 빨간불 인식을 켠다.
         # 실측 코스 소요시간보다 여유 있게 길게 설정할 것. 신호등 bbox 최소 면적
         # (정규화 w*h, 0=off)도 함께 — 멀리 있는 작은 오검출 박스 필터.
-        self.declare_parameter('finish_min_drive_s', 70.0)
+        self.declare_parameter('finish_min_drive_s', 120.0)   # 07-14: 오검출 FINISH 영구정지 방지 — 완주+마커정지 시간보다 길게
         self.declare_parameter('light_min_area', 0.0)
         # 빨간 도로(ArUco 장애물 구간) 감지 임계. ROI 중 빨간 픽셀 비율이 이 값 이상이면
         # (1) DRIVE 스로틀을 slow_throttle 로 묶어 미리 감속하고,

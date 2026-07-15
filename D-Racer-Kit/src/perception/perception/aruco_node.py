@@ -1,8 +1,8 @@
-"""aruco_node: OpenCV ArUco marker detection (the dynamic obstacle).
+"""aruco_node: OpenCV ArUco 마커 검출 (동적 장애물).
 
-Pure OpenCV, no deep learning. Reports whether a marker is currently in
-view and how big it looks (proximity proxy). The stop/go *decision* and
-debounce live in decision_node, not here -- this node only reports facts.
+순수 OpenCV 만 사용하며 딥러닝은 없다. 마커가 현재 화면에 보이는지와
+얼마나 크게 보이는지(근접도 근사치)를 보고한다. 정지/주행 *결정*과
+디바운스는 여기가 아니라 decision_node 에 있다 -- 이 노드는 사실만 보고한다.
 """
 
 import cv2
@@ -22,8 +22,8 @@ class ArucoNode(Node):
 
         self.declare_parameter('subscribe_topic', '/camera/image/compressed')
         self.declare_parameter('aruco_topic', '/perception/aruco')
-        self.declare_parameter('dictionary', 'DICT_6X6_50')   # MUST match the printed marker
-        self.declare_parameter('inverted', False)             # True if marker is white-on-black
+        self.declare_parameter('dictionary', 'DICT_4X4_50')   # 인쇄된 마커와 반드시 일치해야 함
+        self.declare_parameter('inverted', False)             # 마커가 검은 바탕에 흰색이면 True
         # detectMarkers 는 매 프레임 돌릴 필요가 없다(마커는 여러 프레임에 걸쳐 접근함).
         # 카메라 30Hz 전부 대신 이 주기로만 검출해 보드 CPU 부하를 던다(YOLO 노드와 동일 패턴).
         # 0 이하 = 카메라 프레임마다(구버전 동작). 라이브: ros2 param set /aruco_node aruco_hz 15.0
@@ -36,7 +36,7 @@ class ArucoNode(Node):
 
         dict_id = getattr(cv2.aruco, dict_name, cv2.aruco.DICT_4X4_50)
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(dict_id)
-        # OpenCV >= 4.7 uses ArucoDetector; older versions use detectMarkers(...)
+        # OpenCV >= 4.7 은 ArucoDetector 를 쓰고, 그 이전 버전은 detectMarkers(...) 를 쓴다
         try:
             params = cv2.aruco.DetectorParameters()
             if inverted and hasattr(params, 'detectInvertedMarker'):
@@ -107,11 +107,14 @@ class ArucoNode(Node):
 
         out = ArucoState()
         out.header = header
-        if ids is not None and len(ids) > 0:
+        ids_f = np.asarray(ids).flatten() if ids is not None else np.empty(0, int)
+        if ids_f.size > 0 and len(corners) == ids_f.size:
             areas = [cv2.contourArea(c.reshape(-1, 1, 2).astype(np.float32)) for c in corners]
-            idx = int(np.argmax(areas))          # nearest marker = largest on screen
+            idx = int(np.argmax(areas))          # 가장 가까운 마커 = 화면에서 가장 큰 것
             out.detected = True
-            out.marker_id = int(ids[idx][0])
+            # OpenCV 버전에 따라 ids 가 (N,1)/(N,) 혼재 -> flatten 통일
+            # (스칼라 [0] 인덱싱 IndexError 로 기동 직후 노드 사망, 07-12 실측)
+            out.marker_id = int(ids_f[idx])
             out.area_ratio = float(areas[idx] / (w * h))
         else:
             out.detected = False

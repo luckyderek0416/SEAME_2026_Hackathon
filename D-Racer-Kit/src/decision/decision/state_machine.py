@@ -344,7 +344,11 @@ class RaceStateMachine:
         # 구간 밖에서는 기존처럼 면적 게이트를 요구해, 트랙 반대편의 마커가 멀리 보이는
         # 것만으로 서버리는 사고를 막는다.
         in_red_zone = self._in_red_zone(lane)
-        if self.state == State.DRIVE and aruco.detected and (
+        # 07-14: area 분기에도 RA 완료 게이트 — in 코스에서 마커는 항상 RA 뒤 구간에만
+        # 존재하므로(위 주석), RA 전 큰 마커 오검출이 OBSTACLE_STOP→클리어→
+        # obstacle_done 조기 세팅→빨간불 조기 무장으로 이어지는 체인을 차단한다.
+        marker_armed = (self.cfg.get('course', 'in') != 'in' or self.roundabout_done)
+        if self.state == State.DRIVE and aruco.detected and marker_armed and (
                 in_red_zone or aruco.area_ratio >= self.cfg['marker_area_trigger']):
             self._enter(State.OBSTACLE_STOP)
 
