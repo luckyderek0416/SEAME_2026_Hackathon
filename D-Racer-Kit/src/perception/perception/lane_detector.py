@@ -1167,9 +1167,8 @@ class LaneDetector:
             self._oneline_left -= 1
             bands = []
             near_lanes = 0
-            # 07-15 사용자: 단선 중심 오프셋 96→80 하드코딩 (안쪽 붙음 완충 실험 —
-            # 문제 시 _lane_width/2.0 복원). 실측 반차폭은 96(=192/2).
-            half = 80.0
+            half = (self._lane_width / 2.0) if self._lane_width > 0 \
+                else (w * self.single_line_offset)
             # 하단(가까운) oneline_near_bands 개만 사용 — 원거리 호 오염 차단
             # (__init__ 주석, 07-12 run40 실증)
             for i in range(min(int(self.oneline_near_bands), self.num_bands)):
@@ -1472,8 +1471,7 @@ class LaneDetector:
                                     else (1 - self.width_ema) * self._lane_width
                                     + self.width_ema * width)
             return (lx + rx) / 2.0, 2
-        # 07-15 사용자: 단선 중심 오프셋 96→80 하드코딩 (안쪽 붙음 완충 실험)
-        half = 80.0
+        half = (self._lane_width / 2.0) if self._lane_width > 0 else (w * self.single_line_offset)
         line = lx if lx is not None else rx
         if line is None:
             return None, 0
@@ -1595,9 +1593,8 @@ class LaneDetector:
         nb = max(3, int(self.sw_num_boxes))
         bh = max(2, roi_h // nb)
         margin = max(4, int(self.sw_box_margin))
-        # 07-15 사용자: 단선 중심 오프셋 96→80 하드코딩 (안쪽 붙음 완충 실험).
-        # 페어 간격 게이트(0.7~1.4x2half=112~224)도 이 값 기준 — 실측 192 포함 확인.
-        half = 80.0
+        half = ((self._lane_width / 2.0) if self._lane_width > 0
+                else (w * self.single_line_offset))
 
         # (2) 시드 수집: 직전 피팅 우선, 다음 하단 히스토그램 피크(질량 순)
         seeds = []
