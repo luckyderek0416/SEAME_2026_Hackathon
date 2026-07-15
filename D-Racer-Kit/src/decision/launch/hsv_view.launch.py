@@ -13,17 +13,25 @@ Then open the dashboard from your PC (SSH port-forward avoids hotspot isolation)
 Nodes:
   camera_node  -> /camera/image/compressed
   lane_node    -> /perception/lane/debug   (HSV mask overlay; monitor shows this)
-  battery_node -> battery_status           (battery % on the dashboard)
   monitor_node -> web dashboard on WEB_HOST:WEB_PORT (vehicle_config.yaml)
 """
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    # vehicle_config 미전달 시 camera_node 가 MIPI 기본값으로 폴백해 USB 카메라를
+    # 못 열고 죽는다 (auto_race.launch.py 와 동일 처방). battery 는 확인용
+    # 대시보드에 불필요 + respawn 소음이라 제외 (07-15 run80 백포트).
+    vehicle_config = LaunchConfiguration('vehicle_config')
     return LaunchDescription([
-        Node(package='camera', executable='camera_node', name='camera_node', output='screen'),
+        DeclareLaunchArgument('vehicle_config',
+                              default_value='/home/topst/SEAME_2026_Hackathon-clone/D-Racer-Kit/'
+                                            'src/config/vehicle_config.yaml'),
+        Node(package='camera', executable='camera_node', name='camera_node', output='screen',
+             parameters=[{'vehicle_config_file': vehicle_config}]),
         Node(package='perception', executable='lane_node', name='lane_node', output='screen'),
-        Node(package='battery', executable='battery_node', name='battery_node', output='screen'),
         Node(package='monitor', executable='monitor_node', name='monitor_node', output='screen'),
     ])
