@@ -45,7 +45,7 @@ class LaneNode(Node):
         self.declare_parameter('crossline_hough_max_gap', 10)   # 선분 이어붙이기 최대 간격(px). 8 이하면 진짜 정지선도 못 잇는다
         self.declare_parameter('crossline_min_solidity', 0.80)  # 선분 위 픽셀 충실도 하한 (이어붙인 점선 배제)
         self.declare_parameter('crossline_sw_gate', 1)           # SW 코리도 교차 게이트 (run76~80 실전 검증: B 개구부 페인트 기각)
-        self.declare_parameter('sw_curv_max_a', 0.0035)         # 진입 창 우곡률 상한 (B 가지 오물림 방지, 0=off) — 07-15 대회장
+        self.declare_parameter('sw_curv_max_a', 0.0020)         # 진입 창 우곡률 상한. 새 각도 스케일 재계산: B가지 +0.0026 (07-16)
         self.declare_parameter('stopline_mode', 1)               # 관통+정면 정지선 분류기 (07-14 운용값 박제 — ra_direct_fire 1 과 세트)
         self.declare_parameter('stopline_ang_max', 15.0)
         self.declare_parameter('stopline_cov_min', 0.25)   # 캘리 근거(f59 실측 0.28 포용)와 통일 (구 0.35 는 진짜 A 기각 위험)
@@ -187,8 +187,8 @@ class LaneNode(Node):
         self.declare_parameter('sw_solid_starve_px', 120)        # dir<0 창 실선 기근 raw 폴백 문턱(px). 0=off
         self.declare_parameter('crossline_require_y', 1)         # Y래치 전 crossline 평가 금지 (분기 누운 노랑 가짜 RA 진입 차단). 0=구 동작
         self.declare_parameter('yw_handover_arrive_frames', 2)   # 크로스페이드 '도달' 연속 프레임 (하단 반사광 1f 방어)
-        self.declare_parameter('sw_side_curv_min', 0.0035)       # 곡률 side 판별 하한 |a| (직선=정보없음→휴리스틱). 0=off
-        self.declare_parameter('sw_side_curv_split', 0.0049)     # 안(+1)/바깥(-1) 경계 |a| — 도면: 안 0.0058 / 밖 0.0040
+        self.declare_parameter('sw_side_curv_min', 0.0015)       # 곡률 side 판별 하한 |a|. 새 각도 스케일 a=1.995/R (07-16 재계산). 0=off
+        self.declare_parameter('sw_side_curv_split', 0.00215)    # 안(+1)/바깥(-1) 경계 — 새 스케일: 안 0.00254 / 밖 0.00176
         self.declare_parameter('sw_concentric', 1)               # 단선 중앙선 동심원 보정 (a 평행곡선화). 0=off
         self.declare_parameter('oneline_release_min_hold', 20)   # 1L 최소 유지(쐐기 방어, ~1s)
         self.declare_parameter('sw_exit_frames', 150)     # RA 탈출 창 = 07-14 재설계 후 '순수 failsafe 상한'(≈7.5s@20fps). 종료는 흰 실선 이벤트가 담당 — 정상 주행에선 상한이 먼저 안 닿게, 그러나 미발화 시 구조 레이턴시라 과하게 길게도 금지. 리플레이로 확정. 0=off(라이브 킬)

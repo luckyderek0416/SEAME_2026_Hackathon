@@ -403,8 +403,8 @@ class LaneDetector:
         self.crossline_require_y = 1
         # 곡률 기반 side 판별 (07-15 도면 환산): 좌커브 단선의 안/바깥 경계를
         # |a| 로 구분 — min 미만은 직선(정보 없음→휴리스틱), split 이상=안쪽(+1).
-        self.sw_side_curv_min = 0.0035    # 0=off
-        self.sw_side_curv_split = 0.0049
+        self.sw_side_curv_min = 0.0015    # 0=off (새 각도 스케일 a=1.995/R)
+        self.sw_side_curv_split = 0.00215
         # 동심원 보정: 단선 중앙선 산출 시 a 도 평행 곡선으로 보정. 0=off
         self.sw_concentric = 1
         self._sw_mouth_jumpfail = 0       # 개구부 점프가드 연속 실패 (라이브락 해제용)
@@ -857,6 +857,12 @@ class LaneDetector:
                             else min(0.75, float(self.follow_yellow_exit_yellow_frac)))
                 yellow_gone = yellow_ratio < (self.follow_yellow_ratio * eff_frac)
                 white_dom = wcount > self.follow_yellow_exit_white_ratio * max(1, ycount)
+                # 07-16 (6런 연속 Y래치 플랩 봉합): 실선 기근 폴백이 켜진 프레임은
+                # 노랑이 점선 과도기라 '노랑 소실'이 순간 성립한다 — 해제/블라인드
+                # 카운트 모두 동결 (증가도 리셋도 안 함). 런 A 실측: 플랩 직후
+                # 요잉 → 글레어 존 가짜 crossline 오진입의 방아쇠였음.
+                if getattr(self, '_sw_starve_on', False):
+                    yellow_gone = False
                 if yellow_gone and white_dom:
                     self._yellow_exit_count += 1
                     eff_k = int(self.follow_yellow_exit_frames)

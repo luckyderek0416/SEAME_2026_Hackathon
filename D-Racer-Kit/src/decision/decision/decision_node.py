@@ -132,9 +132,9 @@ class DecisionNode(Node):
 
         # ----- 회전교차로 (junction 카운트, IMU 없음) -----
         self.declare_parameter('enter_sustain_s', 0.12)
-        self.declare_parameter('ra_min_drive_s', 14.0)   # 출발 후 이 시간 전엔 RA 진입 금지 (입구 오진입 차단)
-                                                         # 07-15 밤 사용자: 7.5→14 — 글레어 존 가짜 crossline 오진입
-                                                         # 2회(race_t 9.5/9.9) 시간 차단. 새 각도 실측 B ~17s / A ~22-29s.
+        self.declare_parameter('ra_min_drive_s', 12.0)   # 출발 후 이 시간 전엔 RA 진입 금지 (입구 오진입 차단)
+                                                         # 07-16 사용자: 14→12 — 빠른 밴드 진짜 A 도달 실측 14.3s 와
+                                                         # 마진 0.3s 뿐이라 완화. 글레어 존 가짜(9.5/9.9s)는 여전히 차단.
                                                          # 07-11 run12: 1L 진입 성공으로 진짜 정지선 도착이 9.3s 로
                                                          # 당겨져 10.0 이 진짜 진입을 차단 -> 7.5 (가짜 5.9s +1.6 여유,
                                                          # 진짜 9.3s -1.8 여유)    # 가로선이 이 시간 지속 보이면 -> 회전 진입
