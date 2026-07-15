@@ -157,8 +157,8 @@ class LaneNode(Node):
         self.declare_parameter('sw_exit_frames', 0)       # RA 탈출 창. 0=off. 권장 60(~3s)
         self.declare_parameter('sw_entry_input', 'solid') # 진입 입력: solid(병합 사선 제거) | raw
         self.declare_parameter('sw_exit_input', 'raw')    # 탈출 입력: 좌측 경계가 점선 -> raw 필수
-        self.declare_parameter('sw_num_boxes', 9)         # 상자 개수
-        self.declare_parameter('sw_box_margin', 30)       # 상자 반폭(px)
+        self.declare_parameter('sw_num_boxes', 6)         # 상자 개수 (07-15 사용자: 9→6)
+        self.declare_parameter('sw_box_margin', 55)       # 상자 반폭(px) — 전폭 110 (07-15 사용자: 30→55)
         self.declare_parameter('sw_max_shift', 20)        # 상자당 이동 상한(px)
         self.declare_parameter('sw_min_box_px', 8)        # 상자 적중 최소 픽셀
         self.declare_parameter('sw_min_boxes', 3)         # 유효 피팅 최소 적중 상자

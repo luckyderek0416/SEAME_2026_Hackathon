@@ -279,7 +279,7 @@ class LaneDetector:
         self.sw_exit_frames = 0         # RA 탈출 창 길이(프레임). 0=off. 권장 60(~3s)
         self.sw_entry_input = 'solid'   # 진입 창 입력: 'solid'(dash 제거) | 'raw'
         self.sw_exit_input = 'raw'      # 탈출 창 입력: 점선이 좌측 경계라 raw 필수
-        self.sw_num_boxes = 9           # 상자 개수 (ROI 세로 분할)
+        self.sw_num_boxes = 6           # 상자 개수 (ROI 세로 분할; 07-15 사용자 9→6)
         self.sw_curv_max_a = 0.003      # 진입 창 우곡률 상한 (run87 실측: 링 -0.013~+0.0015,
                                         # B 가지 +0.006 — 초과 피팅 기각 = 개구부 가지 오물림 방지)
         # STOPLINE 분류기 (07-13 재설계): RA+코리도 중 "관통(coverage)+정면(각도)" 프레임만
@@ -291,7 +291,7 @@ class LaneDetector:
         self.stopline_sol_min = 0.55    # 정면 후보 solidity 하한 (레거시 0.80 대비 완화 = 재현율)
         self.last_stopline_cov = 0.0    # 디버그: 직전 프레임 커버리지
         self._sw_interior = None        # ('pair',fl,fr,_)|('single',abc,None,side) — 차로내부 정의
-        self.sw_box_margin = 30         # 상자 반폭(px)
+        self.sw_box_margin = 55         # 상자 반폭(px) — 전폭 110 (07-15 사용자)
         self.sw_max_shift = 20          # 상자당 중심 이동 상한(px) — 누운 실선 끌림/반대 가지 점프 차단
         self.sw_min_box_px = 8          # 상자 '적중' 최소 픽셀
         self.sw_min_boxes = 3           # 유효 피팅 최소 적중 상자 수 (2상자 노이즈로 곡선 금지)
