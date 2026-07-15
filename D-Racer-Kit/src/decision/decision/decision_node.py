@@ -213,7 +213,7 @@ class DecisionNode(Node):
         self.declare_parameter('gate_blank_s', 7.0)   # run80 값   # 잔상 '출생' 덮개 (군집 v2 — 무효 판정용, 무스케일)
         self.declare_parameter('gate_rearm_s', 0.5)          # 가로선이 이 시간 연속 OFF 여야 다음 카운트 무장
         self.declare_parameter('gate_cluster_gap_s', 1.8)    # 목격 간격 이 미만 = 같은 군집 (파편/2조각 병합)
-        self.declare_parameter('gate_cluster_on_s', 0.25)  # run80 값 (레거시 스트림용 B 스침 배제)    # 군집 누적 ON 카운트 문턱 (run76 약피처 0.19 배제, 실선 0.5+ 통과)
+        self.declare_parameter('gate_cluster_on_s', 0.20)  # run80 값 (레거시 스트림용 B 스침 배제)    # 군집 누적 ON 카운트 문턱 (run76 약피처 0.19 배제, 실선 0.5+ 통과)
         self.declare_parameter('ra_direct_fire', 0)   # 07-15 사용자: 게이트2 카운트 복귀 (완주 검증 이력 우선)   # 1=카운트 성립 즉시 발화 (07-15 포팅 — stopline_mode 1 필수 세트, 둘 다 소스 박제)
         # 이 조향적분 전에는 탈출 게이트 잠금 (링 중간 가짜선 차단).
         # 07-12 재배치 4.2 -> 3.6 (사용자 승인, B안): 4.2 는 진짜 탈출선 실측
