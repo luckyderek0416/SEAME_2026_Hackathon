@@ -32,10 +32,12 @@ class LaneNode(Node):
         # 정지선 직교성 게이트: 차선 대비 90°에서 이 각도(도) 이내면 정지선.
         # 0 = 비활성(측정 모드). 곡선 위에서 비스듬히 접근해도 통과한다.
         self.declare_parameter('crossline_perp_tol_deg', 20.0)
-        # BEV 가로/세로 스케일비(sx/sy). 07-10 실측 r=1.91. dst_ratio 변경 시 재측정.
-        # 07-15 저녁 워프 재캘리로 x스케일 x1.038 → 2.23 x 1.038 = 2.31 비례 갱신
-        # (해석적 — 시간 나면 정지선 포즈로 실측 재확인).
-        self.declare_parameter('crossline_bev_aspect', 2.31)
+        # BEV 가로/세로 스케일비(sx/sy). dst_ratio/카메라 각도 변경 시 재측정.
+        # 07-15 밤 실측 (카메라 각도 하향 후): 30x30mm 점선 마디 201표본의 BEV
+        # bbox 비 — 정사각형은 회전 불변으로 bbox비=sx/sy. 침식 스윕(블리드 제거)
+        # 1.35→1.39→1.44 수렴, 외삽 1.48. 구 각도 값 2.31은 오진입(가짜 crossline
+        # 직교 통과, race_t 9.5s) 원인으로 실증됨.
+        self.declare_parameter('crossline_bev_aspect', 1.48)
         self.declare_parameter('lane_heading_alpha', 0.2)
         self.declare_parameter('crossline_exclude_px', 6.0)  # 후보 선분 배제 반경(px)
         # HoughLinesP 파라미터 (정지선 선분 검출).
