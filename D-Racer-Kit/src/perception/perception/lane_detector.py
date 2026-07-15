@@ -407,6 +407,9 @@ class LaneDetector:
         self._sw_gate_dir = 0           # 이번 프레임의 방향 게이트 (0=게이트 없음)
         self._sw_wsteady = 0            # 흰 인계 연속 카운터 (구 종결자 — 07-14 흰이벤트로 대체, 미사용)
         self._sw_last_lean = 0.0        # 마지막 락 프레임의 기욺(top_x - bottom_x, px)
+        self._sw_last_xbot = 0.0        # 마지막 락 프레임의 하단 교점 x (텔레메트리)
+        self._sw_fail = None            # 이번 프레임 코리도 실패 사유 (텔레메트리)
+        self._sw_fitrej = None          # 이번 프레임 피팅 게이트 기각 사유 (텔레메트리)
         self._sw_locked_dbg = False     # 디버그 표기용: 이번 프레임 락 여부
         # --- 탈출→흰병합 재구현 (07-14 사용자 설계, _sw_dir>0 한정) ---
         # 항목1: 탈출 단선 락의 점선/실선 판별. 피팅 곡선을 따라 마스크 점유율을 재
@@ -1580,6 +1583,9 @@ class LaneDetector:
         ⑥ 관측 y범위 밖 외삽 금지(클램프).
         """
         self._sw_fit_dbg = []
+        # 진단 (07-15 텔레메트리): 이번 프레임 실패 사유 / 피팅 게이트 기각 사유
+        self._sw_fail = None
+        self._sw_fitrej = None
         m = src.copy()
         # (1) 정지선(가로줄) 행 제거
         row_on = np.count_nonzero(m, axis=1)
@@ -1610,6 +1616,7 @@ class LaneDetector:
             peaks.sort(reverse=True)
             seeds += [cx for _, cx in peaks[:max(1, int(self.sw_max_peaks))]]
         if not seeds:
+            self._sw_fail = 'noseed'
             return None
 
         # (3) 상자 체인
@@ -1653,21 +1660,26 @@ class LaneDetector:
             # 체인이 게이트를 통과해 np.concatenate([]) ValueError 로 노드가
             # 죽는다 (07-12 검증 리뷰 — 실차 주행 중 인지 상실 경로).
             if hit < max(1, int(self.sw_min_boxes)) or not pxs:
+                self._sw_fitrej = 'boxes'
                 return None
             xs = np.concatenate(pxs)
             ys = np.concatenate(pys)
             if xs.size < int(self.sw_min_pixels):
+                self._sw_fitrej = 'px'
                 return None
             y_lo, y_hi = float(ys.min()), float(ys.max())
             if (y_hi - y_lo) < 2.0 * bh:
+                self._sw_fitrej = 'span'
                 return None
             try:
                 a, b, c = np.polyfit(ys, xs, 2)
             except Exception:
+                self._sw_fitrej = 'fiterr'
                 return None
             pred = a * ys * ys + b * ys + c
             resid = float(np.mean(np.abs(pred - xs)))
             if resid > float(self.sw_max_resid_px):
+                self._sw_fitrej = 'resid'
                 return None
             x_top = a * y_lo * y_lo + b * y_lo + c
             x_bot = a * y_hi * y_hi + b * y_hi + c
@@ -1675,6 +1687,7 @@ class LaneDetector:
             # 방향 게이트: 기대 '반대' 방향 기욺만 기각한다 (직선은 통과 —
             # 진입 초반의 곧은 접근로 선, 탈출 후반의 펴진 탈출로 선이 대상).
             if lean * float(self._sw_gate_dir) < -float(self.sw_wrongdir_px):
+                self._sw_fitrej = 'wrongdir'
                 return None
             # 개방 구간: 방향 게이트 대신 절대 기욺 상한 — BEV 를 비스듬히
             # 가로지르는 정지선(실측 |lean| 102~148)을 기각, 코리도는 통과.
@@ -1683,6 +1696,7 @@ class LaneDetector:
             if ((self._sw_open or getattr(self, '_sw_mouth', False)
                     or getattr(self, '_sw_raw_frame', False))
                     and abs(lean) > float(self.sw_open_max_lean_px)):
+                self._sw_fitrej = 'lean'
                 return None
             return {'abc': (float(a), float(b), float(c)),
                     'y_lo': y_lo, 'y_hi': y_hi, 'resid': resid,
@@ -1707,6 +1721,7 @@ class LaneDetector:
                 f['boxes'] = boxes
                 fits.append(f)
         if not fits:
+            self._sw_fail = 'nofit'
             return None
 
         # 곡률 부호 가드 (run87 실측): 링 순환(진입 창) 중 B 개구부의 우곡률 가지
@@ -1715,6 +1730,7 @@ class LaneDetector:
         if self._sw_dir < 0 and float(getattr(self, 'sw_curv_max_a', 0.0)) > 0.0:
             fits = [f for f in fits if f['abc'][0] <= float(self.sw_curv_max_a)]
             if not fits:
+                self._sw_fail = 'curv'
                 return None
 
         def ev(f, y):
@@ -1796,6 +1812,7 @@ class LaneDetector:
                     xb_prev = getattr(self, '_sw_mouth_prev_xbot', None)
                     if (xb_prev is not None
                             and abs(best['x_bot'] - xb_prev) > 1.0 * half):
+                        self._sw_fail = 'jump'
                         return None
                     self._sw_mouth_prev_xbot = float(best['x_bot'])
                 else:
@@ -1810,6 +1827,7 @@ class LaneDetector:
                 #    일반 파이프라인(점선힌트/연속성/run105 유출차단, 76~80 검증)에 위임.
                 occ = self._curve_occupancy(m, best['abc'], best['y_lo'], best['y_hi'])
                 if occ > float(self.sw_exit_dash_occupancy_max):
+                    self._sw_fail = 'occ-solid'
                     return None                      # 실선 → 락 실패 계약 = 일반 폴백
                 side = float(self.sw_side_default)   # 점선 → 바깥(우측) 경계
             elif (self.drive_mode == 'ROUNDABOUT' and self.merge_zone
@@ -1831,6 +1849,7 @@ class LaneDetector:
                     and self._prev_center is not None
                     and abs((best['x_bot'] + side * half) - self._prev_center)
                     > 1.4 * half):
+                self._sw_fail = 'rawdev'
                 return None
             chosen = [best]
             for i in range(self.num_bands):
@@ -1841,6 +1860,7 @@ class LaneDetector:
                               float(self.num_bands - i), i))
             near_lanes = 1
         if not bands:
+            self._sw_fail = 'noband'
             return None
 
         # 상태/디버그 갱신 (락 성공시에만 — 실패 프레임은 시드 연속성 유지)
@@ -1859,6 +1879,7 @@ class LaneDetector:
             self._sw_interior_age = 0
         self._sw_prev_fit = best['abc']
         self._sw_last_lean = best['lean']
+        self._sw_last_xbot = float(best['x_bot'])   # 텔레메트리 (07-15)
         boxes_dbg = []
         for f in chosen:
             boxes_dbg += f.get('boxes', [])

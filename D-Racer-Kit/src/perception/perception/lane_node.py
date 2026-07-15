@@ -450,6 +450,39 @@ class LaneNode(Node):
             self.get_logger().info(f'param live-updated: {n} = {v}')
         return SetParametersResult(successful=True)
 
+    def _sw_telemetry(self):
+        """v2.1 진단 로그 (07-15, 동작 무변경): 전이는 1회, 코리도는 ~1Hz,
+        개구부(mouth)는 매 프레임. 현장 질문('① 발동했나 / mouth가 뭘 물었나')에
+        로그로 답하기 위한 것 — 분석 후 제거해도 무방."""
+        d = self.detector
+        self._tf = getattr(self, '_tf', 0) + 1
+        fy = bool(getattr(d, '_following_yellow', False))
+        if fy != getattr(self, '_prev_fy', False):
+            self.get_logger().info(f'[Y-LATCH] following_yellow -> {int(fy)}')
+            self._prev_fy = fy
+        st = bool(getattr(d, '_sw_starve_on', False))
+        if st != getattr(self, '_prev_starve', False):
+            self.get_logger().warning(
+                f'[SW-STARVE] 실선기근 raw폴백 {"ON" if st else "OFF"} '
+                f'(kind={getattr(d, "_sw_kind", "")} left={int(getattr(d, "_sw_left", 0))})')
+            self._prev_starve = st
+        mo = bool(getattr(d, '_sw_mouth', False))
+        if mo != getattr(self, '_prev_mouth', False):
+            self.get_logger().info(f'[SW-MOUTH] {"진입" if mo else "종료"}')
+            self._prev_mouth = mo
+        if int(getattr(d, '_sw_left', 0)) > 0 and (mo or self._tf % 20 == 0):
+            pc = getattr(d, '_prev_center', None)
+            self.get_logger().info(
+                f'[SW] kind={getattr(d, "_sw_kind", "")} dir={int(getattr(d, "_sw_dir", 0))} '
+                f'left={int(getattr(d, "_sw_left", 0))} '
+                f'lock={int(bool(getattr(d, "_sw_locked_dbg", False)))} '
+                f'raw={int(bool(getattr(d, "_sw_raw_frame", False)))} '
+                f'side={float(getattr(d, "_sw_last_side", 0.0)):g} '
+                f'xbot={float(getattr(d, "_sw_last_xbot", 0.0)):.0f} '
+                f'lean={float(getattr(d, "_sw_last_lean", 0.0)):.0f} '
+                f'fail={getattr(d, "_sw_fail", None)}/{getattr(d, "_sw_fitrej", None)} '
+                f'pc={"-" if pc is None else int(pc)}')
+
     def on_fork_dir(self, msg: String):
         d = msg.data.strip().lower()
         self.detector.fork_dir = d if d in ('left', 'right') else None
@@ -494,6 +527,7 @@ class LaneNode(Node):
         out.red_ratio = float(red_ratio)
         self.pub.publish(out)
         self.merge_done_pub.publish(Bool(data=bool(getattr(self.detector, '_merge_done', False))))
+        self._sw_telemetry()
 
         if self.crossline_dbg_pub is not None:
             cands = getattr(self.detector, 'last_crossline_cands', [])
