@@ -131,6 +131,7 @@ class DecisionNode(Node):
 
         # ----- 회전교차로 (junction 카운트, IMU 없음) -----
         self.declare_parameter('enter_sustain_s', 0.2)   # 07-15 run80 원값 복원 — run_c 실측: 접근 오발 2f vs 진짜 A 13f (0.2s=4f 로 오발 차단+A 여유)
+        self.declare_parameter('ra_latch_blank_s', 10.0)  # Y래치 후 이 시간 RA 진입 무시 (07-15 사용자: 10s). 0=off
         self.declare_parameter('ra_min_drive_s', 7.5)    # 출발 후 이 시간 전엔 RA 진입 금지 (입구 오진입 차단)
                                                          # 07-11 run12: 1L 진입 성공으로 진짜 정지선 도착이 9.3s 로
                                                          # 당겨져 10.0 이 진짜 진입을 차단 -> 7.5 (가짜 5.9s +1.6 여유,
@@ -271,6 +272,7 @@ class DecisionNode(Node):
             'fork_hold_s': float(g('fork_hold_s').value),
             'enter_sustain_s': float(g('enter_sustain_s').value),
             'ra_min_drive_s': float(g('ra_min_drive_s').value),
+            'ra_latch_blank_s': float(g('ra_latch_blank_s').value),
             'enter_max_curvature': float(g('enter_max_curvature').value),
             'turn_direction': turn_direction,
             'branch_bias': float(g('branch_bias').value),
@@ -321,7 +323,7 @@ class DecisionNode(Node):
             'fork_bias', 'fork_hold_s',           # 갈림길 편향 세기 / 유지 시간
             'branch_bias',                        # In/Out 색상 편향 (기본 0=off, 현장 재활성용)
             'roundabout_exit_gates',              # 회전교차로 탈출 게이트 카운트 (트랙 실측)
-            'enter_sustain_s', 'ra_min_drive_s',  # 진입 debounce / 진입 무장 지연
+            'enter_sustain_s', 'ra_min_drive_s', 'ra_latch_blank_s',  # 진입 debounce / 진입 무장 지연
             'enter_max_curvature',                # 곡선 구간 크로스라인 오인식 차단
             'entry_lock_release_s', 'entry_steer_bias',   # 진입 락온 시간 / 진입 피드포워드
             'exit_lock_release_s', 'exit_steer_bias',     # 탈출 락 시간 / 탈출 피드포워드

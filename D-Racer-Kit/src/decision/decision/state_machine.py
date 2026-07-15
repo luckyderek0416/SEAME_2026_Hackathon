@@ -75,6 +75,7 @@ class RaceStateMachine:
         self._speed_scale = 1.0       # RA 진입 시 확정: clamp(race_t/ra_ref_drive_s)
         self._y_run = 0               # Y래치 감지 연속 카운터 (스로틀 보정용)
         self._latch_seen = False      # 런당 1회
+        self._y_latch_t = None        # Y래치 확정 시각(race_t) — RA 진입 블랭크 기준점
         self.throttle_adj = 0.0       # 순항 스로틀 가산 보정 (decision_node 가 적용)
         self.yaw_proxy = 0.0          # IMU 없는 헤딩 추정치 (조향 적분)
         self._entry_votes = 0         # 마지막 회전교차로 진입 투표 수 (디버그/로그)
@@ -280,6 +281,7 @@ class RaceStateMachine:
                 self._y_run += 1
                 if self._y_run >= int(self.cfg.get('y_latch_frames', 10)):
                     self._latch_seen = True
+                    self._y_latch_t = self.race_t
                     ref = max(1e-3, float(self.cfg.get('throttle_ref_latch_s', 4.6)))
                     dev = self.race_t / ref - 1.0
                     lim = float(self.cfg.get('throttle_adapt_max', 0.015))
@@ -369,7 +371,14 @@ class RaceStateMachine:
             # 진짜 정지선 도달은 12초+ (auto2/3 실측 12.4~12.9초) 이므로 시간 가드.
             # 중간 배치 테스트 시 ra_min_drive_s=0 으로 끌 것.
             armed_t = self.race_t >= self.cfg.get('ra_min_drive_s', 0.0)
-            if self.cfg['course'] == 'in' and not self.roundabout_done and armed_t:
+            # Y래치 후 블랭크 (07-15 사용자): 첫 좌회전에서 노란 차선이 크로스라인으로
+            # 오인되는 구간(실측 래치+3.2s)을 래치 '이벤트' 기준으로 덮는다. 진짜 A는
+            # 래치+17s+ 라 여유. 래치 미발생 시엔 미적용(ra_min_drive_s 가 커버). 0=off.
+            lb = float(self.cfg.get('ra_latch_blank_s', 0.0))
+            in_latch_blank = (lb > 0.0 and self._y_latch_t is not None
+                              and (self.race_t - self._y_latch_t) < lb)
+            if (self.cfg['course'] == 'in' and not self.roundabout_done
+                    and armed_t and not in_latch_blank):
                 on_yellow = lane.yellow_ratio >= self.cfg['yellow_enter_ratio']
                 gate = on_yellow if self.cfg['use_yellow_entry'] else True
                 # 곡률 게이트: 급커브에서는 노란 차선 자체가 '수평에 가까운 선'으로 보여
