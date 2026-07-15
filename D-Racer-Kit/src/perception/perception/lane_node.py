@@ -135,6 +135,11 @@ class LaneNode(Node):
         # 조기 래치 이탈(07-11, 3회) -> 0.03. 07-12: 분기 yr 피크 런별 0.026~0.095
         # 실측 -> 라이브 0.02 운용 (aux.sh).
         self.declare_parameter('follow_yellow_ratio', 0.02)         # 이 노란비율 이상 -> YELLOW 모드 진입 (07-12 실측 분기 yr 0.026~0.095 → 운용 0.02 박제)
+        # --- W→Y 인계 크로스페이드 (07-15 사용자 설계: 원거리 노랑 조기 래치 → 좌붙음 억제) ---
+        self.declare_parameter('yw_handover', 1)                    # 1=합성 인계 (0=off 즉시 래치=구동작)
+        self.declare_parameter('yw_handover_bottom_frac', 0.33)    # '도달' 판정 하단 밴드 높이 비율
+        self.declare_parameter('yw_handover_arrive_ratio', 0.03)   # 하단 밴드 노란 비율 문턱 (도달=확정 래치)
+        self.declare_parameter('follow_yellow_confirm_frames', 3)  # 래치 후보 연속 프레임 (반사광 방어, 1=구동작)
                                                                     # (노란선이 점선이라 yr 이 낮음)
         self.declare_parameter('follow_yellow_exit_white_ratio', 1.0)  # 흰픽셀 > 이 배율*노란픽셀 (해제 조건 일부)
         self.declare_parameter('follow_yellow_exit_yellow_frac', 3.0)  # 해제 노랑문턱 = 진입문턱*이 비율 (run95 병합 처방 — RA 후 전용 스코프, RA 전 0.75 캡은 detector 박제)
@@ -286,6 +291,10 @@ class LaneNode(Node):
         self.detector.follow_yellow_exit_yellow_frac = float(gp('follow_yellow_exit_yellow_frac').value)
         self.detector.follow_yellow_exit_frames = int(gp('follow_yellow_exit_frames').value)
         self.detector.follow_yellow_exit_frames_exit = int(gp('follow_yellow_exit_frames_exit').value)
+        self.detector.yw_handover = int(gp('yw_handover').value)
+        self.detector.yw_handover_bottom_frac = float(gp('yw_handover_bottom_frac').value)
+        self.detector.yw_handover_arrive_ratio = float(gp('yw_handover_arrive_ratio').value)
+        self.detector.follow_yellow_confirm_frames = int(gp('follow_yellow_confirm_frames').value)
         self.detector.w_align_frames = int(gp('w_align_frames').value)
         self.detector.w_align_gain = float(gp('w_align_gain').value)
         self.detector.w_align_min_px = int(gp('w_align_min_px').value)

@@ -189,6 +189,17 @@ class LaneDetector:
         self.follow_yellow_exit_frames = 10         # 해제 조건 연속 프레임 수 (~0.3s@30fps)
         # 탈출(SW 창) 중에는 해제를 빠르게 — run59: 해제가 늦어 흰 정렬 시작도 늦음. 0=전역값.
         self.follow_yellow_exit_frames_exit = 4
+        # W→Y 인계 크로스페이드 (07-15 사용자 설계): 카메라는 원거리 각도 유지 —
+        # 노랑이 '보이는' 시점(원거리)엔 래치하지 않고(pending) 흰∪노랑 합성으로
+        # 추종하다가, 노랑이 하단 밴드에 물리적으로 '도달'한 프레임에 확정 래치.
+        # 확정 시점에 코리도 재타겟/1L/실선필터 등 Y 전용 로직이 일제히 발동하므로
+        # '원거리 노랑을 향한 미리 조향 → 좌측 선붙음 → 코너 안쪽 바퀴 이탈'을
+        # 시점 지연 없이(이벤트 기준, 속도 무관) 제거한다. 0=off(즉시 래치=구동작).
+        self.yw_handover = 1
+        self.yw_handover_bottom_frac = 0.33   # '도달' 판정 하단 밴드 높이 비율
+        self.yw_handover_arrive_ratio = 0.03  # 하단 밴드 노란 비율 문턱 (도달=확정 래치)
+        self.follow_yellow_confirm_frames = 3 # 래치 후보 연속 프레임 (반사광 1프레임 방어)
+        self._y_conf_count = 0                # 래치 후보 연속 카운터 (pending 판정용)
         # 흰 인계(핸드오버) 창 (07-12 run59 실증): RA 탈출 후 Y래치 해제 순간부터
         # N프레임 동안 ① 흰 track 점선 제거 — 이 트랙 흰 도로는 양측 실선뿐, 점선은
         # 합류부 개구부 표식이라 차선이 아님 ② 노란 꼬리를 track 에 유지 — 병합
@@ -763,9 +774,27 @@ class LaneDetector:
                      and self._ra_seen and self._w_align_left > 0)
                     or (self._ra_seen and self._merge_done))
                 if yellow_ratio >= self.follow_yellow_ratio and not relatch_blocked:
-                    self._following_yellow = True
-                    self._yellow_exit_count = 0
-                    self._oneline_used = False   # 새 래치 -> 1L 1회 사용권 리셋
+                    self._y_conf_count += 1
+                else:
+                    self._y_conf_count = 0
+                if (self._y_conf_count
+                        >= max(1, int(self.follow_yellow_confirm_frames))):
+                    # 인계 크로스페이드 (__init__ yw_handover 주석): pending 동안은
+                    # 아래 비래치 분기의 W∪Y 합성이 추종을 담당, 여기서는 노랑의
+                    # 하단 밴드 '도달'만 감시해 확정 래치 시점을 정한다.
+                    arrived = True
+                    if int(getattr(self, 'yw_handover', 0)) == 1:
+                        hb0 = int(ymask.shape[0]
+                                  * (1.0 - float(self.yw_handover_bottom_frac)))
+                        band = ymask[hb0:, :]
+                        yr_b = (float(np.count_nonzero(band))
+                                / float(max(1, band.size)))
+                        arrived = yr_b >= float(self.yw_handover_arrive_ratio)
+                    if arrived:
+                        self._following_yellow = True
+                        self._yellow_exit_count = 0
+                        self._oneline_used = False   # 새 래치 -> 1L 1회 사용권 리셋
+                        self._y_conf_count = 0
             elif self.drive_mode != 'ROUNDABOUT' and not exit_active:
                 # WHITE 복귀 = "노랑 소실" AND "흰 우세" 연속 N프레임 (__init__ 주석).
                 # ⚠️ 탈출창(exit_active) 중에는 평가 금지 — 흰 실선 이벤트가 전담.
@@ -878,6 +907,15 @@ class LaneDetector:
                     self._yw_carry = 0
             else:
                 sel = wmask
+                if (self._w_align_left <= 0
+                        and int(getattr(self, 'yw_handover', 0)) == 1
+                        and self._y_conf_count
+                        >= max(1, int(self.follow_yellow_confirm_frames))):
+                    # 인계 크로스페이드 pending: 흰∪노랑 합성 추종. 밴드 가중이
+                    # 하단(눈앞 흰) 지배라 조향은 현재 차선을 유지하고, 상단의
+                    # 원거리 노랑은 곡률 예측에만 기여한다. 확정 전환은 위 래치
+                    # 블록의 하단 도달 이벤트가 담당.
+                    sel = cv2.bitwise_or(wmask, ymask)
                 if self._w_align_left > 0:
                     # 인계 창: 흰 점선(합류부 표식) 제거 + 노란 꼬리 유지
                     wf = self._filter_yellow_dashes(wmask)
@@ -901,6 +939,7 @@ class LaneDetector:
             self._dash_fallback_on = False
             self._solid_ok_count = 0
             self._yw_carry = 0
+            self._y_conf_count = 0
 
         # 차선 주축 a_h = dx/dy 갱신 (다음 프레임 정지선 직교 게이트용). 정지선 스캔
         # 창과 '같은 행 범위'에서만 잰다 — 전체 피팅은 휜 실선에서 국소 접선이 아닌
@@ -1839,7 +1878,12 @@ class LaneDetector:
         # 상태 텍스트 (프레임이 겨우 ~320x72: 폰트를 아주 작게 유지)
         follow_tag = ''
         if self.follow_yellow and self.course == 'in':
-            follow_tag = '  FOLLOW-Y' if self._following_yellow else '  FOLLOW-W'
+            _pend = (not self._following_yellow
+                     and int(getattr(self, 'yw_handover', 0)) == 1
+                     and self._y_conf_count
+                     >= max(1, int(self.follow_yellow_confirm_frames)))
+            follow_tag = ('  FOLLOW-Y' if self._following_yellow
+                          else ('  FOLLOW-W+Y' if _pend else '  FOLLOW-W'))
             if self._oneline_left > 0:
                 follow_tag += '[1L]'   # 진입 병합 모드 활성 (남은 프레임 있음)
             if self._sw_left > 0 or self._sw_locked_dbg:
