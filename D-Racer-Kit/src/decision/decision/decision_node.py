@@ -107,14 +107,14 @@ class DecisionNode(Node):
         # 3프레임(0.1s)이 뚫려 조기 출발한 사례 -> 10프레임(0.33s) 연속 요구.
         # 진짜 초록불은 상시 점등이라 출발 지연 영향은 ~0.2s 뿐.
         self.declare_parameter('green_frames', 10)
-        self.declare_parameter('red_frames', 3)
+        self.declare_parameter('red_frames', 20)  # 07-16 사용자: 빈 신호등 오인식 정지 → 20 (~0.7s 연속)
         # 빨간불 대기 무장: 주 조건은 장애물 미션 완료(obstacle_done, 코스 순서 고정).
         # finish_min_drive_s 는 아루코를 통째로 놓친 비상 주행용 예비 무장 —
         # 이 시간(초) 경과 시 장애물 미완이어도 빨간불 인식을 켠다.
         # 실측 코스 소요시간보다 여유 있게 길게 설정할 것. 신호등 bbox 최소 면적
         # (정규화 w*h, 0=off)도 함께 — 멀리 있는 작은 오검출 박스 필터.
         self.declare_parameter('finish_min_drive_s', 60.0)
-        self.declare_parameter('light_min_area', 0.0)
+        self.declare_parameter('light_min_area', 0.002)  # 07-16 사용자: 먼/작은 오검출 박스 필터
         # 빨간 도로(ArUco 장애물 구간) 감지 임계. ROI 중 빨간 픽셀 비율이 이 값 이상이면
         # (1) DRIVE 스로틀을 slow_throttle 로 묶어 미리 감속하고,
         # (2) 그 구간 안에서는 marker_area_trigger 를 무시하고 마커가 보이는 즉시 정지한다.
@@ -213,8 +213,9 @@ class DecisionNode(Node):
         self.declare_parameter('entry_lock_release_s', 3.0)  # 진입측 락온 강제 해제 시간 (07-11 오후: 저속 대응 2->3s)
         # 탈출 락 (07-11 run20, 방안1): RA 탈출 순간부터 이 시간 동안 조향에 직접
         # (post-PID) 우측 편향 -> 개구부의 차선 소실에도 우회전 유지. fork_bias 대체.
-        self.declare_parameter('exit_steer_bias', 0.18)      # 양수 = 탈출측(우)
-        self.declare_parameter('exit_lock_release_s', 2.5)
+        self.declare_parameter('exit_steer_bias', 0.3)       # 양수 = 탈출측(우) — 07-16 사용자: 0.25→0.3
+        self.declare_parameter('exit_lock_release_s', 3.5)  # 07-16 사용자: 2.5→3.5 (fix6 소실보고 커버 확장)
+        self.declare_parameter('exit_straight_s', 0.1)       # 발화 직후 직진 유지 시간 (07-16 사용자: 침묵0.3 중 직진0.1+우향0.2)
         # 진입 락온 중 조향 피드포워드 (음수 = 링 안쪽/좌). 진입 급좌회전 언더스티어
         # 대응 — 총 편향 0.15 는 언더스티어 재발(run15), -0.22 사용자 지정.
         self.declare_parameter('entry_steer_bias', 0.0)   # 07-15 밤 사용자: 진입 0~3s 자율 조향 (0=FF off, 복원값 -0.15)
@@ -310,6 +311,7 @@ class DecisionNode(Node):
             'entry_lock_release_s': float(g('entry_lock_release_s').value),
             'exit_steer_bias': float(g('exit_steer_bias').value),
             'exit_lock_release_s': float(g('exit_lock_release_s').value),
+            'exit_straight_s': float(g('exit_straight_s').value),
             'entry_steer_bias': float(g('entry_steer_bias').value),
             'gate_blank_s': float(g('gate_blank_s').value),
             'gate_cluster_gap_s': float(g('gate_cluster_gap_s').value),
@@ -337,6 +339,7 @@ class DecisionNode(Node):
             'enter_max_curvature',                # 곡선 구간 크로스라인 오인식 차단
             'entry_lock_release_s', 'entry_steer_bias',   # 진입 락온 시간 / 진입 피드포워드
             'exit_lock_release_s', 'exit_steer_bias',     # 탈출 락 시간 / 탈출 피드포워드
+            'exit_straight_s',                            # 발화 직후 직진 유지 시간
             'gate_blank_s', 'gate_rearm_s', 'yaw_gate_min',
             'gate_cluster_gap_s', 'gate_cluster_on_s',
             'ra_ref_drive_s',                     # 속도 스케일 기준 (G->RA 소요시간)

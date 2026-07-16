@@ -179,7 +179,7 @@ class LaneNode(Node):
         self.declare_parameter('oneline_release_pair_k', 5)      # 1L 조기해제 페어 연속 프레임. 0=이벤트 해제 off
         self.declare_parameter('sw_drive_always', 1)             # IN 전구간 코리도 (07-14 밤). 0=off(라이브 킬 → 기존 스택 복귀)
         self.declare_parameter('crossline_sw_heading', 1)        # 정지선 직교 게이트 헤딩 = 코리도 접선. 0=구식 EMA
-        self.declare_parameter('sw_exit_mouth_frames', 40)       # 탈출 개구부: 점선 전용 입력+좌경계 고정 프레임 (07-15 사용자 설계, run_c 방어). 0=off
+        self.declare_parameter('sw_exit_mouth_frames', 100)      # 탈출 개구부 창 (07-16 사용자: 4s→5s, 노랑강제 5s 정합). 0=off
         self.declare_parameter('sw_exit_mouth_top_frac', 0.40)   # 개구부 입력 상단 제거 비율 (분기 너머 진입로 체인 차단)
         # --- 07-15 v2.1 (전 코스 감사 반영) ---
         self.declare_parameter('sw_exit_mouth_input', 'raw')     # 개구부 입력: raw(점선 프리필터+최우측+동적 side) | solid(구 bc3f325)

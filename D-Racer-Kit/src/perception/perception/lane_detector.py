@@ -382,7 +382,7 @@ class LaneDetector:
         # 점선 틈은 상자 체인의 빈상자 추세 전진이 메꾼다. 락 실패 폴백 = 일반
         # 파이프라인(fork 가이드 우측 시드). 만료 후엔 기존 검증 로직(occupancy
         # 판별 + 우측 경계) 복귀. 0=off (라이브 킬스위치).
-        self.sw_exit_mouth_frames = 40      # ~2s@20fps
+        self.sw_exit_mouth_frames = 100     # ~5s@20fps (07-16 사용자: 4s→5s, 노랑 강제 5s와 정합)
         self.sw_exit_mouth_top_frac = 0.40  # 입력 상단 제거 비율 (원거리 차단)
         self._sw_mouth = False              # 이번 프레임이 개구부 구간인지
         # --- v2.1 (07-15 전 코스 감사 반영) ---
@@ -402,6 +402,9 @@ class LaneDetector:
         # crossline Y래치 전 억제 (감사 handover-1): 1=Y래치 전 crossline 평가 금지
         self.crossline_require_y = 1
         self.sw_open_max_lean_px = 90.0 # 개방 구간 |기욺| 상한 (정지선 대각선 실측 102+)
+        self.sw_mouth_pc_floor = 150.0  # 개구부 발행 중심 하한 (fix8)
+        self.sw_mouth_delay_f = 6       # 발화→mouth 진입 지연 (fix15e, 0.3s@20fps — 사용자 확정; 0=구동작)
+        self.exit_yw_min_f = 100        # 발화→흰 전환 허용 최소 프레임 (07-16 사용자: 4s→5s)
         self._sw_open = False           # 이번 프레임이 개방 구간인지
         self._sw_len = 0                # 무장 시점의 창 길이 (age 계산용)
         self._sw_gate_dir = 0           # 이번 프레임의 방향 게이트 (0=게이트 없음)
@@ -835,6 +838,40 @@ class LaneDetector:
                         self._y_conf_count = 0
                         self._y_arrive_count = 0
                         self._y_latch_hold = 20      # 플랩 디바운스 min-hold (1s@20fps)
+                        self._yx_zero_count = 0      # fix10: 탈출 인계 카운터 리셋
+            elif exit_active:
+                # 07-16 fix13 (사용자 확정): 탈출로는 노란 구간 — 발화 후
+                # exit_yw_min_f(4s) 전에 전방 흰 구간이 보여 조기 전환하면
+                # 노란 경계를 버리고 차선을 잃는다 (08:59 런 +1.8s 조기 전환).
+                # 4초 전에는 무조건 drive[y] 유지, 이후에만 아래 인계 평가.
+                if ((self._sw_len - self._sw_left)
+                        < int(getattr(self, 'exit_yw_min_f', 80))):
+                    self._yx_zero_count = 0
+                    pass_gate = False
+                else:
+                    pass_gate = True
+                # 07-16 fix10 (사용자 확정): 탈출창 전용 노랑→흰 인계.
+                # 탈출 중에는 노랑만 본다(아래 following_yellow 마스크). 단
+                # '노랑이 아예 안 보이고 흰만 보이는' 상태가 지속되면 병합
+                # 도달로 보고 즉시 흰 전용으로 전환한다 — 기존에는 탈출창 중
+                # 해제 평가가 전면 금지라 흰 실선 이벤트 미발화 시 노랑 모드에
+                # 고착(병합 장님)됐다.
+                wcount = int(np.count_nonzero(wmask))
+                if (pass_gate
+                        and yellow_ratio < float(getattr(self, 'exit_y_zero_ratio', 0.005))
+                        and wcount > int(getattr(self, 'exit_w_min_px', 150))):
+                    self._yx_zero_count = getattr(self, '_yx_zero_count', 0) + 1
+                    if (self._following_yellow and self._yx_zero_count
+                            >= int(getattr(self, 'exit_yw_frames', 6))):
+                        self._following_yellow = False
+                        self._yellow_exit_count = 0
+                        self._yx_zero_count = 0
+                        self._oneline_left = 0
+                        self._merge_done = True   # 원웨이: 이후 Y 재래치 금지
+                        if int(self.w_align_frames) > 0:
+                            self._w_align_left = int(self.w_align_frames)
+                else:
+                    self._yx_zero_count = 0
             elif self.drive_mode != 'ROUNDABOUT' and not exit_active:
                 # WHITE 복귀 = "노랑 소실" AND "흰 우세" 연속 N프레임 (__init__ 주석).
                 # ⚠️ 탈출창(exit_active) 중에는 평가 금지 — 흰 실선 이벤트가 전담.
@@ -1141,6 +1178,8 @@ class LaneDetector:
                 self._sw_interior = None     # RA 밖에선 STOPLINE 분류기 비활성 보장
                 self._sw_mouth_prev_xbot = None   # 개구부 점프 가드 기준 초기화
                 self._sw_mouth_jumpfail = 0
+                self._sw_mouth_hist = []          # fix9: 우측 쓸림 서명 이력
+                self._sw_mouth_rflag = False      # fix9: 우측 재분류 래치
                 self._sw_straight = 0
             self._prev_drive_mode = self.drive_mode
 
@@ -1254,11 +1293,18 @@ class LaneDetector:
         if self._sw_left > 0:
             self._sw_left -= 1
             # 개구부 구간 판정 (__init__ sw_exit_mouth_frames 주석): 발화 직후 N프레임
+            # fix11 (07-16 사용자 확정): 발화 직후엔 오른쪽 실선이 아직 시야에
+            # 있어 이를 물고 우측 이탈 — 지연(0.6s) 동안은 탈출 인지를 침묵시켜
+            # 고정 우향 창이 전담하고, 오른쪽 선이 지나간 뒤 열리는 mouth 에서
+            # 빨강(쐐기)/파랑(점선)만 보고 조향한다. 0 = 구 동작.
+            age_x = self._sw_len - self._sw_left
+            delay_f = int(getattr(self, 'sw_mouth_delay_f', 12))
+            self._sw_mouth_wait = (self._sw_dir > 0 and age_x < delay_f)
             self._sw_mouth = (
                 self._sw_dir > 0
                 and int(getattr(self, 'sw_exit_mouth_frames', 0)) > 0
-                and (self._sw_len - self._sw_left)
-                <= int(self.sw_exit_mouth_frames))
+                and delay_f <= age_x
+                <= delay_f + int(self.sw_exit_mouth_frames))
             src = None
             # 탈출 창은 Y래치 해제 후에도 노란 입력 유지 (run53: 점선 꼬리가 병합
             # 방향의 마지막 정보 — 눈 감으면 직진 표류 13s). 꼬리 소진까지 추적,
@@ -1358,7 +1404,14 @@ class LaneDetector:
                     span, sol = self._white_solid_span(wsrc, roi_h, band_h)
                     wsolid = (span >= float(self.sw_exit_white_min_span_px)
                               and sol >= float(self.sw_exit_white_solidity_min))
-                self._sw_white_confirm = self._sw_white_confirm + 1 if wsolid else 0
+                # fix15d (07-16, 11:26런 +2.1s 조기 해제): 이 흰 실선 종결자가
+                # 노랑 강제 게이트(fix13)를 우회했다 — 같은 5s 게이트 적용.
+                if ((self._sw_len - self._sw_left)
+                        < int(getattr(self, 'exit_yw_min_f', 100))):
+                    self._sw_white_confirm = 0
+                else:
+                    self._sw_white_confirm = (self._sw_white_confirm + 1
+                                              if wsolid else 0)
                 if self._sw_white_confirm >= int(self.sw_exit_white_confirm_frames):
                     # 확정: 그 프레임부터 탈출창 종료 + Y래치 해제. 다음 프레임부터
                     # 기존 흰 추종(else: sel=wmask)이 자연 인계. 원웨이 병합 래치 장전.
@@ -1490,6 +1543,10 @@ class LaneDetector:
         # 대응). 창 안 + "소실->단선 재획득"에만 적용 — RA 전체 적용은 과범위(run25).
         if (self.drive_mode == 'ROUNDABOUT' and self.merge_zone
                 and self._reacq_right_active):
+            return line - half, 1
+        # fix15: 병합 직후 w_align 창 — 흰 실선 = 우측 경계 (사용자 확정 기하,
+        # 중심 = 실선 - half = 실선의 왼쪽).
+        if self._ra_seen and self._merge_done and self._w_align_left > 0:
             return line - half, 1
         # 대신 "점선의 반대편 경계"라는 코스 구조로 좌/우를 정한다. 오른쪽 실선이
         # 차 왼쪽에 보여도 (점선이 그보다 더 왼쪽에 있으면) 오른쪽 경계로 맞게
@@ -1798,6 +1855,12 @@ class LaneDetector:
             # 좌/우 분류 우선순위 = _combine_lr 과 일치 (07-12 검증 리뷰):
             # 재획득 우측고정 > 점선 힌트(이격 조건) > 직전 중심 연속성 > 기본값.
             # 연속성만 쓰면 run22~24 오분류 서명이 SW 프레임에서 재발.
+            if getattr(self, '_sw_mouth_wait', False):
+                # fix11: 발화→mouth 지연 창 — 인지 침묵 (소실 계약 → 결정층의
+                # 발화후 고정 우향 창이 전담). 오른쪽 실선이 시야를 빠져나가는
+                # 0.6s 동안 어떤 선도 물지 않는다.
+                self._sw_fail = 'mouthwait'
+                return None
             if self._sw_dir > 0 and getattr(self, '_sw_mouth', False):
                 if str(getattr(self, 'sw_exit_mouth_input', 'raw')) == 'raw':
                     # 개구부 v2.1 (07-15, 감사 exitmouth-1/2 반영):
@@ -1824,11 +1887,25 @@ class LaneDetector:
                         if xb_prev is not None:
                             best = min(dash,
                                        key=lambda f: abs(f['x_bot'] - xb_prev))
+                            # 기하 정답 = 이 경계는 탈출 차선의 '좌측'
+                            # → side=+1 고정 (중심 = 선 + 반차폭 우측).
+                            side = 1.0
                         else:
-                            best = max(dash, key=lambda f: f['x_bot'])
-                        # 기하 정답 = 이 경계는 탈출 차선의 '좌측' (07-16 3런 검증)
-                        # → side=+1 고정 (중심 = 선 + 반차폭 우측).
-                        side = 1.0
+                            # fix7 (07-16 사용자 ddd.jpg): 첫 락 시드가 '최우측
+                            # 점선'이면 발화 순간 초록(오른쪽) 열을 +1 로 물어
+                            # 중심을 오른쪽 갈래 밖으로 조준 → 우측 이탈
+                            # (4574 171→266, lean +25→+70 = 오른쪽 열 서명).
+                            # 시드 우선순위: ① 실선(쐐기) — 성공 런 첫 락 전부
+                            # 실선 235~253. ② 점선뿐이면 '최좌측'(파란 열 =
+                            # 확정 추종선; 초록 열 = 최우측이라 자동 배제).
+                            solids = [f for f in fits if f not in dash]
+                            if solids:
+                                best = min(solids, key=lambda f: f['resid'])
+                                # fix12: mouth 의 모든 선 = 좌측 경계 (+1 고정)
+                                side = 1.0
+                            else:
+                                best = min(dash, key=lambda f: f['x_bot'])
+                                side = 1.0
                     else:
                         # 07-16 v3 (사용자 확정: 인계 방향은 점선→실선):
                         # 탈출 중 추종하는 경계는 스템의 점선 열(파랑)이 꼭짓점에서
@@ -1843,26 +1920,54 @@ class LaneDetector:
                                        key=lambda f: abs(f['x_bot'] - xb_prev0))
                             side = 1.0
                         else:
-                            # 궤적 없음(개구부 첫 락이 실선): 쐐기 규칙 유지 —
-                            # 초반(age<=20f)=쐐기=+1, 이후 좌반+1/우반-1 (fix2).
-                            age_m = self._sw_len - self._sw_left
-                            side = (1.0 if (age_m <= 20
-                                            or best['x_bot'] < w / 2.0)
-                                    else -1.0)
-                    # 프레임간 선택 점프 가드: 0.5x차폭 초과 = 이웃 점선/노이즈 —
-                    # 이 프레임 락 포기 (시드 연속성 유지, 기준값 미갱신)
+                            # fix12 (07-16 사용자 확정): 침묵 후 mouth 의 모든 선
+                            # = 파랑/빨강 좌측 경계 → +1 고정 (구 쐐기 -1 분기 제거).
+                            side = 1.0
+                    # 프레임간 선택 점프 가드 v2 (07-16 fix6, 3런 데이터 확정):
+                    # 우회전 통과 중 추종선은 화면에서 '항상 왼쪽으로만' 흐른다
+                    # (쐐기→점선 인계 = 좌향 활강, burst2 233→49 정상 / 4568
+                    # 85→149 스냅백·4574 70→171→266 이탈은 전부 '우향 점프').
+                    #  · 좌향 점프: 2.0x반차폭까지 허용 (자연 인계 방향)
+                    #  · 우향 점프: 1.0x반차폭 초과 기각 (반대 열/우측 경계)
+                    #  · 구 '3연속 실패 → 기준 리셋(무조건 수용)' 뒷문 삭제 —
+                    #    01:23 xbot31, 4574 171 수용이 전부 이 뒷문. 계속 실패면
+                    #    소실로 보고한다 (decision 의 발화후 2.5s 고정 우향 창이
+                    #    전담 — 잘못된 확신보다 정직한 소실이 안전).
+                    # 한계 실측 근거: 정상 좌향 인계 점프 = 184px(~1차폭,
+                    # burst2 233→49) → 2.5x반차폭. 비정상 우향 스냅 = +64(4568)
+                    # /+101(4574), 정상 추적의 우향 이동은 <10px/f → 0.5x반차폭.
                     xb_prev = getattr(self, '_sw_mouth_prev_xbot', None)
-                    if (xb_prev is not None
-                            and abs(best['x_bot'] - xb_prev) > 1.0 * half):
-                        # 07-16: 실패 시 기준 미갱신이 라이브락(실측 14f 동결)을
-                        # 만들어, 연속 3회 실패면 기준을 리셋해 재획득을 허용한다.
-                        self._sw_mouth_jumpfail = getattr(self, '_sw_mouth_jumpfail', 0) + 1
-                        if self._sw_mouth_jumpfail >= 3:
-                            self._sw_mouth_prev_xbot = None
-                            self._sw_mouth_jumpfail = 0
-                        self._sw_fail = 'jump'
-                        return None
-                    self._sw_mouth_jumpfail = 0
+                    if xb_prev is not None:
+                        dxb = float(best['x_bot']) - xb_prev
+                        lim = (0.5 * half) if dxb > 0.0 else (2.5 * half)
+                        if abs(dxb) > lim:
+                            self._sw_fail = 'jump'
+                            return None
+                    # fix9 (07-16, 05:27런 f120~110 실측): 과회전 중 시야를
+                    # 가로지르는 우측 실선은 xbot·lean 이 '동반 단조 급증'한다
+                    # (27→143 / +8→+110). 정상 좌측 추적은 xbot 감소(쐐기 활강)
+                    # 이거나 완만(+1~3px/f, burst2)이라 4프레임 창에서 분리:
+                    # Δxbot>=+40 그리고 Δlean>=+20 → 이후 락은 우측(-1) 재분류.
+                    # 발행 하한 150(fix8)과 결합 → 실효 = 우향 견인 중단·중립.
+                    # fix12 (07-16 사용자 확정): 0.3s 침묵 후 시야엔 파랑 점선과
+                    # 빨강 쐐기(= 하나의 좌측 경계)만 남는다 — 화면상 우측 쓸림도
+                    # 차체 요잉에 의한 같은 선의 이동이므로 fix9 재분류는 정답
+                    # 선을 초록으로 오판해 회전을 죽인다 (07:01 런 +1.45s 실증
+                    # 의심). 기본 비활성, sw_mouth_rside_enable=1 로 복원 가능.
+                    if int(getattr(self, 'sw_mouth_rside_enable', 0)):
+                        if getattr(self, '_sw_mouth_rflag', False):
+                            side = -1.0
+                        else:
+                            h = list(getattr(self, '_sw_mouth_hist', []))
+                            h.append((float(best['x_bot']), float(best['lean'])))
+                            if len(h) > 4:
+                                h.pop(0)
+                            self._sw_mouth_hist = h
+                            if (len(h) == 4
+                                    and h[-1][0] - h[0][0] >= 40.0
+                                    and h[-1][1] - h[0][1] >= 20.0):
+                                self._sw_mouth_rflag = True
+                                side = -1.0
                     self._sw_mouth_prev_xbot = float(best['x_bot'])
                 else:
                     # 구(bc3f325): 실선 전용 입력 → 점유율 판별 불필요, 우측 경계.
@@ -1882,6 +1987,13 @@ class LaneDetector:
             elif (self.drive_mode == 'ROUNDABOUT' and self.merge_zone
                     and self._reacq_right_active):
                 side = -1.0                      # 재획득 선 = 구조상 우측(바깥) 경계
+            elif (self._ra_seen and self._merge_done
+                    and self._w_align_left > 0):
+                # fix15 (07-16 사용자 확정 기하): 병합 직후 w_align 창(3s) 동안
+                # 보이는 흰 실선 = 내 차선의 '우측' 경계 — 차의 최종 위치는 그
+                # 실선의 왼쪽. 첫 흰 락이 +1(좌측)로 잡히면 중심이 실선 오른쪽
+                # 으로 조준돼 실선을 넘어 이탈한다 (09:54런 영상 38.6~39.3s).
+                side = -1.0
             elif (self._yellow_dash_cx is not None
                     and abs(best['x_bot'] - self._yellow_dash_cx) > 0.5 * half):
                 side = (1.0 if best['x_bot'] < self._yellow_dash_cx else -1.0)
@@ -1905,8 +2017,16 @@ class LaneDetector:
                 yc = roi_h - (i + 0.5) * band_h
                 if yc < best['y_lo'] - band_h or yc > best['y_hi'] + band_h:
                     continue
-                bands.append((ev(best, yc) + side * half,
-                              float(self.num_bands - i), i))
+                c_val = ev(best, yc) + side * half
+                # fix8 (07-16, 05:27런 42.5s 이탈): 개구부 탈출은 항상 우회전 —
+                # 지나쳐 왼쪽 뒤에 남은 선을 +1 로 물면 '선+반차폭'이 진짜 경로
+                # 보다 왼쪽(실측 123~140 vs 정상 226~323)을 조준해 좌향 명령이
+                # 나간다. mouth 동안 발행 중심에 하한을 걸어 좌향 오조준을 차단
+                # (기각이 아닌 클램프 — 추적 연속성 유지, 경계 민감도 없음).
+                if getattr(self, '_sw_mouth', False):
+                    c_val = max(c_val, float(getattr(self, 'sw_mouth_pc_floor',
+                                                     150.0)))
+                bands.append((c_val, float(self.num_bands - i), i))
             near_lanes = 1
         if not bands:
             self._sw_fail = 'noband'

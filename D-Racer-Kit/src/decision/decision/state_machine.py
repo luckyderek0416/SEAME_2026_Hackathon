@@ -141,6 +141,13 @@ class RaceStateMachine:
                 # 권위가 없어 신목을 관통했다. 락 창 동안은 구 검증 세대(run76~80)의
                 # 탈출 바이어스를 복원하고, 창 이후 소실은 홀드가 담당한다.
                 if self._exit_lock_t > 0.0:
+                    # 07-16 사용자 확정: 발화 직후 exit_straight_s(0.2s) 동안은
+                    # '직진' — 과회전 이탈(0.35 아크 실측) 방지용 전진 확보.
+                    # 그 이후 소실 프레임부터 아크(exit_steer_bias 0.24).
+                    elapsed = (float(self.cfg.get('exit_lock_release_s', 0.0))
+                               - self._exit_lock_t)
+                    if elapsed < float(self.cfg.get('exit_straight_s', 0.2)):
+                        return float(self.cfg['steer_center'])
                     return float(self.cfg['steer_center']
                                  + self.cfg['turn_direction']
                                  * self.cfg.get('exit_steer_bias', 0.0))
