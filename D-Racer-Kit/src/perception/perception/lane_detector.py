@@ -187,7 +187,6 @@ class LaneDetector:
         self.follow_yellow_exit_yellow_frac = 0.5   # 해제 노랑 문턱 = 진입문턱 × 이 비율
         self.follow_yellow_exit_frames = 10         # 해제 조건 연속 프레임 수 (~0.3s@30fps)
         # 탈출(SW 창) 중에는 해제를 빠르게 — 해제가 늦으면 흰 정렬 시작도 늦는다. 0=전역값.
-        self.follow_yellow_exit_frames_exit = 4
         # W→Y 인계 크로스페이드: 카메라는 원거리 각도 유지 —
         # 노랑이 '보이는' 시점(원거리)엔 래치하지 않고(pending) 흰∪노랑 합성으로
         # 추종하다가, 노랑이 하단 밴드에 물리적으로 '도달'한 프레임에 확정 래치.
@@ -353,13 +352,10 @@ class LaneDetector:
         self.sw_max_peaks = 3           # 프레임당 시도할 피크 시드 수
         self.sw_cross_row_frac = 0.45   # 이 비율 이상 켜진 가로줄(정지선) 행을 입력에서 제거
         self.sw_side_default = -1       # 단선 분류 폴백: -1=우측 경계(중심=선-half; reacq 규칙과 동일 근거)
-        self.sw_exit_straight_k = 5     # 탈출 조기 해제: '직선' 연속 프레임 수
-        self.sw_exit_straight_px = 8.0  # |기욺| 이 미만이면 '직선'
         self._sw_left = 0               # 남은 창 프레임 (0=창 밖)
         self._sw_dir = 0                # 기대 곡률 방향: -1=좌향(진입) +1=우향(탈출) 0=비활성
         self._sw_prev_fit = None        # 직전 유효 피팅 (a,b,c) — 다음 프레임 시드 연속성
         self._sw_last_side = 0.0        # 추적선이 좌(-1)/우(+1) 경계인지 (0=미정/양선)
-        self._sw_straight = 0           # 탈출 직선 연속 카운터
         # 탈출 방향 게이트 적용 프레임: 탈출로 = 우커브 -> 좌굽이 2단계라 창 내내
         # 걸면 병합 꼬리를 전부 기각한다. 이 프레임 수 이후 게이트 해제.
         self.sw_exit_gate_frames = 40   # ~2s@20fps
@@ -1065,7 +1061,6 @@ class LaneDetector:
             self._sw_len = self._sw_left
             self._sw_dir = 0
             self._sw_kind = 'out'
-            self._sw_straight = 0
         # IN 전구간 코리도 무장 (__init__ sw_drive_always 주석 참고): DRIVE 인
         # 동안 창이 없으면 즉시 무장. RA 탈출~병합 완료 전은 exit 기계 전담이라 제외.
         if (self.course == 'in' and int(getattr(self, 'sw_drive_always', 0)) == 1
@@ -1077,7 +1072,6 @@ class LaneDetector:
             self._sw_kind = 'drive'
             self._sw_prev_fit = None
             self._sw_interior = None
-            self._sw_straight = 0
             self._sw_prev_yellow = self._following_yellow
         # 1L 조기 해제 → SW 즉시 인계 (__init__ oneline_release_* 주석 참고):
         # 1L 진행 중 노란 실선 페어가 K프레임 연속 복원되면 좌회전 종료로 보고
@@ -1102,7 +1096,6 @@ class LaneDetector:
                     self._sw_kind = 'approach'
                     self._sw_prev_fit = None
                     self._sw_interior = None
-                    self._sw_straight = 0
         else:
             self._oneline_pair_count = 0
         # IN 접근 코리도 무장 (__init__ sw_approach_frames 주석 참고): Y래치 중 +
@@ -1122,7 +1115,6 @@ class LaneDetector:
                 self._sw_kind = 'approach'
                 self._sw_prev_fit = None
                 self._sw_interior = None
-                self._sw_straight = 0
         else:
             self._sw_nl2_count = 0
 
@@ -1144,7 +1136,6 @@ class LaneDetector:
                 self._sw_kind = 'entry'
                 self._sw_prev_fit = None     # 직전 직선 주행 피팅 잔재 유입 방지
                 self._sw_interior = None
-                self._sw_straight = 0
             elif (self._prev_drive_mode == 'ROUNDABOUT'
                     and self.drive_mode == 'DRIVE'
                     and int(self.sw_exit_frames) > 0):
@@ -1168,7 +1159,6 @@ class LaneDetector:
                 self._sw_prev_fit = reseed
                 self._sw_interior = None     # RA 밖에선 STOPLINE 분류기 비활성 보장
                 self._sw_mouth_prev_xbot = None   # 개구부 점프 가드 기준 초기화
-                self._sw_straight = 0
             self._prev_drive_mode = self.drive_mode
 
         # OUT 갈림길 시야 마스킹: 표지판 확정 방향의 반대쪽

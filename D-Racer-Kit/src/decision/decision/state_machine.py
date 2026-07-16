@@ -60,10 +60,9 @@ class RaceStateMachine:
         # 빨간 노면 구간은 미션 순서상 회전교차로를 빠져나온 뒤에만 나타난다
         # (RA -> DRIVE[Y] -> DRIVE[W] -> 빨간 도로). 그 전의 red_ratio 는 전부
         # 오검출이므로(신호등/트랙 밖 물체) ROUNDABOUT 을 한 번 거치기 전엔 무시한다.
-        self.roundabout_done = False
+        self.roundabout_done = False  # 이미 회전을 완료함 (재진입 금지)
 
         # 회전교차로 (junction 카운트) 상태
-        self.roundabout_done = False  # 이미 회전을 완료함 (재진입 금지)
         self.enter_acc = 0.0          # 진입 감지용 지속 커브 누적기
         self.circle_t = 0.0           # 현재 회전에서 보낸 시간
         # 속도 스케일: yaw_proxy/시간 임계는 시간 기반이라 빠른 랩일수록 작아져
@@ -89,7 +88,6 @@ class RaceStateMachine:
         self._steer_hold = None
         self._gate_armed = False      # 가로선이 충분히 꺼진 뒤에만 다음 카운트 무장
         self._gate_off_t = 0.0        # 가로선 연속 OFF 시간 (재무장 판정용)
-        self._gate_on_t = 0.0         # 가로선 연속 ON 시간 (진단용)
         self._gate_cluster_on = 0.0   # 현재 군집 누적 ON (gap 병합)
         self._gate_cluster_counted = False
         self._gate_in_cluster = False # 군집 진행 중 플래그 (출생 시점 판정용)
@@ -244,7 +242,6 @@ class RaceStateMachine:
         self._gate_cd = float(self.cfg.get('gate_blank_s', self.cfg['min_loop_time_s']))
         self._gate_armed = False
         self._gate_off_t = 0.0
-        self._gate_on_t = 0.0
         # 진입측 락온 (one-shot): RA 켜지는 순간 딱 1회, 링 순환 방향 브랜치로
         # 시드를 밀어 진입 갈림길에서 링을 타게 한다. 해제는 fork 재수렴 또는
         # entry_lock_release_s 중 먼저 오는 쪽 (아래 ROUNDABOUT 블록에서).
@@ -520,10 +517,8 @@ class RaceStateMachine:
                     self._gate_in_cluster = True
                     self._gate_cluster_void = self._gate_cd > 0.0
                 self._gate_off_t = 0.0
-                self._gate_on_t += dt
                 self._gate_cluster_on += dt
             else:
-                self._gate_on_t = 0.0
                 self._gate_off_t += dt
                 if self._gate_off_t >= self.cfg.get('gate_rearm_s', 0.5):
                     self._gate_armed = True

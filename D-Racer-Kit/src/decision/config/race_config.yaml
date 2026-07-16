@@ -49,7 +49,6 @@ decision_node:
     curve_slow: 0.5            # |curvature| 비례 감속
     max_steering_delta: 0.0    # 0=off. 조향 튐 방지 rate limit (0.08~0.15 권장)
     steer_slow: 0.0            # 0=off. |조향| 비례 감속 (0.3~0.5 권장)
-    fork_bias: 0.4             # 갈림길 표지판 방향 편향
     fork_hold_s: 6.0           # 표지판 마지막 인식 후 편향 유지 시간
     marker_area_trigger: 0.02  # 아루코 면적비 이 이상 -> 정지
     marker_clear_frames: 5     # 마커 소실 연속 프레임 -> 재출발

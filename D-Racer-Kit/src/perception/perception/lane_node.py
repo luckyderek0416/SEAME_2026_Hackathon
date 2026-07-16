@@ -137,7 +137,6 @@ class LaneNode(Node):
         self.declare_parameter('follow_yellow_exit_white_ratio', 1.0)  # 흰픽셀 > 이 배율*노란픽셀 (해제 조건 일부)
         self.declare_parameter('follow_yellow_exit_yellow_frac', 3.0)  # 해제 노랑문턱 = 진입문턱*이 비율 (RA 후 전용 스코프; RA 전 캡은 detector 에 있음)
         self.declare_parameter('follow_yellow_exit_frames', 10)        # 해제 조건 연속 프레임 (플리커 방지)
-        self.declare_parameter('follow_yellow_exit_frames_exit', 4)    # 탈출(SW)창 내 해제 연속 프레임 (0=전역값)
         # 흰 인계 창 (병합 관통 대응) — 상세는 lane_detector 주석
         self.declare_parameter('w_align_frames', 60)    # 창 길이 (~3s). 0=off
         self.declare_parameter('w_align_gain', 0.4)     # 헤딩 정렬 게인 (0=보정 off)
@@ -205,7 +204,6 @@ class LaneNode(Node):
         self.declare_parameter('sw_exit_gate_frames', 40)  # 탈출 방향게이트 적용 프레임 (이후 해제)
         self.declare_parameter('sw_exit_open_frames', 30)  # 탈출 개방 구간(발화 직후 좌향 코리도 허용). 0=off
         self.declare_parameter('sw_open_max_lean_px', 115.0)  # 개방 구간 |기욺| 상한 (코리도는 통과, 정지선 대각선은 기각하는 사이값)
-        self.declare_parameter('sw_exit_straight_px', 9.4)  # 직선 판정 |기욺| 문턱(px)
         self.declare_parameter('course', 'in')                      # 'in' 일 때만 색상 추종 활성 (launch 전달)
         # 차선 폭 초기값(px, BEV 워프 기준). 0=학습대기. EMA 학습은 그대로 계속 미세보정.
         # 192 = 실측 차선폭 350mm 를 BEV 캘리로 변환한 값((0.80-0.20)*320px). 단선 구간
@@ -292,7 +290,6 @@ class LaneNode(Node):
         # 생성자 인자에 없는 튜닝들은 속성으로 직접 주입 (라이브 변경도 동일 경로)
         self.detector.follow_yellow_exit_yellow_frac = float(gp('follow_yellow_exit_yellow_frac').value)
         self.detector.follow_yellow_exit_frames = int(gp('follow_yellow_exit_frames').value)
-        self.detector.follow_yellow_exit_frames_exit = int(gp('follow_yellow_exit_frames_exit').value)
         self.detector.yw_handover = int(gp('yw_handover').value)
         self.detector.yw_handover_bottom_frac = float(gp('yw_handover_bottom_frac').value)
         self.detector.yw_handover_arrive_ratio = float(gp('yw_handover_arrive_ratio').value)
@@ -352,7 +349,6 @@ class LaneNode(Node):
         self.detector.sw_exit_gate_frames = int(gp('sw_exit_gate_frames').value)
         self.detector.sw_exit_open_frames = int(gp('sw_exit_open_frames').value)
         self.detector.sw_open_max_lean_px = float(gp('sw_open_max_lean_px').value)
-        self.detector.sw_exit_straight_px = float(gp('sw_exit_straight_px').value)
         self.detector.sw_approach_frames = int(gp('sw_approach_frames').value)
         self.detector.oneline_release_pair_k = int(gp('oneline_release_pair_k').value)
         self.detector.sw_drive_always = int(gp('sw_drive_always').value)
