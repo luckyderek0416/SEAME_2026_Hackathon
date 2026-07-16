@@ -28,27 +28,24 @@ class LaneNode(Node):
         self.declare_parameter('subscribe_topic', '/camera/image/compressed')
         self.declare_parameter('lane_topic', '/perception/lane')
         self.declare_parameter('publish_debug', True)
-        self.declare_parameter('crossline_debug', True)   # 임시: 정지선 후보 진단 토픽 발행
+        self.declare_parameter('crossline_debug', True)   # 정지선 후보 진단 토픽 발행
         # 정지선 직교성 게이트: 차선 대비 90°에서 이 각도(도) 이내면 정지선.
         # 0 = 비활성(측정 모드). 곡선 위에서 비스듬히 접근해도 통과한다.
         self.declare_parameter('crossline_perp_tol_deg', 20.0)
-        # BEV 가로/세로 스케일비(sx/sy). dst_ratio/카메라 각도 변경 시 재측정.
-        # 07-15 밤 실측 (카메라 각도 하향 후): 30x30mm 점선 마디 201표본의 BEV
-        # bbox 비 — 정사각형은 회전 불변으로 bbox비=sx/sy. 침식 스윕(블리드 제거)
-        # 1.35→1.39→1.44 수렴, 외삽 1.48. 구 각도 값 2.31은 오진입(가짜 crossline
-        # 직교 통과, race_t 9.5s) 원인으로 실증됨.
+        # BEV 가로/세로 스케일비(sx/sy). dst_ratio/카메라 각도 변경 시 재측정
+        # (정사각형 점선 마디의 BEV bbox 비로 측정 — 회전 불변).
         self.declare_parameter('crossline_bev_aspect', 1.48)
         self.declare_parameter('lane_heading_alpha', 0.2)
         self.declare_parameter('crossline_exclude_px', 6.0)  # 후보 선분 배제 반경(px)
         # HoughLinesP 파라미터 (정지선 선분 검출).
         self.declare_parameter('crossline_hough_thresh', 25)    # 누적 투표 임계
-        self.declare_parameter('crossline_hough_max_gap', 10)   # 선분 이어붙이기 최대 간격(px). 8 이하면 진짜 정지선도 못 잇는다
+        self.declare_parameter('crossline_hough_max_gap', 10)   # 선분 이어붙이기 최대 간격(px). 너무 작으면 진짜 정지선도 못 잇는다
         self.declare_parameter('crossline_min_solidity', 0.80)  # 선분 위 픽셀 충실도 하한 (이어붙인 점선 배제)
-        self.declare_parameter('crossline_sw_gate', 1)           # SW 코리도 교차 게이트 (run76~80 실전 검증: B 개구부 페인트 기각)
-        self.declare_parameter('sw_curv_max_a', 0.0020)         # 진입 창 우곡률 상한. 새 각도 스케일 재계산: B가지 +0.0026 (07-16)
-        self.declare_parameter('stopline_mode', 1)               # 관통+정면 정지선 분류기 (07-14 운용값 박제 — ra_direct_fire 1 과 세트)
+        self.declare_parameter('crossline_sw_gate', 1)           # SW 코리도 교차 게이트 (개구부 페인트 기각)
+        self.declare_parameter('sw_curv_max_a', 0.0020)         # 진입 창 우곡률 상한
+        self.declare_parameter('stopline_mode', 1)               # 관통+정면 정지선 분류기 (decision 의 ra_direct_fire 1 과 세트)
         self.declare_parameter('stopline_ang_max', 15.0)
-        self.declare_parameter('stopline_cov_min', 0.25)   # 캘리 근거(f59 실측 0.28 포용)와 통일 (구 0.35 는 진짜 A 기각 위험)
+        self.declare_parameter('stopline_cov_min', 0.25)
         self.declare_parameter('stopline_sol_min', 0.55)
         self.declare_parameter('w_align_dash_fallback', 0)
         self.declare_parameter('follow_yellow_blind_release_frames', 12)
@@ -61,7 +58,7 @@ class LaneNode(Node):
         self.declare_parameter('jpeg_quality', 80)
         # debug_hz: 디버그 그리기+JPEG 인코딩 주기 제한 (주행 로직은 20Hz 유지).
         # 0 이하 = 매 프레임. 라이브 조절 가능.
-        self.declare_parameter('debug_hz', 5.0)   # 07-09: 10->5 전력 다이어트 (그리기+JPEG 인코딩)
+        self.declare_parameter('debug_hz', 5.0)
         self.declare_parameter('roi_top_ratio', 0.35)   # 상단 35% crop (아래 65% 사용)
         self.declare_parameter('bright_thresh', 160)
         self.declare_parameter('min_pixels', 40)
@@ -81,9 +78,8 @@ class LaneNode(Node):
         self.declare_parameter('use_yellow', True)            # 노란색 회전교차로 차선
         self.declare_parameter('white_hsv_lo', [0, 0, 180])   # H,S,V 하한 (OpenCV H 0-179)
         self.declare_parameter('white_hsv_hi', [179, 60, 255])
-        # 07-14 대회장 실측 박제: 바닥 반사 노이즈 H18~19/V114~142 vs 진짜 선 H28~30/V247+
-        # -> H 하한 22(주 판별자, 조명 강건) + V 하한 140(보조). S 는 겹쳐서 판별력 없음(45 유지).
-        # 검증: 곡선 반사 포즈(노이즈 전멸, yr 0.25->0.096) + 점선 구간(전 dash 80~93% 유지).
+        # 노란색: 바닥 반사 노이즈 차단용으로 H 하한이 주 판별자(조명 강건),
+        # V 하한은 보조. S 는 노이즈와 겹쳐 판별력 없음.
         self.declare_parameter('yellow_hsv_lo', [22, 45, 140])
         self.declare_parameter('yellow_hsv_hi', [40, 255, 255])
         # 빨간 노면(ArUco 장애물 구간). 빨강은 H 양끝에 걸쳐 두 구간을 합쳐 잡는다.
@@ -98,10 +94,6 @@ class LaneNode(Node):
         # 직선 구간 흰선 2개를 직선 피팅, y=0.342h/0.965h 의 차선 x 를 src 꼭짓점으로
         # (워프 후 0.20w/0.80w). 합격: 기둥 slope ~0, 폭 192±5px @x=64/256.
         self.declare_parameter('use_birdeye', True)
-        # 07-15 밤 재캘리 (카메라 각도 하향 — 차체 위치 직접 관측 개조, 차선 중앙 정치
-        # 프레임 직선 피팅 104행): 검산(전 행) 좌 63~64 / 우 256 / 폭 192~193 / 중심
-        # 159.5~160. ⚠️ crossline_bev_aspect 는 구 각도 값 — 정지선 포즈로 재측정 전까지
-        # 분류기 각도 게이트 신뢰 금지.
         self.declare_parameter('birdeye_src_ratio', [0.2228, 0.342, 0.7425, 0.342, 0.9247, 0.965, 0.046, 0.965])
         self.declare_parameter('birdeye_dst_ratio', [0.20, 0.00, 0.80, 0.00, 0.80, 1.00, 0.20, 1.00])
         # --- 가이드 밴드 탐색 (기본 ON) ---
@@ -132,69 +124,67 @@ class LaneNode(Node):
         self.declare_parameter('fork_scan_bottom_ratio', 0.5)       # 분기 스캔밴드 하단
         self.declare_parameter('fork_col_min_ratio', 0.15)          # 컬럼=라인 판정 세로픽셀 비율
         self.declare_parameter('fork_min_groups', 3)                # 라인 군집 개수 이상 => 분기
-        self.declare_parameter('fork_span_ratio', 0.0)              # 바깥라인 간격 폴백 (0=비활성, 07-10 실측상 무용)
+        self.declare_parameter('fork_span_ratio', 0.0)              # 바깥라인 간격 폴백 (0=비활성)
         self.declare_parameter('fork_seed_px', 105)                  # 브랜치 선택 시드 이동량(px)
         # --- 노란색 우선 추종 (In 코스: 노란 진입 커브/회전교차로 링) ---
         self.declare_parameter('follow_yellow', True)               # In 코스 색상 추종 상태머신 on/off
-        # 흰 구간 노이즈 바닥 0.0005 (07-10, 232f). 0.005/0.01 은 원거리 노란 마킹
-        # 조기 래치 이탈(07-11, 3회) -> 0.03. 07-12: 분기 yr 피크 런별 0.026~0.095
-        # 실측 -> 라이브 0.02 운용 (aux.sh).
-        self.declare_parameter('follow_yellow_ratio', 0.02)         # 이 노란비율 이상 -> YELLOW 모드 진입 (07-12 실측 분기 yr 0.026~0.095 → 운용 0.02 박제)
-        # --- W→Y 인계 크로스페이드 (07-15 사용자 설계: 원거리 노랑 조기 래치 → 좌붙음 억제) ---
-        self.declare_parameter('yw_handover', 1)                    # 1=합성 인계 (0=off 즉시 래치=구동작)
+        self.declare_parameter('follow_yellow_ratio', 0.02)         # 이 노란비율 이상 -> YELLOW 모드 진입
+        # --- W→Y 인계 크로스페이드 (원거리 노랑 조기 래치 → 좌붙음 억제) ---
+        self.declare_parameter('yw_handover', 1)                    # 1=합성 인계 (0=off 즉시 래치)
         self.declare_parameter('yw_handover_bottom_frac', 0.33)    # '도달' 판정 하단 밴드 높이 비율
         self.declare_parameter('yw_handover_arrive_ratio', 0.03)   # 하단 밴드 노란 비율 문턱 (도달=확정 래치)
-        self.declare_parameter('follow_yellow_confirm_frames', 3)  # 래치 후보 연속 프레임 (반사광 방어, 1=구동작)
-                                                                    # (노란선이 점선이라 yr 이 낮음)
+        self.declare_parameter('follow_yellow_confirm_frames', 3)  # 래치 후보 연속 프레임 (반사광 방어, 1=즉시)
         self.declare_parameter('follow_yellow_exit_white_ratio', 1.0)  # 흰픽셀 > 이 배율*노란픽셀 (해제 조건 일부)
-        self.declare_parameter('follow_yellow_exit_yellow_frac', 3.0)  # 해제 노랑문턱 = 진입문턱*이 비율 (run95 병합 처방 — RA 후 전용 스코프, RA 전 0.75 캡은 detector 박제)
+        self.declare_parameter('follow_yellow_exit_yellow_frac', 3.0)  # 해제 노랑문턱 = 진입문턱*이 비율 (RA 후 전용 스코프; RA 전 캡은 detector 에 있음)
         self.declare_parameter('follow_yellow_exit_frames', 10)        # 해제 조건 연속 프레임 (플리커 방지)
         self.declare_parameter('follow_yellow_exit_frames_exit', 4)    # 탈출(SW)창 내 해제 연속 프레임 (0=전역값)
-        # 흰 인계 창 (run59 병합 관통 대응) — 상세는 lane_detector 주석
+        # 흰 인계 창 (병합 관통 대응) — 상세는 lane_detector 주석
         self.declare_parameter('w_align_frames', 60)    # 창 길이 (~3s). 0=off
         self.declare_parameter('w_align_gain', 0.4)     # 헤딩 정렬 게인 (0=보정 off)
         self.declare_parameter('w_align_min_px', 80)    # 점선 필터 폴백 문턱
-        # 재래치 억제 (07-14 대회장 손굴림 리플레이): RA 후 흰 인계 창(w_align) 활성 중
-        # Y래치 재진입 금지. 병합 목에서 yr 이 해제(0.06)/재진입(0.02) 사이를 맴돌며
-        # 3s 에 9회 플랩(조향 마스크 요동) 실측 → 억제 시 1회. 인계 창 track 은 노란
-        # 꼬리를 이미 포함해 정보 손실 없음. 0=off (라이브).
+        # 재래치 억제: RA 후 흰 인계 창(w_align) 활성 중 Y래치 재진입 금지 —
+        # 병합 목에서 yr 이 해제/재진입 문턱 사이를 맴돌며 플랩(조향 마스크 요동)
+        # 하는 것을 막는다. 인계 창 track 은 노란 꼬리를 이미 포함해 정보 손실 없음.
+        # 0=off (라이브).
         self.declare_parameter('w_align_block_relatch', 1)
         self.declare_parameter('yw_premix', 0)          # RA 후 Y래치 중 흰 실선 선행 혼합
         self.declare_parameter('filter_yellow_dashes', True)           # Y추종 중 점선/정지선 track 제외 (실선만)
         self.declare_parameter('yellow_solid_min_h_ratio', 0.38)       # "실선" 판정 최소 세로 비율
         self.declare_parameter('yellow_dash_fallback_px', 120)         # 실선 픽셀 이 미만이면 점선 포함 폴백
         self.declare_parameter('dash_fallback_exit_frames', 30)        # 폴백 해제(실선 복귀)에 필요한 연속 프레임 (1s)
-        self.declare_parameter('yellow_heading_gain', 0.0)   # a_h 널뜀으로 OFF (07-11, detector 주석)
+        self.declare_parameter('yellow_heading_gain', 0.0)   # 0=off (a_h 불안정; detector 주석 참고)
         # 연속성 가드/1L 계열 — 근거는 lane_detector.__init__ 주석 참고.
-        self.declare_parameter('center_jump_max_ratio', 0.10)   # 0.15 는 쐐기 당김 통과 -> 0.10 확정
-        self.declare_parameter('entry_oneline_frames', 80)   # ~4s (run89 후 6s->4s 원복, 사용자 결정)
-        self.declare_parameter('oneline_near_bands', 2)      # 1L 하단 밴드 수 (run40)
-        self.declare_parameter('ra_entry_oneline_frames', 0)     # 0=off. 재활성 시 160(~8s)
-        self.declare_parameter('ra_exit_oneline_frames', 0)      # 0=off. 재활성 시 60(~3s)
+        self.declare_parameter('center_jump_max_ratio', 0.10)   # 프레임 간 중심 점프 상한 비율
+        self.declare_parameter('entry_oneline_frames', 80)   # 진입 1L 창 (~4s)
+        self.declare_parameter('oneline_near_bands', 2)      # 1L 하단 밴드 수
+        self.declare_parameter('ra_entry_oneline_frames', 0)     # 0=off
+        self.declare_parameter('ra_exit_oneline_frames', 0)      # 0=off
         # --- SW 코리도 추적 — 상세는 lane_detector.__init__ sw_* 주석. 락 프레임만
         # 밴드 대체(실패 = 폴백). 전부 라이브: ros2 param set /lane_node sw_entry_frames 440
-        self.declare_parameter('sw_entry_frames', 1200)   # RA 진입 창(프레임). 0=off. run79: 저전압 랩 지연으로 440(22s) 만료 후 개구부 이탈 -> 60s
-        # --- IN 접근 코리도 + 1L 이벤트 인계 (07-14, 상세 lane_detector.__init__) ---
+        self.declare_parameter('sw_entry_frames', 1200)   # RA 진입 창(프레임). 0=off. 저속 랩 지연을 커버하도록 길게
+        # --- IN 접근 코리도 + 1L 이벤트 인계 (상세 lane_detector.__init__) ---
         self.declare_parameter('sw_approach_frames', 600)        # 접근 코리도 failsafe 상한. 0=off(라이브 킬)
         self.declare_parameter('oneline_release_pair_k', 5)      # 1L 조기해제 페어 연속 프레임. 0=이벤트 해제 off
-        self.declare_parameter('sw_drive_always', 1)             # IN 전구간 코리도 (07-14 밤). 0=off(라이브 킬 → 기존 스택 복귀)
-        self.declare_parameter('crossline_sw_heading', 1)        # 정지선 직교 게이트 헤딩 = 코리도 접선. 0=구식 EMA
-        self.declare_parameter('sw_exit_mouth_frames', 100)      # 탈출 개구부 창 (07-16 사용자: 4s→5s, 노랑강제 5s 정합). 0=off
+        self.declare_parameter('sw_drive_always', 1)             # IN 전구간 코리도. 0=off(라이브 킬)
+        self.declare_parameter('crossline_sw_heading', 1)        # 정지선 직교 게이트 헤딩 = 코리도 접선. 0=EMA 방식
+        self.declare_parameter('sw_exit_mouth_frames', 100)      # 탈출 개구부 창 (프레임). 0=off
         self.declare_parameter('sw_exit_mouth_top_frac', 0.40)   # 개구부 입력 상단 제거 비율 (분기 너머 진입로 체인 차단)
-        # --- 07-15 v2.1 (전 코스 감사 반영) ---
-        self.declare_parameter('sw_exit_mouth_input', 'raw')     # 개구부 입력: raw(점선 프리필터+최우측+동적 side) | solid(구 bc3f325)
-        self.declare_parameter('sw_exit_reseed', 1)              # 탈출 무장 엣지 재시드 (직전 우측 경계 피팅 승계, 신선도 10f). 0=구 동작
+        self.declare_parameter('sw_exit_mouth_input', 'raw')     # 개구부 입력: raw(점선 프리필터+최우측+동적 side) | solid
+        self.declare_parameter('sw_exit_reseed', 1)              # 탈출 무장 엣지 재시드 (직전 우측 경계 피팅 승계, 신선도 10f). 0=off
         self.declare_parameter('sw_solid_starve_px', 120)        # dir<0 창 실선 기근 raw 폴백 문턱(px). 0=off
-        self.declare_parameter('crossline_require_y', 1)         # Y래치 전 crossline 평가 금지 (분기 누운 노랑 가짜 RA 진입 차단). 0=구 동작
+        self.declare_parameter('crossline_require_y', 1)         # Y래치 전 crossline 평가 금지 (분기 누운 노랑 가짜 RA 진입 차단). 0=off
         self.declare_parameter('yw_handover_arrive_frames', 2)   # 크로스페이드 '도달' 연속 프레임 (하단 반사광 1f 방어)
-        self.declare_parameter('sw_side_curv_min', 0.0015)       # 곡률 side 판별 하한 |a|. 새 각도 스케일 a=1.995/R (07-16 재계산). 0=off
-        self.declare_parameter('sw_side_curv_split', 0.00215)    # 안(+1)/바깥(-1) 경계 — 새 스케일: 안 0.00254 / 밖 0.00176
+        self.declare_parameter('sw_side_curv_min', 0.0015)       # 곡률 side 판별 하한 |a|. 0=off
+        self.declare_parameter('sw_side_curv_split', 0.00215)    # 안(+1)/바깥(-1) 경계
         self.declare_parameter('sw_concentric', 1)               # 단선 중앙선 동심원 보정 (a 평행곡선화). 0=off
         self.declare_parameter('oneline_release_min_hold', 20)   # 1L 최소 유지(쐐기 방어, ~1s)
-        self.declare_parameter('sw_exit_frames', 150)     # RA 탈출 창 = 07-14 재설계 후 '순수 failsafe 상한'(≈7.5s@20fps). 종료는 흰 실선 이벤트가 담당 — 정상 주행에선 상한이 먼저 안 닿게, 그러나 미발화 시 구조 레이턴시라 과하게 길게도 금지. 리플레이로 확정. 0=off(라이브 킬)
+        # RA 탈출 창 = 순수 failsafe 상한(≈7.5s@20fps). 종료는 흰 실선 이벤트가 담당 —
+        # 정상 주행에선 상한이 먼저 안 닿게, 그러나 미발화 시 구조 레이턴시라 과하게
+        # 길게도 금지. 0=off(라이브 킬)
+        self.declare_parameter('sw_exit_frames', 150)
         self.declare_parameter('sw_entry_input', 'solid') # 진입 입력: solid(병합 사선 제거) | raw
         self.declare_parameter('sw_exit_input', 'raw')    # 탈출 입력: 좌측 경계가 점선 -> raw 필수
-        self.declare_parameter('sw_num_boxes', 9)         # 상자 개수 (07-15 사용자: 5→9, 전폭 110 유지)
+        self.declare_parameter('sw_num_boxes', 9)         # 상자 개수
         self.declare_parameter('sw_box_margin', 55)       # 상자 반폭(px)
         self.declare_parameter('sw_max_shift', 35)        # 상자당 이동 상한(px)
         self.declare_parameter('sw_min_box_px', 8)        # 상자 적중 최소 픽셀
@@ -206,17 +196,15 @@ class LaneNode(Node):
         self.declare_parameter('sw_max_peaks', 3)         # 프레임당 피크 시드 수
         self.declare_parameter('sw_cross_row_frac', 0.45) # 정지선 행 제거 문턱(가로 점유율)
         self.declare_parameter('sw_side_default', -1)     # 단선 분류 폴백(-1=우측 경계)
-        self.declare_parameter('sw_exit_straight_k', 5)   # (07-14 미사용 — 흰 실선 이벤트가 종료 대체) 탈출 조기해제 직선 연속 프레임
-        self.declare_parameter('sw_exit_wsteady_k', 20)   # (07-14 미사용) 흰 인계 종결자 연속 프레임
-        # --- 탈출→흰병합 재설계 (07-14, _sw_dir>0 전용, 상세 lane_detector.__init__) ---
-        self.declare_parameter('sw_exit_dash_occupancy_max', 0.72)  # 항목1: 곡선 점유율 초과=실선→락포기. ⚠️실측 캘리
-        self.declare_parameter('sw_exit_white_bottom_px', 40)       # 항목2: 최하단 흰 최소 픽셀
-        self.declare_parameter('sw_exit_white_min_span_px', 55)     # 항목2: 연속 스팬 하한(점선 토막>초과=실선). ⚠️실측 캘리
-        self.declare_parameter('sw_exit_white_solidity_min', 0.80)  # 항목2: 스팬내 점유율 하한
-        self.declare_parameter('sw_exit_white_confirm_frames', 4)   # 항목2: 발화 디바운스 프레임
+        # --- 탈출→흰병합 (_sw_dir>0 전용, 상세 lane_detector.__init__) ---
+        self.declare_parameter('sw_exit_dash_occupancy_max', 0.72)  # 곡선 점유율 초과=실선→락포기. ⚠️실측 캘리
+        self.declare_parameter('sw_exit_white_bottom_px', 40)       # 최하단 흰 최소 픽셀
+        self.declare_parameter('sw_exit_white_min_span_px', 55)     # 연속 스팬 하한(점선 토막>초과=실선). ⚠️실측 캘리
+        self.declare_parameter('sw_exit_white_solidity_min', 0.80)  # 스팬내 점유율 하한
+        self.declare_parameter('sw_exit_white_confirm_frames', 4)   # 발화 디바운스 프레임
         self.declare_parameter('sw_exit_gate_frames', 40)  # 탈출 방향게이트 적용 프레임 (이후 해제)
         self.declare_parameter('sw_exit_open_frames', 30)  # 탈출 개방 구간(발화 직후 좌향 코리도 허용). 0=off
-        self.declare_parameter('sw_open_max_lean_px', 115.0)  # 개방 구간 |기욺| 상한 (07-14 BEV 재캘리 스케일 보정: 코리도 실측 ≤86 / 정지선 대각선 ≥119 — 리플레이서 90은 코리도 7프레임 오기각)
+        self.declare_parameter('sw_open_max_lean_px', 115.0)  # 개방 구간 |기욺| 상한 (코리도는 통과, 정지선 대각선은 기각하는 사이값)
         self.declare_parameter('sw_exit_straight_px', 9.4)  # 직선 판정 |기욺| 문턱(px)
         self.declare_parameter('course', 'in')                      # 'in' 일 때만 색상 추종 활성 (launch 전달)
         # 차선 폭 초기값(px, BEV 워프 기준). 0=학습대기. EMA 학습은 그대로 계속 미세보정.
@@ -361,8 +349,6 @@ class LaneNode(Node):
         self.detector.sw_max_peaks = int(gp('sw_max_peaks').value)
         self.detector.sw_cross_row_frac = float(gp('sw_cross_row_frac').value)
         self.detector.sw_side_default = int(gp('sw_side_default').value)
-        self.detector.sw_exit_straight_k = int(gp('sw_exit_straight_k').value)
-        self.detector.sw_exit_wsteady_k = int(gp('sw_exit_wsteady_k').value)
         self.detector.sw_exit_gate_frames = int(gp('sw_exit_gate_frames').value)
         self.detector.sw_exit_open_frames = int(gp('sw_exit_open_frames').value)
         self.detector.sw_open_max_lean_px = float(gp('sw_open_max_lean_px').value)
@@ -389,13 +375,13 @@ class LaneNode(Node):
         self.detector.sw_exit_white_confirm_frames = int(gp('sw_exit_white_confirm_frames').value)
 
         self.pub = self.create_publisher(LaneState, self.lane_topic, 10)
-        # 흰 실선 병합 이벤트 (07-14 항목4): detector._merge_done 을 decision 에 알려
+        # 흰 실선 병합 이벤트: detector._merge_done 을 decision 에 알려
         # 탈출 구간 종료(_exit_active 해제)를 트리거한다. merge_zone 과 대칭 패턴.
         self.merge_done_pub = self.create_publisher(Bool, '/perception/merge_done', 10)
         self.debug_pub = None
         if self.publish_debug:
             self.debug_pub = self.create_publisher(CompressedImage, self.debug_topic, 10)
-        # 임시 진단 토픽: 정지선 후보의 (부호 있는 slope, 각도, 축길이, 인라이어, 판정).
+        # 진단 토픽: 정지선 후보의 (부호 있는 slope, 각도, 축길이, 인라이어, 판정).
         # 부호/길이 임계를 실측으로 정하기 위한 것. 확정되면 crossline_debug=False.
         self.crossline_dbg_pub = (
             self.create_publisher(String, '/perception/lane/crossline_dbg', 10)
@@ -406,14 +392,14 @@ class LaneNode(Node):
         self.create_subscription(String, str(gp('fork_topic').value), self.on_fork_dir, 10)
         # decision 주행 모드(상태머신 상태)를 받아 BEV 디버그 화면에 표시한다.
         self.create_subscription(String, str(gp('state_topic').value), self.on_state, 10)
-        # 합류부 창 활성 플래그 (decision 의 yaw 위치창) -> "단선=우측" 규칙 스코프
+        # 합류부 창 활성 플래그 (decision) -> "단선=우측" 규칙 스코프
         self.create_subscription(Bool, str(gp('merge_zone_topic').value), self.on_merge_zone, 10)
         # 라이브 튜닝: `ros2 param set /lane_node yellow_hsv_lo "[18,45,110]"` 등을 실행하면
         # detector 가 즉시 갱신되어 재시작 없이 반영된다. 튜닝하면서 대시보드로
         # HSV 마스크를 바로 확인할 수 있다.
         self.add_on_set_parameters_callback(self._on_set_params)
         self.get_logger().info(f'lane_node up. in={sub_topic} out={self.lane_topic}')
-        # 실효값 요약 (07-14): 기동 로그로 레이스 스택 여부 즉시 검증용.
+        # 실효값 요약: 기동 로그로 레이스 스택 여부 즉시 검증용.
         d = self.detector
         self.get_logger().info(
             f'[실효] stopline={d.stopline_mode} cov_min={d.stopline_cov_min:g} '
@@ -464,8 +450,8 @@ class LaneNode(Node):
         return SetParametersResult(successful=True)
 
     def _sw_telemetry(self):
-        """v2.1 진단 로그 (07-15, 동작 무변경): 전이는 1회, 코리도는 ~1Hz,
-        개구부(mouth)는 매 프레임. 현장 질문('① 발동했나 / mouth가 뭘 물었나')에
+        """SW 코리도 진단 로그 (동작 무변경): 전이는 1회, 코리도는 ~1Hz,
+        개구부(mouth)는 매 프레임. 현장 질문('발동했나 / mouth 가 뭘 물었나')에
         로그로 답하기 위한 것 — 분석 후 제거해도 무방."""
         d = self.detector
         self._tf = getattr(self, '_tf', 0) + 1

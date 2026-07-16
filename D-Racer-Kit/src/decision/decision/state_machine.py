@@ -19,9 +19,7 @@
 
 탈출 판정 (IMU 없음, 마커 없음):
   주(PRIMARY) = 가로선 게이트 카운트 (블랭크 + 재무장으로 진입선 재카운트 차단)
-  비상구(유일 failsafe) = ra_failsafe_exit_s: 링 체류 절대 시간 상한 (07-15 사용자
-                   결정 — 구 3-표결(yaw/시간/가로선)은 속도 의존 + 조기 탈출
-                   오발(=실격) 이력으로 전부 삭제).
+  비상구(유일 failsafe) = ra_failsafe_exit_s: 링 체류 절대 시간 상한
 min_loop_time 전에는 절대 탈출하지 않는다. 모든 임계값은 늦게 나가는 쪽으로:
 규정상 >= 1 바퀴가 허용이라 과회전은 공짜지만 < 1 바퀴는 실격이다.
 ra_failsafe_exit_s 는 실측 랩타임 기반 '2랩 근처(=A 부근)'로 캘리브레이션할 것.
@@ -68,29 +66,26 @@ class RaceStateMachine:
         self.roundabout_done = False  # 이미 회전을 완료함 (재진입 금지)
         self.enter_acc = 0.0          # 진입 감지용 지속 커브 누적기
         self.circle_t = 0.0           # 현재 회전에서 보낸 시간
-        # 속도 스케일 (07-12 run55 실증): yaw_proxy/블랭크는 시간 기반이라 빠른 랩일수록
-        # 작아짐 — 진짜 정지선 yaw 가 run53 3.87 / run54 4.16 / run55 3.21 로 밴드 간
-        # 이동, 가짜 최대 3.15 와 겹쳐 절대 임계 불가. G->RA 접근 소요시간(race_t)이
-        # 그 런의 속도 밴드를 대표하므로 그 비율로 게이트 임계들을 스케일한다.
+        # 속도 스케일: yaw_proxy/시간 임계는 시간 기반이라 빠른 랩일수록 작아져
+        # 절대 임계로는 못 잡는다. G->RA 접근 소요시간(race_t)이 그 런의 속도 밴드를
+        # 대표하므로 그 비율로 게이트 임계들을 스케일한다.
         self._speed_scale = 1.0       # RA 진입 시 확정: clamp(race_t/ra_ref_drive_s)
         self._y_run = 0               # Y래치 감지 연속 카운터 (스로틀 보정용)
         self._latch_seen = False      # 런당 1회
         self.throttle_adj = 0.0       # 순항 스로틀 가산 보정 (decision_node 가 적용)
         self.yaw_proxy = 0.0          # IMU 없는 헤딩 추정치 (조향 적분)
-        self._merge_bridge_t = 0.0    # 병합 브리지 잔여 시간 (RA 탈출 시 무장; 07-14 이후 _exit_active 로 대체)
-        # 탈출 구간 진행 플래그 (07-14 항목4): RA 탈출 트리거 발화 시 True, perception 의
-        # 흰 실선 이벤트(/perception/merge_done) 수신 시 False. 시간창(merge_bridge 6s
-        # 등)이 스로틀 인상 후 속도 변화에 안 붙던 문제를, 이벤트 기반으로 구조적 제거.
-        # 이 동안: 완전소실 시 마지막 조향 유지 + 스로틀 slow 캡.
+        # 탈출 구간 진행 플래그: RA 탈출 트리거 발화 시 True, perception 의
+        # 흰 실선 이벤트(/perception/merge_done) 수신 시 False. 시간창 방식은
+        # 스로틀/속도 변화에 안 붙으므로 이벤트 기반으로 종료한다.
+        # 이 동안: 완전소실 시 마지막 조향 유지 + 스로틀 캡.
         self._exit_active = False
         self._last_lane_steer = None  # 직전 lane_found 프레임의 PID 조향 (탈출 블라인드 유지용)
         self.merge_done_sig = False   # perception→decision: 흰 실선 이벤트 수신 (decision_node 가 매 틱 주입)
         self._entry_votes = 0         # 마지막 회전교차로 진입 투표 수 (디버그/로그)
         self._entry_lock_active = False  # 진입측 락온이 걸려 있는 동안 True (one-shot)
         self._exit_lock_t = 0.0          # 탈출 락 남은 시간(초) — RA 탈출 순간 장전
-        # DRIVE 소실 폴백용: 최근 조향의 EMA (07-12 run47 v47.6 실증 — 탈출로
-        # 노랑->흰 전환부에서 소실 시 '직진' 폴백이 커브를 뚫고 이탈. 소실 중에는
-        # 직전 조향 경향을 유지하고, 소실이 길어지면 서서히 중앙으로 감쇠).
+        # DRIVE 소실 폴백용: 최근 조향의 EMA. 소실 중에는 직전 조향 경향을 유지하고
+        # (직진 폴백은 커브를 뚫고 이탈), 소실이 길어지면 서서히 중앙으로 감쇠.
         self._steer_hold = None
         self._gate_armed = False      # 가로선이 충분히 꺼진 뒤에만 다음 카운트 무장
         self._gate_off_t = 0.0        # 가로선 연속 OFF 시간 (재무장 판정용)
@@ -120,30 +115,24 @@ class RaceStateMachine:
 
     # ---------- 조향 (항상 차선 PID) ----------
     def _lane_steer(self, lane, dt):
-        if self._merge_bridge_t > 0.0 and lane.lane_found:
-            self._merge_bridge_t = max(0.0, self._merge_bridge_t - dt)
         if lane.lane_found:
-            # 07-11 방안1: fork 편향(_turn_bias) 을 조향 경로에서 제거. 목표측 가산은
-            # 차선 소실 시 증발해 탈출 개구부에서 무력했다 (run20: 우회전 1.5초 사망).
-            # 탈출 기동은 탈출 락(post-PID, 아래 DRIVE 블록)이 전담한다.
-            # turn_latch 는 텔레메트리 FORK 마커로만 유지.
+            # fork 편향은 조향 경로에 없다 — 목표측 가산은 차선 소실 시 증발해
+            # 탈출 개구부에서 무력하므로, 탈출 기동은 탈출 락(post-PID, DRIVE 블록)이
+            # 전담한다. turn_latch 는 perception 브랜치 시드/텔레메트리로만 쓰인다.
             target = (lane.offset + self._branch_bias(lane)
                       + self._curve_bias(lane))
         else:
-            # 탈출 구간 블라인드 (07-14 항목4): 완전 소실 시 마지막 조향 명령을 상한
-            # 없이 그대로 유지한다 — center 수렴도, 기하 편향도 없음. 창이 시간이
-            # 아니라 흰 실선 이벤트(_exit_active 해제)로 종료되므로 속도 의존이 없다.
-            # (탈출~병합 이탈이 스로틀 인상 후 늘어난 원인 = 고정 시간창의 속도 미추종.)
+            # 탈출 구간 블라인드: 완전 소실 시 마지막 조향 명령을 상한 없이 그대로
+            # 유지한다 — center 수렴도, 기하 편향도 없음. 창이 시간이 아니라
+            # 흰 실선 이벤트(_exit_active 해제)로 종료되므로 속도 의존이 없다.
             if self.state == State.DRIVE and self._exit_active:
                 # 탈출 락 창(발화 후 exit_lock_release_s): 기하 피드포워드(탈출측 호).
-                # run_c 실측(07-14 밤): 개구부에서 소실 시 '마지막 조향 유지'는 직전의
-                # 과도 스파이크를 물 수 있고(-0.002 하드값 2.4s 유지), 초기 우회전
-                # 권위가 없어 신목을 관통했다. 락 창 동안은 구 검증 세대(run76~80)의
-                # 탈출 바이어스를 복원하고, 창 이후 소실은 홀드가 담당한다.
+                # 소실 시 '마지막 조향 유지'는 직전의 과도 스파이크를 물 수 있고
+                # 초기 회전 권위가 없으므로, 락 창 동안은 탈출 바이어스를 쓰고
+                # 창 이후 소실은 홀드가 담당한다.
                 if self._exit_lock_t > 0.0:
-                    # 07-16 사용자 확정: 발화 직후 exit_straight_s(0.2s) 동안은
-                    # '직진' — 과회전 이탈(0.35 아크 실측) 방지용 전진 확보.
-                    # 그 이후 소실 프레임부터 아크(exit_steer_bias 0.24).
+                    # 발화 직후 exit_straight_s 동안은 '직진' — 과회전 이탈 방지용
+                    # 전진 확보. 그 이후 소실 프레임부터 탈출측 호(exit_steer_bias).
                     elapsed = (float(self.cfg.get('exit_lock_release_s', 0.0))
                                - self._exit_lock_t)
                     if elapsed < float(self.cfg.get('exit_straight_s', 0.2)):
@@ -153,16 +142,8 @@ class RaceStateMachine:
                                  * self.cfg.get('exit_steer_bias', 0.0))
                 if self._last_lane_steer is not None:
                     return float(self._last_lane_steer)
-            # 차선 놓침: DRIVE 는 '직전 조향 EMA' 유지 (직진 폴백이 커브를 뚫던
-            # run47 전환부 이탈 대응), 3s 시정수로 중앙 수렴. RA 는 ra_blind_bias
-            # 전담 (중복 가산 방지).
-            if self.state == State.DRIVE and self._merge_bridge_t > 0.0:
-                # 병합 브리지 (07-13): 탈출 직후 무차선 구간은 직전 조향 관성이 아니라
-                # 기하 사전값(병합은 항상 완만한 좌호)으로 통과한다. run83/84 우측 표류
-                # + 분기 점선 오추종 좌이탈의 공통 봉합.
-                self._merge_bridge_t = max(0.0, self._merge_bridge_t - dt)
-                return float(self.cfg['steer_center']
-                             + self.cfg.get('merge_blind_bias', 0.0))
+            # 차선 놓침: DRIVE 는 '직전 조향 EMA' 유지 (직진 폴백은 커브를 뚫고
+            # 이탈), 3s 시정수로 중앙 수렴. RA 는 ra_blind_bias 전담 (중복 가산 방지).
             if self.state == State.DRIVE and self._steer_hold is not None:
                 center = self.cfg['steer_center']
                 self._steer_hold += (center - self._steer_hold) * min(1.0, dt / 3.0)
@@ -178,22 +159,10 @@ class RaceStateMachine:
             s = max(c - 0.30, min(c + 0.30, steer))
             self._steer_hold = (s if self._steer_hold is None
                                 else 0.3 * s + 0.7 * self._steer_hold)
-            # 탈출 블라인드 유지용 (07-14 항목4). run_c: 소실 직전 마지막 틱의 PID
-            # D-스파이크(-0.002)가 그대로 2.4s 유지됐다 — _steer_hold 와 동일하게
-            # center±0.30 클램프해 과도값이 홀드로 박제되는 것을 차단.
+            # 탈출 블라인드 유지용. 소실 직전 마지막 틱의 PID D-스파이크가 그대로
+            # 유지되지 않도록 _steer_hold 와 동일하게 center±0.30 클램프해 저장.
             self._last_lane_steer = s
         return steer
-
-    def _turn_bias(self):
-        # fork 편향은 주행 중에만 적용; ROUNDABOUT 등에서 남아 있는 stale latch 가
-        # 조향을 기울이면 안 된다.
-        if self.state != State.DRIVE:
-            return 0.0
-        if self.turn_latch == 'left':
-            return -self.cfg['fork_bias']
-        if self.turn_latch == 'right':
-            return +self.cfg['fork_bias']
-        return 0.0
 
     def _in_red_zone(self, lane):
         """빨간 노면(ArUco 장애물 구간)에 진입했는가. red_slow_ratio 는 '멀리서 빨간 도로가
@@ -238,11 +207,11 @@ class RaceStateMachine:
         # 이후부터 빨간 노면 감지가 무장된다 (_in_red_zone).
         if self.state == State.ROUNDABOUT and state != State.ROUNDABOUT:
             self.roundabout_done = True
-            # 탈출 락 장전 (07-11 run20, 방안1): 탈출 분기점도 개구부라 nl=0 이 빈발.
-            # 시간창 동안 post-PID 우측 편향을 유지한다 (합류부 보조와 같은 원리 —
-            # 탈출 후엔 yaw 적분이 멈추므로 위치창 대신 시간창). 모든 탈출 경로 공통.
+            # 탈출 락 장전: 탈출 분기점도 개구부라 차선 소실이 빈발하므로,
+            # 시간창 동안 post-PID 탈출측 편향을 유지한다 (탈출 후엔 yaw 적분이
+            # 멈추므로 위치창 대신 시간창). 모든 탈출 경로 공통.
             self._exit_lock_t = float(self.cfg.get('exit_lock_release_s', 0.0))
-            # 탈출 구간 진행 시작 (07-14 항목4): 흰 실선 이벤트 수신까지 유지.
+            # 탈출 구간 진행 시작: 흰 실선 이벤트 수신까지 유지.
             self._exit_active = True
             self._last_lane_steer = None
         self.state = state
@@ -256,22 +225,22 @@ class RaceStateMachine:
         self.pid.reset()
         self.circle_t = 0.0
         self.yaw_proxy = 0.0
-        # 속도 스케일 확정 (기준 run54 = 20.5s 밴드에서 절대값 3.6/18.5 가 실측 정합).
+        # 속도 스케일 확정 (ra_ref_drive_s 밴드에서 스케일 1.0).
         # 초록불 없이 진입한 비정상 경로(race_t~0)는 클램프 하한이 흡수.
         ref = max(1e-3, float(self.cfg.get('ra_ref_drive_s', 20.5)))
         self._speed_scale = float(min(1.3, max(0.6, self.race_t / ref)))
         # 게이트(가로선) 카운터: 진입 정지선 재카운트를 3중으로 차단 —
-        #  ① 블랭크: gate_blank_s(기본 min_loop 연동) 동안 카운트 금지
+        #  ① 블랭크: gate_blank_s 동안 카운트 금지
         #  ② 재무장(arm): 가로선이 gate_rearm_s 이상 "연속으로 꺼져" 있어야
         #     다음 상승엣지를 셀 수 있음 (한두 프레임 깜빡임으로는 무장 안 됨)
-        #  ③ 지속: gate_sustain_s 연속 ON 이어야 카운트 (blip 배제)
+        #  ③ 지속: 군집 누적 ON 문턱 이상이어야 카운트 (blip 배제)
         self._gate_count = 0
         self._gate_cluster_on = 0.0
         self._gate_cluster_counted = False
         self._gate_in_cluster = False
         self._gate_cluster_void = False
-        # 블랭크 무스케일 (07-13): 임무가 '잔상 출생 시점 덮기'로 축소 — 시작
-        # 시점은 속도 무관. 스케일 버전은 빠른 접근에서 오히려 짧아져 위험.
+        # 블랭크는 무스케일: 임무가 '잔상 출생 시점 덮기'라 시작 시점은 속도 무관.
+        # (스케일하면 빠른 접근에서 오히려 짧아져 위험)
         self._gate_cd = float(self.cfg.get('gate_blank_s', self.cfg['min_loop_time_s']))
         self._gate_armed = False
         self._gate_off_t = 0.0
@@ -293,14 +262,14 @@ class RaceStateMachine:
         """(steering, throttle, state_name) 을 반환한다."""
         center = self.cfg['steer_center']
         stop = self.cfg['stop_throttle']
-        # 탈출 구간 종료 (07-14 항목4): perception 이 흰 실선 이벤트를 보고하면 해제.
-        # 이후 블라인드는 기존 EMA 수렴으로, 스로틀 slow 캡도 풀린다.
+        # 탈출 구간 종료: perception 이 흰 실선 이벤트를 보고하면 해제.
+        # 이후 블라인드는 기존 EMA 수렴으로, 스로틀 캡도 풀린다.
         if self.merge_done_sig:
             self._exit_active = False
         # 재획득 규칙 무장 여부 (decision -> perception, /decision/merge_zone 토픽).
         # RA+reacq_arm_s 경과 시 True — perception 의 "nl 0->1 재획득 = 우측 경계"
-        # 분류 규칙을 무장시킨다. (07-12: yaw 위치창 스코프를 대체. 토픽명은
-        # perception 리빌드를 피하려고 merge_zone 그대로 둠.)
+        # 분류 규칙을 무장시킨다. (토픽명은 perception 리빌드를 피하려고
+        # merge_zone 그대로 둠.)
         self.reacq_armed = False
 
         # ----- 차선 전용 테스트 모드 (skip_missions) -----
@@ -318,11 +287,10 @@ class RaceStateMachine:
 
         if self.state not in (State.WAIT_GREEN, State.DONE):
             self.race_t += dt   # 출발 후 경과 시간 (FINISH 게이트용)
-        # 스로틀 동적 보정 (07-12): 같은 스로틀도 팩 상태로 런마다 속도가 널뜀
-        # (run56 부족/run57~58 과속, 전부 0.19~0.21). G->Y래치(분기 노랑 첫 지속
-        # 감지) 소요시간으로 이 런의 속도를 측정해 이후 순항 스로틀에 보정을
-        # 가산한다. 실측: 적정 4.4~4.7s / 과속 3.2~3.6s — 신호가 킥 과도구간을
-        # 포함해 속도차를 ~3배 압축하므로 게인이 큼 (run57 역산 0.04~0.07).
+        # 스로틀 동적 보정: 같은 스로틀도 배터리 상태로 런마다 속도가 달라지므로,
+        # G->Y래치(분기 노랑 첫 지속 감지) 소요시간으로 이 런의 속도를 측정해 이후
+        # 순항 스로틀에 보정을 가산한다. 신호가 킥 과도구간을 포함해 속도차를
+        # 압축하므로 게인이 크다. gain 0 = off.
         if (self.state == State.DRIVE and not self.roundabout_done
                 and not self._latch_seen):
             if lane.yellow_ratio >= self.cfg.get('y_latch_ratio', 0.02):
@@ -357,7 +325,7 @@ class RaceStateMachine:
             else:
                 self._fork_absent_t += dt
             # 재수렴 디바운스: fork '0.3s 연속 부재'여야 재수렴, 락온 최소 0.5s 유지
-            # (1프레임 blip 재수렴으로 진입 락이 같은 틱에 풀리던 것 실측 대응).
+            # (1프레임 blip 재수렴으로 진입 락이 같은 틱에 풀리는 것 방지).
             reconverged = (self._fork_seen
                            and self._fork_absent_t >= 0.3
                            and self.turn_latch_age >= 0.5)
@@ -384,7 +352,7 @@ class RaceStateMachine:
         # 구간 밖에서는 기존처럼 면적 게이트를 요구해, 트랙 반대편의 마커가 멀리 보이는
         # 것만으로 서버리는 사고를 막는다.
         in_red_zone = self._in_red_zone(lane)
-        # 07-14: area 분기에도 RA 완료 게이트 — in 코스에서 마커는 항상 RA 뒤 구간에만
+        # area 분기에도 RA 완료 게이트 — in 코스에서 마커는 항상 RA 뒤 구간에만
         # 존재하므로(위 주석), RA 전 큰 마커 오검출이 OBSTACLE_STOP→클리어→
         # obstacle_done 조기 세팅→빨간불 조기 무장으로 이어지는 체인을 차단한다.
         marker_armed = (self.cfg.get('course', 'in') != 'in' or self.roundabout_done)
@@ -403,12 +371,10 @@ class RaceStateMachine:
 
         # ----- DRIVE -----
         if self.state == State.DRIVE:
-            # 탈출 락: 탈출 직후 시간창 동안 '소실 프레임에만' 우측 호 (차선 잡히면
-            # 즉시 PID 인계). 무조건 가산은 추종 기회를 없앰(run25). 양수 = 탈출측(우).
-            # 07-14 항목4: 탈출 구간(_exit_active) 중에는 '마지막 조향 유지'가 소실
-            # 프레임을 전담하므로, 이중 가산을 피하려 여기선 편향을 걸지 않는다.
-            # (exit_steer_bias 는 고정 2.5s 창이라 스로틀 인상 후 커버 거리가 어긋남 —
-            #  이벤트 기반 유지로 대체. 값 자체 재캘리는 별도 작업.)
+            # 탈출 락: 탈출 직후 시간창 동안 '소실 프레임에만' 탈출측 호 (차선 잡히면
+            # 즉시 PID 인계). 무조건 가산은 추종 기회를 없앤다. 양수 = 탈출측(우).
+            # 탈출 구간(_exit_active) 중에는 '마지막 조향 유지'가 소실 프레임을
+            # 전담하므로, 이중 가산을 피하려 여기선 편향을 걸지 않는다.
             if self._exit_lock_t > 0.0:
                 self._exit_lock_t -= dt
                 if not lane.lane_found and not self._exit_active:
@@ -417,21 +383,20 @@ class RaceStateMachine:
             # 회전교차로 진입 (In 코스, 한 번 완료하기 전까지만).
             # 큰 틀(인코스 플로우): 노란 추종으로 링까지 온 뒤, 정지선처럼 보이는
             # 노란 가로선(yellow_crossline)을 "처음" 만나면 ROUNDABOUT on.
-            # 오검 방지 장치 둘은 유지 — yellow_ratio 게이트(흰 외곽 루프에서
-            # 안 걸리게) + enter_sustain_s 지속 debounce(한 프레임 깜빡임 무시).
+            # 오검 방지 장치 둘 — yellow_ratio 게이트(흰 외곽 루프에서 안 걸리게)
+            # + enter_sustain_s 지속 debounce(한 프레임 깜빡임 무시).
             # 탈출은 ROUNDABOUT 블록의 게이트 카운트: 같은 가로선을 "한 번 더"
             # 만나면 출구 브랜치 락온으로 나간다.
-            # 07-11: 인코스 '입구'에서 노란 차선이 비스듬히 가로지르며 정지선으로
-            # 오인돼 출발 5.9초 만에 오진입했다. 대회는 항상 출발선에서 시작하고
-            # 진짜 정지선 도달은 12초+ (auto2/3 실측 12.4~12.9초) 이므로 시간 가드.
-            # 중간 배치 테스트 시 ra_min_drive_s=0 으로 끌 것.
+            # ra_min_drive_s 시간 가드: 대회는 항상 출발선에서 시작하므로, 초반의
+            # 비스듬한 노란 차선이 정지선으로 오인돼 조기 진입하는 것을 시간으로
+            # 차단한다. 중간 배치 테스트 시 ra_min_drive_s=0 으로 끌 것.
             armed_t = self.race_t >= self.cfg.get('ra_min_drive_s', 0.0)
             if self.cfg['course'] == 'in' and not self.roundabout_done and armed_t:
                 on_yellow = lane.yellow_ratio >= self.cfg['yellow_enter_ratio']
                 gate = on_yellow if self.cfg['use_yellow_entry'] else True
                 # 곡률 게이트: 급커브에서는 노란 차선 자체가 '수평에 가까운 선'으로 보여
-                # 크로스라인 검출을 통과한다(실측: 좌회전 중 cv=-1.00 에서 오진입).
-                # 진짜 정지선은 차선과 수직이므로 곧은 구간에서 만난다. 0 = 게이트 off.
+                # 크로스라인 검출을 통과할 수 있다. 진짜 정지선은 차선과 수직이므로
+                # 곧은 구간에서 만난다. 0 = 게이트 off.
                 cmax = self.cfg.get('enter_max_curvature', 0.0)
                 straight = (cmax <= 0.0
                             or abs(getattr(lane, 'curvature', 0.0)) <= cmax)
@@ -463,20 +428,19 @@ class RaceStateMachine:
             throttle = self.cfg['drive_throttle'] * (1.0 - self.cfg['curve_slow'] * curve)
             throttle = max(self.cfg['slow_throttle'], throttle)
             # 노란 구간(DRIVE[Y] = 회전교차로 접근/갈림길)은 검출·조향이 가장 어려운
-            # 구간이라 상한을 따로 둔다 (07-11: 노란 접근에서의 요동·이탈이 반복돼
-            # 흰 구간과 속도를 분리). yellow_ratio 는 FOLLOW-Y 전환과 같은 문턱을 쓴다.
+            # 구간이라 스로틀 상한을 따로 둔다. yellow_ratio 는 FOLLOW-Y 전환과
+            # 같은 문턱을 쓴다.
             ydt = self.cfg.get('yellow_drive_throttle', 0.0)
             if ydt > 0.0 and lane.yellow_ratio >= self.cfg.get('yellow_slow_ratio', 0.03):
                 throttle = min(throttle, ydt)
-            # 병합 감속 (07-13 run94 → 07-14 항목4): 탈출 구간(_exit_active) 동안은
-            # 블라인드 구간 최고속(0.19) 진입을 막는다 — 고속 밴드에서 무차선 주파
-            # 거리가 길어져 흰 획득 전에 이탈 (run94: 좌모서리). 상한 = slow.
-            # 고정 6s 창(merge_bridge)이 아니라 이벤트 플래그에 묶여, 감속이 속도
-            # 무관하게 실제 병합 완료(흰 실선 이벤트)까지 이어진다.
+            # 병합 감속: 탈출 구간(_exit_active) 동안은 블라인드 구간 최고속 진입을
+            # 막는다 — 고속 밴드에서 무차선 주파 거리가 길어져 흰 획득 전에 이탈.
+            # 고정 시간창이 아니라 이벤트 플래그에 묶여, 감속이 속도 무관하게
+            # 실제 병합 완료(흰 실선 이벤트)까지 이어진다.
             if self._exit_active:
-                # 07-15 v2.1 ⑤a: 탈출 캡을 slow(0.17)와 분리 — 0.17 은 운동유지 실측
-                # 임계 0.175 '아래'라 병합 중 물리 스톨 경로였다 (킥은 명령 0 경유
-                # 에만 재무장 = 영구 정차). 0.185 = 임계 + ESC 1틱 여유. 0 = 구 동작.
+                # 탈출 캡은 slow 와 분리 — slow(0.17)는 운동유지 실측 임계(0.175)
+                # 아래라 병합 중 물리 스톨 경로다 (킥은 명령 0 경유에만 재무장
+                # = 영구 정차). 0 = slow 캡 사용.
                 cap = float(self.cfg.get('exit_cap_throttle', 0.0))
                 throttle = min(throttle, cap if cap > 0.0 else self.cfg['slow_throttle'])
             # 빨간 도로(장애물 구간)가 보이기 시작하면 저속주행. 마커 앞에서 제동 거리를
@@ -485,25 +449,20 @@ class RaceStateMachine:
                 throttle = min(throttle, self.cfg['slow_throttle'])
             return steer, throttle, self.state.value
 
-        # ----- ROUNDABOUT (IMU/마커 없음: 3가지 바퀴 수 추정치로 표결) -----
+        # ----- ROUNDABOUT -----
         if self.state == State.ROUNDABOUT:
             self.circle_t += dt
             # 링 유지: 회전 방향으로 편향을 줘서 차선 추종이 한 바퀴를 다 돌기 전에
             # 출구 브랜치로 빠지지 않게 한다.
             steer = steer + self.cfg['turn_direction'] * self.cfg['circle_steer_bias']
-            # 진입 피드포워드 (07-11): 진입 갈림길은 코스에서 가장 급한 좌회전인데
-            # RA 에선 곡률 피드포워드가 없어 PID 가 뒤쫓기만 하다 3개 런 연속
-            # 언더스티어로 링 선을 놓쳤다 (진입 직후 nl=0 -> off -0.94, steer 포화).
-            # 07-15 v2.1 (사용자 확정): '가산' -> '하한(floor)'. 무조건 가산은 추종
-            # 프레임에서 PID 와 이중 조향이 돼 안쪽 파고듦(오버스티어) — 하한은
-            # PID 가 이미 충분히 좌향이면 아무것도 안 더하고, PID 가 늦거나(언더스티어
-            # 3런) 소실로 중앙 수렴이면 링 유지 호(|bias|)까지만 끌어올린다. 코리도가
-            # 엉뚱한 선을 물어 우향 명령이 나와도 강제 좌향 (진입 1~3s 는 기하 확정).
-            # entry_ff_floor=0 이면 구 동작(무조건 가산) 복귀.
-            # 07-15 밤 (사용자): 카메라 하향+재캘리로 차체 위치 관측이 정확해져,
-            # 진입 0~3s 전체를 PID 자율 조향으로 전환 — entry_steer_bias 0.0 이
-            # FF 완전 비활성 (추종 프레임 = PID, 소실 프레임 = 아래 ra_blind 전담).
-            # 값을 되살리면(-0.15 등) 하한/가산 동작이 그대로 복귀한다.
+            # 진입 피드포워드: 진입 갈림길은 코스에서 가장 급한 좌회전인데 RA 에선
+            # 곡률 피드포워드가 없어 PID 만으로는 언더스티어로 링 선을 놓칠 수 있다.
+            # 동작은 '하한(floor)': 무조건 가산은 추종 프레임에서 PID 와 이중 조향이
+            # 돼 안쪽 파고듦(오버스티어) — 하한은 PID 가 이미 충분히 좌향이면
+            # 아무것도 안 더하고, PID 가 늦거나 소실로 중앙 수렴이면 링 유지 호
+            # (|bias|)까지만 끌어올린다 (진입 초반은 기하가 확정이므로 강제 좌향 허용).
+            # entry_ff_floor=0 이면 가산 방식. entry_steer_bias 0.0 = FF 완전 비활성
+            # (추종 프레임 = PID, 소실 프레임 = 아래 ra_blind 전담).
             ff = self.cfg['turn_direction'] * self.cfg.get('entry_steer_bias', 0.0)
             if self._entry_lock_active and ff != 0.0:
                 if int(self.cfg.get('entry_ff_floor', 1)):
@@ -512,34 +471,31 @@ class RaceStateMachine:
                 else:
                     steer = steer + ff
             # 재획득 규칙 무장: RA+reacq_arm_s 후 nl 0->1 재획득 선 = 우측(바깥) 경계.
-            # 실측(런19~26): 5s 후 0->1 은 합류부에서만 발생(순항 오발 0건), 2->1 은
-            # 순항 중 일상이라 제외. 구 yaw 위치창은 속도 의존(창 밀림)으로 폐기 —
-            # 시간 하한 5s 는 진입 잔재(<2.6s)와 합류부(~14s+) 사이라 사실상 면역.
+            # 시간 하한은 진입 잔재 전이와 합류부 0->1 사이에 놓여 사실상 면역
+            # (2->1 은 순항 중 일상이라 규칙에서 제외).
             self.reacq_armed = (self.circle_t
                                 >= self.cfg.get('reacq_arm_s', 5.0))
-            # RA 맹목 폴백 (07-11 run21): 링 위에서 차선 소실 시 기본값 '직진(0.26)'은
-            # 항상 오답 — RA+3.5s 소실 후 19초 직진 이탈 실측. 소실 프레임에는 링 유지
-            # 호(-0.15 = 링 실측 요구 편차)를 얹는다. 단 진입 락이 이미 활성인
-            # 프레임에는 중복 가산하지 않는다 (겹치면 과회전). 정상 추종 프레임 미적용.
-            # 07-15 밤: 진입 FF 가 꺼져 있으면(bias 0) 진입락 중 소실 프레임도
-            # 블라인드 링 호가 전담한다 (FF 활성 시엔 기존대로 중복 가산 방지).
+            # RA 맹목 폴백: 링 위에서 차선 소실 시 기본값 '직진'은 항상 오답 —
+            # 소실 프레임에는 링 유지 호(ra_blind_bias)를 얹는다. 단 진입 락 FF 가
+            # 활성인 프레임에는 중복 가산하지 않는다 (겹치면 과회전). 정상 추종
+            # 프레임 미적용. 진입 FF 가 꺼져 있으면(bias 0) 진입락 중 소실 프레임도
+            # 블라인드 링 호가 전담한다.
             if not lane.lane_found and not (self._entry_lock_active and ff != 0.0):
                 steer = steer + self.cfg['turn_direction'] * self.cfg.get('ra_blind_bias', 0.0)
             steer = max(-1.0, min(1.0, steer))
 
-            # (1) 조향 적분 yaw proxy (IMU 대체). 속도가 거의 일정하면 누적 yaw 는
+            # 조향 적분 yaw proxy (IMU 대체). 속도가 거의 일정하면 누적 yaw 는
             # 회전 방향 조향 편향량의 합에 비례(∝)한다.
-            # 임계값은 실제 트랙에서 캘리브레이션한다 (yaw_lap_threshold).
-            # 07-11: 이 차의 조향 규약은 steer>center=좌 (실측 3중 검증). turn_direction
-            # (-1=CCW) 가정과 반대라 부호를 뒤집는다 — 안 뒤집으면 CCW 링에서 좌조향이
-            # 음수 defl 이 되어 yaw_proxy 가 영영 0 (백업 표결의 yaw 표가 못 나옴).
+            # 이 차의 조향 규약은 steer>center=좌 (실측 검증). turn_direction
+            # (-1=CCW) 가정과 반대라 부호를 뒤집는다 — 안 뒤집으면 CCW 링에서
+            # 좌조향이 음수 defl 이 되어 yaw_proxy 가 영영 0.
             defl = -self.cfg['turn_direction'] * (steer - center)
             if defl > 0.0:
                 self.yaw_proxy += defl * dt
 
             # 진입측 락온 해제: fork 재수렴(위 공통 latch 블록)이 먼저 오면 그때,
             # 아니면 entry_lock_release_s 경과 시 무조건 해제. 진입 갈림길은 순식간에
-            # 지나가므로 오래 유지하면 시드가 안쪽 실선을 파고든다 (변수 5 대응).
+            # 지나가므로 오래 유지하면 시드가 안쪽 실선을 파고든다.
             if self._entry_lock_active:
                 if (self.turn_latch is None
                         or self.circle_t >= self.cfg.get('entry_lock_release_s', 2.0)):
@@ -547,17 +503,14 @@ class RaceStateMachine:
                     self._fork_seen = False
                     self._entry_lock_active = False
 
-            # (2b) 게이트 = 정지선 '군집' 카운터 v2 (07-13): 링 위 가로선 순서는
-            # 물리 불변량 — 진입선 잔상 -> 반대편 입구(군집#1) -> 우리 입구(군집#2
-            # = 탈출). 속도/배터리/스로틀과 무관 (yaw 문턱 방식의 연쇄 실패
-            # run55/64/65/66/68/72 대체).
-            #   군집: 목격 간격 < gate_cluster_gap_s 병합 (고속 파편 0.1s x4,
-            #         입구 2조각 1.3~1.6s 실측 대응)
-            #   카운트: 군집 누적 ON >= gate_cluster_on_s (링 중간 3프레임 약피처
-            #           max 0.16s 배제 / 입구 min 0.21s 통과)
-            #   잔상: 길이가 링 속도 따라 4~9.3s 로 변해 고정 블랭크로 못 덮는다
-            #         (run69 오카운트) -> '블랭크 중 태어난 군집은 통째 무효'.
-            #         시작 시점은 속도 무관하게 항상 RA+0 부근이라는 불변량 이용.
+            # 게이트 = 정지선 '군집' 카운터: 링 위 가로선 순서는 물리 불변량 —
+            # 진입선 잔상 -> 반대편 입구(군집#1) -> 우리 입구(군집#2 = 탈출).
+            # 순서 기반이라 속도/배터리/스로틀과 무관.
+            #   군집: 목격 간격 < gate_cluster_gap_s 병합 (파편/2조각 대응)
+            #   카운트: 군집 누적 ON >= gate_cluster_on_s (약피처 blip 배제)
+            #   잔상: 길이가 링 속도에 따라 변해 고정 블랭크로 못 덮는다 ->
+            #         '블랭크 중 태어난 군집은 통째 무효'. 잔상 시작 시점은 속도
+            #         무관하게 항상 RA 직후라는 불변량 이용.
             self._gate_just_counted = False
             if self._gate_cd > 0.0:
                 self._gate_cd = max(0.0, self._gate_cd - dt)
@@ -579,7 +532,7 @@ class RaceStateMachine:
                     self._gate_cluster_counted = False
                     self._gate_in_cluster = False
                     self._gate_cluster_void = False
-            # yaw 는 위생 하한으로 강등 (1.0 = "조금이라도 돌았다"; 위치 판별은
+            # yaw 는 위생 하한 (yaw_gate_min = "조금이라도 돌았다"; 위치 판별은
             # 군집 순서가 담당)
             yaw_ok = (self.yaw_proxy
                       >= self.cfg.get('yaw_gate_min', 0.0) * self._speed_scale)
@@ -596,20 +549,15 @@ class RaceStateMachine:
             # ----- 바퀴 수 판정 -----
             # 절대 하한: min_loop_time 전에는 절대 탈출하지 않는다 (한 바퀴 미달은
             # 미션 실패이고, 진입 쪽 노란 가로선을 출구로 오인하는 것도 막아준다).
-            # 주 탈출 = 게이트 카운트. 백업 표결은 07-15 삭제 (아래 비상구가 유일).
-            # 편향은 늦게 나가는 쪽으로, 절대 일찍 나가지 않는다.
-            # 직발화 (07-13 run92/93, 사용자 설계): STOPLINE 청정 스트림에서는
-            # 잔상(void)·B(분류기 침묵, ~0.07s)가 걸러져 카운트되는 첫 군집 =
-            # A 재도달. 카운트 성립 그 프레임에 즉시 발화한다. min_loop 미적용
-            # (run93 후 사용자 결정 — 조기 래치 시 A1차 무랩 탈출 리스크 인지).
-            # 고속 밴드 A 체류 0.17s 대응은 gate_cluster_on_s 0.12 (aux.sh).
-            # ⚠️ B 누출 스트림(stopline_mode 0)에서는 B 가 #1 로 카운트되므로
-            # 이 경로가 B 오발을 만든다 — 반드시 stopline_mode 1 과 함께 켤 것.
-            # 07-15 v2.1 (감사 ring-1/2): 직발화에 링 체류 하한 — 반대편 입구
-            # (B, 반랩 ~10s)와 진입 A 잔상 재출생(실측 <=9.3s)이 전부 이 하한
-            # 아래라, 분류기 스테일/void 균열로 뚫려도 무랩·반랩 조기 발화(실격
-            # 방향)를 시간으로 차단한다. A 재도달은 실측 랩 18.6s+ 로 여유.
-            # frac 0.7 x min_loop(17) x scale(0.6~1.3) = 7.1~15.5s. 0 = off.
+            # 주 탈출 = 게이트 카운트. 편향은 늦게 나가는 쪽으로, 절대 일찍 나가지 않는다.
+            # 직발화: 정지선 분류기(stopline_mode 1)의 청정 스트림에서는 잔상(void)·
+            # 반대편 입구(분류기 침묵)가 걸러져 카운트되는 첫 군집 = A 재도달.
+            # 카운트 성립 그 프레임에 즉시 발화한다 (min_loop 게이트 미적용).
+            # ⚠️ 분류기 없는 누출 스트림에서는 반대편 입구가 #1 로 카운트되므로
+            # 이 경로가 오발을 만든다 — 반드시 perception stopline_mode 1 과 세트로 켤 것.
+            # 직발화 링 체류 하한(fire_min): 반대편 입구(반랩)와 진입 잔상 재출생이
+            # 전부 이 하한 아래라, 분류기 스테일/void 균열로 뚫려도 무랩·반랩 조기
+            # 발화(실격 방향)를 시간으로 차단한다. A 재도달(1랩+)은 여유 통과. 0 = off.
             fire_min = (float(self.cfg.get('ra_fire_min_frac', 0.7))
                         * self.cfg['min_loop_time_s'] * self._speed_scale)
             if (int(self.cfg.get('ra_direct_fire', 0))
@@ -619,7 +567,6 @@ class RaceStateMachine:
                 self.turn_latch_age = 0.0
                 self._fork_seen = False
                 self.roundabout_done = True
-                self._merge_bridge_t = float(self.cfg.get('merge_bridge_s', 0.0))
                 self._enter(State.DRIVE)
                 return steer, self.cfg['slow_throttle'], self.state.value
 
@@ -633,23 +580,18 @@ class RaceStateMachine:
                     self.turn_latch_age = 0.0
                     self._fork_seen = False
                     self.roundabout_done = True
-                    self._merge_bridge_t = float(self.cfg.get('merge_bridge_s', 0.0))
                     self._enter(State.DRIVE)
                     return steer, self.cfg['slow_throttle'], self.state.value
 
-            # 비상구 (07-15 사용자 결정, 유일 failsafe): 3중 표결(yaw/시간/가로선
-            # 재등장)은 전부 삭제 — yaw 적분·랩타임 가정이 속도 의존이라 스로틀
-            # 밴드마다 재캘리를 요구했고, 오발 = 1바퀴 미달 조기 탈출 = 실격
-            # (run55/64/65/66/68/72/74 연쇄). 규정상 과회전은 무해하므로 백업은
-            # "일찍 나갈 수 있는 보험"이 아니라 "늦게라도 반드시 나가는 문" 하나만:
-            # 링 체류 절대 시간 상한 (속도 스케일 없음 — 위치 판별은 게이트가 전담,
-            # 이 문턱은 2랩 근처(=A 부근)로 실측 랩타임 기반 캘리할 것).
+            # 비상구 (유일 failsafe): 링 체류 절대 시간 상한 (속도 스케일 없음 —
+            # 위치 판별은 게이트가 전담). 규정상 과회전은 무해하므로 백업은
+            # "일찍 나갈 수 있는 보험"이 아니라 "늦게라도 반드시 나가는 문" 하나만
+            # 둔다. 이 문턱은 2랩 근처(=A 부근)로 실측 랩타임 기반 캘리할 것.
             if self.circle_t >= self.cfg.get('ra_failsafe_exit_s', 40.0):
                 self.turn_latch = self.cfg['roundabout_exit_side']
                 self.turn_latch_age = 0.0
                 self._fork_seen = False
                 self.roundabout_done = True
-                self._merge_bridge_t = float(self.cfg.get('merge_bridge_s', 0.0))
                 self._enter(State.DRIVE)
             return steer, self.cfg['slow_throttle'], self.state.value
 

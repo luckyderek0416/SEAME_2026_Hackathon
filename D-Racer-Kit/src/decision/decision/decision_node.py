@@ -40,49 +40,39 @@ class DecisionNode(Node):
         self.declare_parameter('kp', 0.6)
         self.declare_parameter('ki', 0.0)
         self.declare_parameter('kd', 0.15)
-        self.declare_parameter('steer_center', 0.26)  # 쏠림(drift) 보정용 조향 bias (07-07 수동주행 실측: 0.26에서 정확히 직진)
-        self.declare_parameter('steer_scale', -1.0)   # NEGATIVE: 트랙 검증 결과 조향 부호가 반대였음(오른쪽 치우침 offset<0 -> 더 왼쪽 조향해야 교정)
-        # 좌우 조향 비대칭 보정: 차가 좌조향 시 실제로 덜 꺾여서, 좌조향(steer_center 위쪽
-        # 편차)만 이 배율로 증폭한다. 1.0=off. 좌조향 = steer > steer_center (PID 부호 검증).
-        self.declare_parameter('steer_left_gain', 1.0)  # 07-07 원 그리기 실측: center 0.26 기준
-        # 좌/우 원 지름 동일(187cm) = 대칭 확인. 예전 "좌측 덜 꺾임"은 center 오프셋(0.2)
-        # 증상이었음. center 재캘리 시 이 값도 원 테스트로 재확인할 것.
+        self.declare_parameter('steer_center', 0.26)  # 직진 조향값 (쏠림 보정 bias; 실측 캘리)
+        self.declare_parameter('steer_scale', -1.0)   # PID 보정 -> 조향 매핑 배율. 음수 필수:
+                                                      # 오른쪽 치우침(offset<0)일 때 좌조향으로 교정
+        # 좌우 조향 비대칭 보정: 좌조향(steer_center 위쪽 편차)만 이 배율로 증폭.
+        # 1.0=off. 좌조향 = steer > steer_center (부호 규약). steer_center 재캘리 시
+        # 원 그리기 테스트로 좌/우 대칭 재확인할 것.
+        self.declare_parameter('steer_left_gain', 1.0)
         # 급커브 feed-forward: DRIVE 에서 곡률에 비례한 조향 편향을 추가한다. 급좌커브에서
         # 가까운 왼선을 놓쳐도 curvature(밴드 간 차이)는 살아있어 미리·더 꺾게 해준다.
         # 0=off. 부호는 offset 과 동일 규약이라 target 에 그대로 더한다(좌커브 curvature<0).
         self.declare_parameter('curve_steer_bias', 0.0)
 
         # ----- throttle 단계 (키트의 set_throttle_percent 규약) -----
-        # 07-10 실측(만충 8.2V, 바닥): ESC 는 1580us(0.16)에서 바퀴가 돌기 시작하지만
-        # 차체 무게를 밀고 실제로 '전진'하는 임계는 1600us(0.20)이다. 배터리가 닳으면
-        # 이 임계가 올라가므로 두 값 모두 임계 위로 여유를 두고 잡는다.
-        #   throttle -> pulse:  1500us + throttle*500us  (neutral 1500, fwd 2000)
-        # 07-10 바닥 실측(만충 8.22V). PCA9685 12bit/50Hz 라 1틱 = 4.88us = throttle 0.0098:
-        #   정지->출발 임계(정지마찰): 0.20 (1602us, 틱328)
-        #   굴러가는 중 유지 임계(운동마찰): 0.175 (1587us, 틱325) 로도 계속 주행
-        # 배터리가 닳으면 두 임계 모두 올라간다 -> 반쯤 닳은 상태에서 재검증할 것.
-        self.declare_parameter('drive_throttle', 0.20
-        )   # 07-15 사용자 고정   # 1602us: DRIVE 기본(=직선 최고 속도).
+        # throttle -> pulse: 1500us + throttle*500us (neutral 1500, fwd 2000).
+        # 실측 임계: 정지->출발(정지마찰) ~0.20, 굴러가는 중 유지(운동마찰) ~0.175.
+        # 배터리가 닳으면 두 임계 모두 올라가므로 임계 위로 여유를 두고 잡는다.
+        self.declare_parameter('drive_throttle', 0.20)   # DRIVE 기본(=직선 최고 속도).
                                                          # curve_slow/steer_slow 가 여기서 깎는다.
-        self.declare_parameter('slow_throttle', 0.17)    # 07-15 사용자 고정
-        # 노란 구간(DRIVE[Y]) 전용 상한: 접근/갈림길에서 저속·정밀 주행 (0=기능 off).
-        # 07-12 run47 실증 + 사용자 확정: 노란 구간은 0.165 고정. (0.17 이던 시절에도
-        # 커브 감속이 하한 0.165 로 깎아 링에선 사실상 0.165 였음 — 카메라 재캘리 후
-        # 곡률 추정이 정확해지며 상시 하한 도달. 변동 요소를 없애고 상수로 못 박는다.)
-        self.declare_parameter('yellow_drive_throttle', 0.19)  # 07-15 사용자 고정
-        self.declare_parameter('yellow_slow_ratio', 0.03)   # 노란 구간 판정 문턱 (FOLLOW-Y 와 동일 값 유지 — 07-11 run8 후 0.03 복원에 동기화)   # 1587us: ROUNDABOUT 주행 + 감속 바닥.
+        self.declare_parameter('slow_throttle', 0.17)    # ROUNDABOUT 주행 + 감속 하한.
                                                          # 유지는 되지만 정지에서 출발은 불가.
+        # 노란 구간(DRIVE[Y]) 전용 상한: 접근/갈림길에서 저속·정밀 주행 (0=기능 off).
+        self.declare_parameter('yellow_drive_throttle', 0.19)
+        self.declare_parameter('yellow_slow_ratio', 0.03)   # 노란 구간 판정 문턱 (FOLLOW-Y 전환과 동일 값 유지)
         self.declare_parameter('stop_throttle', 0.0)     # 1500us: 중립
         # 출발 킥: 스로틀이 0에서 살아나는 모든 순간(초록불 출발, ArUco 장애물 해제 후
         # 재출발)에만 잠시 킥 값까지 올렸다가 목표치로 되돌린다.
-        # 킥 값은 정지->출발 임계(0.20)보다 확실히 위여야 한다. 정지에서 출발할 때의 목표는
-        # 항상 drive_throttle(0.20)인데 그게 곧 임계값이라 여유가 0이고, 배터리가 닳으면
-        # 임계가 올라가 아예 못 나간다. 0.24(1620us)는 실측상 확실히 출발하는 값이다.
-        # (순항 속도로는 빠르지만 0.4s 만 유지하므로 무해)  0 = off.
-        self.declare_parameter('start_kick_throttle', 0.23)   # 1620us: 임계(0.20)보다 확실히 위
+        # 킥 값은 정지->출발 임계(0.20)보다 확실히 위여야 한다: 정지에서 출발할 때의 목표
+        # drive_throttle 이 곧 임계값이라 여유가 0이고, 배터리가 닳으면 임계가 올라가
+        # 아예 못 나간다. (순항 속도로는 빠르지만 짧게만 유지하므로 무해)  0 = off.
+        self.declare_parameter('start_kick_throttle', 0.23)
         self.declare_parameter('start_kick_s', 1.0)           # 킥 유지 시간(초)
         self.declare_parameter('curve_slow', 0.5)     # DRIVE: 커브에서 감속 (|curvature| 비례)
-        # ----- look-ahead 보조 (기본 0 = 기존 동작 그대로) -----
+        # ----- look-ahead 보조 (기본 0 = 비활성) -----
         self.declare_parameter('max_steering_delta', 0.0)  # 틱당 조향 변화 상한; 0=off
         self.declare_parameter('steer_slow', 0.0)          # |조향|에 비례한 감속 게인; 0=off
 
@@ -103,26 +93,23 @@ class DecisionNode(Node):
 
         # ----- 미션 튜닝 -----
         self.declare_parameter('conf_threshold', 0.5)  # YOLO 인식 confidence 문턱
-        # 07-08 실측: 기동 직후 노출 안정화 전 프레임에서 순간 초록 오인식으로
-        # 3프레임(0.1s)이 뚫려 조기 출발한 사례 -> 10프레임(0.33s) 연속 요구.
-        # 진짜 초록불은 상시 점등이라 출발 지연 영향은 ~0.2s 뿐.
+        # 초록불: 기동 직후 노출 안정화 전의 순간 오인식으로 조기 출발하지 않도록
+        # 연속 프레임을 요구한다. 진짜 초록불은 상시 점등이라 출발 지연 영향은 미미.
         self.declare_parameter('green_frames', 10)
-        self.declare_parameter('red_frames', 20)  # 07-16 사용자: 빈 신호등 오인식 정지 → 20 (~0.7s 연속)
+        self.declare_parameter('red_frames', 20)  # 빨간불 연속 인식 프레임 (순간 오인식 정지 방지)
         # 빨간불 대기 무장: 주 조건은 장애물 미션 완료(obstacle_done, 코스 순서 고정).
         # finish_min_drive_s 는 아루코를 통째로 놓친 비상 주행용 예비 무장 —
         # 이 시간(초) 경과 시 장애물 미완이어도 빨간불 인식을 켠다.
-        # 실측 코스 소요시간보다 여유 있게 길게 설정할 것. 신호등 bbox 최소 면적
-        # (정규화 w*h, 0=off)도 함께 — 멀리 있는 작은 오검출 박스 필터.
+        # 실측 코스 소요시간보다 여유 있게 길게 설정할 것.
         self.declare_parameter('finish_min_drive_s', 60.0)
-        self.declare_parameter('light_min_area', 0.002)  # 07-16 사용자: 먼/작은 오검출 박스 필터
+        self.declare_parameter('light_min_area', 0.002)  # 신호등 bbox 최소 면적 (정규화 w*h, 0=off) — 먼/작은 오검출 필터
         # 빨간 도로(ArUco 장애물 구간) 감지 임계. ROI 중 빨간 픽셀 비율이 이 값 이상이면
         # (1) DRIVE 스로틀을 slow_throttle 로 묶어 미리 감속하고,
         # (2) 그 구간 안에서는 marker_area_trigger 를 무시하고 마커가 보이는 즉시 정지한다.
         # 멀리서 빨간 도로가 '보이기 시작하는' 수준으로 낮게 잡을 것. 0 = 기능 off.
         self.declare_parameter('red_slow_ratio', 0.05)
         self.declare_parameter('marker_area_trigger', 0.02)
-        self.declare_parameter('marker_clear_frames', 8)   # run80: 정지중 검출 깜빡임 흡수 + 제거 후 ~0.8s 재출발
-        self.declare_parameter('fork_bias', 0.2)    # (미사용 — 07-11 방안1: 조향 경로에서 제거, 탈출 락으로 대체)
+        self.declare_parameter('marker_clear_frames', 8)   # 마커 제거 판정 연속 미검출 프레임 (정지 중 깜빡임 흡수)
         self.declare_parameter('fork_hold_s', 8.0)  # latch failsafe: fork 신호가 계속 켜져 있어도 이 시간 지나면 해제(초)
         # ----- 갈림길 표지판 방향 표결 (decision_node 로컬; on_dets 에서 사용) -----
         self.declare_parameter('fork_sign_min_conf', 0.50)  # 이 confidence 미만 표지판은 무시
@@ -131,15 +118,11 @@ class DecisionNode(Node):
         self.declare_parameter('fork_vote_clear_s', 1.0)    # 표지판 끊긴 뒤 표결 초기화까지(떨림방지창; 홀드 아님)
 
         # ----- 회전교차로 (junction 카운트, IMU 없음) -----
-        self.declare_parameter('enter_sustain_s', 0.12)
-        self.declare_parameter('ra_min_drive_s', 12.0)   # 출발 후 이 시간 전엔 RA 진입 금지 (입구 오진입 차단)
-                                                         # 07-16 사용자: 14→12 — 빠른 밴드 진짜 A 도달 실측 14.3s 와
-                                                         # 마진 0.3s 뿐이라 완화. 글레어 존 가짜(9.5/9.9s)는 여전히 차단.
-                                                         # 07-11 run12: 1L 진입 성공으로 진짜 정지선 도착이 9.3s 로
-                                                         # 당겨져 10.0 이 진짜 진입을 차단 -> 7.5 (가짜 5.9s +1.6 여유,
-                                                         # 진짜 9.3s -1.8 여유)    # 가로선이 이 시간 지속 보이면 -> 회전 진입
-        # 곡률 게이트 (0=off): 새 정지선 검출기(Hough+직교)가 차선 오인을 원리적으로
-        # 차단해 불필요 -> 0. (0.5 게이트는 곡선 위 진짜 정지선 접근까지 막았었음)
+        self.declare_parameter('enter_sustain_s', 0.12)   # 가로선이 이 시간 지속 보이면 -> 회전 진입
+        self.declare_parameter('ra_min_drive_s', 12.0)   # 출발 후 이 시간 전엔 RA 진입 금지
+                                                         # (초반 가짜 크로스라인 오진입 차단)
+        # 곡률 게이트 (0=off): 정지선 검출기(Hough+직교)가 차선 오인을 원리적으로
+        # 차단해 불필요. (게이트를 켜면 곡선 위 진짜 정지선 접근까지 막을 수 있음)
         self.declare_parameter('enter_max_curvature', 0.0)
         # race_dir 마스터 (당일 설정): 'left' (CCW) 또는 'right' (CW). 여기서 회전교차로
         # turn_direction 을, 그리고 lane_node 의 junction_side 를 파생한다. 값 하나로
@@ -150,51 +133,43 @@ class DecisionNode(Node):
         # In/Out 브랜치 (자동, 방향 무관): 갈림길에서 In 코스는 노란 경로 쪽으로,
         # Out 은 반대쪽으로 조향. 노란색의 위치를 이용하므로 어느 쪽에 나타나든
         # 동작한다 -> 당일 설정 불필요.
-        # FOLLOW-Y(노란 전용 추종)가 갈림길 선택을 담당하게 되면서 이 bias 는 중복이
-        # 됐고, 노란 구간 주행 내내 ±branch_bias 타깃 지터/끌림을 만들어 기본 OFF.
+        # FOLLOW-Y(노란 전용 추종)가 갈림길 선택을 담당하므로 이 bias 는 중복이며,
+        # 노란 구간 주행 내내 ±branch_bias 타깃 지터/끌림을 만들어 기본 OFF.
         # 갈림길에서 FOLLOW-Y 전환이 늦는 게 실측되면 트랙에서 라이브로 켜서 보조.
-        self.declare_parameter('branch_bias', 0.0)         # 0=off (07-08: FOLLOW-Y 로 대체)
+        self.declare_parameter('branch_bias', 0.0)         # 0=off
         self.declare_parameter('branch_yellow_min', 0.03)  # yellow_ratio 가 이 값 이상 => 갈림길이 보임
-        # 부호 규약: 음수 = 링 안쪽(좌). PID 이후 가산이라 steer_scale 반전에 안 뒤집힘
-        # (실측 수정 완료). run13: 상시 +0.13 가산이 중앙 섬 진입 유발 -> 0 으로.
-        # 링 '바깥' 이탈 재발 시 -0.05 부터 소량 재도입 (부호 반전 금지).
-        self.declare_parameter('circle_steer_bias', 0.0)  # 링 유지 편향 (0=off)
-        # 재획득 규칙 무장 지연 (07-12): RA 진입 후 이 시간이 지나면 perception 의
+        # 링 유지 편향 (0=off). 부호 규약: 음수 = 링 안쪽(좌). PID 이후 가산이라
+        # steer_scale 반전에 안 뒤집힘 — 부호 반전 금지.
+        self.declare_parameter('circle_steer_bias', 0.0)
+        # 재획득 규칙 무장 지연: RA 진입 후 이 시간이 지나면 perception 의
         # "nl 0->1 재획득 = 우측(바깥) 경계" 분류를 무장 (/decision/merge_zone).
-        # 실측 (런19~26, RA 에피소드 8개): 진입 잔재 전이는 전부 <2.6s, 합류부 0->1 은
-        # 최속 가정에도 ~14s 이후 -> 5s 는 양쪽 모두에 큰 여유. 상한 없음 (탈출 시 자동 해제).
+        # 진입 잔재 전이와 합류부 0->1 사이에 놓는다. 상한 없음 (탈출 시 자동 해제).
         self.declare_parameter('reacq_arm_s', 5.0)
-        # RA 맹목 폴백 (07-11 run21): RA 중 차선 소실 프레임의 조향을 직진 대신
-        # 링 유지 호로. 진입 락과 중복 가산 안 함. 음수 = 안쪽(좌).
+        # RA 맹목 폴백: RA 중 차선 소실 프레임의 조향을 직진 대신 링 유지 호로.
+        # 진입 락과 중복 가산 안 함. 음수 = 안쪽(좌).
         self.declare_parameter('ra_blind_bias', -0.15)
-        # 골든런 실측: 랩 19.7s, 진입 정지선 군집 3.9s, 가짜 0건. 자율 1차에서 8.6s
-        # 링 안 직각 실선 오인 조기 탈출 -> 17s 까지 블랭크 (진짜 탈출 ~20s+ 무지장).
-        # 주의: 시간 기반이라 속도 밴드에 민감 — run55 고속 랩(20.5s)에선 랩의 90%.
-        self.declare_parameter('min_loop_time_s', 17.0)   # 이보다 빨리 한 바퀴 완료 불가 (절대 하한)
-        # 속도 스케일 기준: G->RA 접근 소요시간이 이 값일 때 스케일 1.0 (run54=20.5s 밴드,
-        # 절대 임계 3.6/18.5 가 실측 정합했던 밴드). 시간/적분 임계 전부에 s 를 곱한다 —
-        # run53(16.8s)/54(20.5)/55(15.0) 오프라인 재검산 전부 가짜 차단+진짜 통과.
+        # 이보다 빨리 한 바퀴 완료 불가 (절대 하한). 시간 기반이라 속도 밴드에 민감 —
+        # 빠른 랩에선 랩타임에 근접하므로 여유를 확인할 것.
+        self.declare_parameter('min_loop_time_s', 17.0)
+        # 속도 스케일 기준: G->RA 접근 소요시간이 이 값일 때 스케일 1.0.
+        # 시간/적분 임계 전부에 스케일 s 를 곱한다.
         self.declare_parameter('ra_ref_drive_s', 20.5)
         # 스로틀 동적 보정 (G->Y래치 소요시간 -> 순항 스로틀 가산). gain 0=off.
-        self.declare_parameter('throttle_ref_latch_s', 4.6)   # 적정 속도 기준 (run53/54/59 실측 4.4~4.7)
-        self.declare_parameter('throttle_adapt_gain', 0.0)    # 07-15 사용자: throttle_adj 폐기 (0=off)
-        self.declare_parameter('throttle_adapt_max', 0.0)     # 07-15 사용자: throttle_adj 폐기 — 스로틀은 고정값으로만
+        self.declare_parameter('throttle_ref_latch_s', 4.6)   # 적정 속도 기준 소요시간
+        self.declare_parameter('throttle_adapt_gain', 0.0)    # 0=off (스로틀은 고정값 운용)
+        self.declare_parameter('throttle_adapt_max', 0.0)     # 보정 가산 절대 상한
         self.declare_parameter('y_latch_ratio', 0.02)         # 래치 감지 yr 문턱 (perception 과 동일값 권장)
         self.declare_parameter('y_latch_frames', 10)          # 래치 감지 연속 틱
-        # 비상구 (07-15 사용자 결정): 구 3-표결(yaw/시간/가로선 재등장) + max_loop
-        # 전부 삭제 — 속도 의존 재캘리 + 조기 탈출 오발(=실격) 이력. 유일 failsafe 는
-        # 링 체류 절대 상한 하나 (속도 스케일 없음). 실측 랩타임 기반 '2랩 근처
-        # (=A 부근에서 발동)'로 캘리할 것. 참고: 현대 스택 실측 랩 18.6s@0.185.
-        # (run80plus 의 max_loop 75/yaw_lap 7 상향은 표결 삭제로 대상 소멸 — 미채택)
+        # 유일 비상구: 링 체류 절대 시간 상한 (속도 스케일 없음). 실측 랩타임 기반
+        # '2랩 근처(=A 부근에서 발동)'로 캘리브레이션할 것.
         self.declare_parameter('ra_failsafe_exit_s', 40.0)
-        # ----- 07-15 v2.1 (전 코스 감사 반영) -----
-        # 진입 FF 하한 모드: 1=하한(추종 프레임 이중 가산 오버스티어 제거), 0=구 가산.
+        # 진입 FF 하한 모드: 1=하한(추종 프레임 이중 가산 오버스티어 제거), 0=가산 방식.
         self.declare_parameter('entry_ff_floor', 1)
-        # 탈출 구간(_exit_active) 스로틀 캡 — slow(0.17)와 분리. 0.17 은 운동유지
-        # 실측 임계 0.175 아래라 병합 중 물리 스톨 경로. 0 = 구 동작(slow 캡).
+        # 탈출 구간(_exit_active) 스로틀 캡 — slow 와 분리. slow(0.17)는 운동유지
+        # 실측 임계(0.175) 아래라 병합 중 물리 스톨 경로. 0 = slow 캡 사용.
         self.declare_parameter('exit_cap_throttle', 0.185)
-        # 직발화 링 체류 하한 = frac x min_loop x speed_scale. B 반랩/진입 잔상
-        # 재출생(<=9.3s) 차단, A 재도달(랩 18.6s+)은 통과. 0 = off.
+        # 직발화 링 체류 하한 = frac x min_loop x speed_scale. 반대편 입구(반랩)/진입
+        # 잔상 재출생의 조기 발화를 차단, A 재도달(1랩+)은 통과. 0 = off.
         self.declare_parameter('ra_fire_min_frac', 0.7)
         # 인지 스테일 게이트 (수신 시각 기준): lane 은 소실 취급, aruco 는 미검출
         # 취급, dets 는 WAIT_GREEN 외에서 비움. 0 = off.
@@ -210,29 +185,24 @@ class DecisionNode(Node):
         self.declare_parameter('roundabout_exit_gates', 2)   # 군집 순서: 반대편 입구(1) -> 우리 입구(2)=탈출
                                                              # (진입 가로선은 블랭크+재무장으로 제외; 1=한 바퀴)
         self.declare_parameter('roundabout_exit_side', '')   # 출구 브랜치 side; '' 이면 race_dir 파생
-        self.declare_parameter('entry_lock_release_s', 3.0)  # 진입측 락온 강제 해제 시간 (07-11 오후: 저속 대응 2->3s)
-        # 탈출 락 (07-11 run20, 방안1): RA 탈출 순간부터 이 시간 동안 조향에 직접
-        # (post-PID) 우측 편향 -> 개구부의 차선 소실에도 우회전 유지. fork_bias 대체.
-        self.declare_parameter('exit_steer_bias', 0.3)       # 양수 = 탈출측(우) — 07-16 사용자: 0.25→0.3
-        self.declare_parameter('exit_lock_release_s', 3.5)  # 07-16 사용자: 2.5→3.5 (fix6 소실보고 커버 확장)
-        self.declare_parameter('exit_straight_s', 0.1)       # 발화 직후 직진 유지 시간 (07-16 사용자: 침묵0.3 중 직진0.1+우향0.2)
+        self.declare_parameter('entry_lock_release_s', 3.0)  # 진입측 락온 강제 해제 시간
+        # 탈출 락: RA 탈출 순간부터 이 시간 동안 조향에 직접(post-PID) 탈출측 편향 ->
+        # 개구부의 차선 소실에도 우회전 유지.
+        self.declare_parameter('exit_steer_bias', 0.3)       # 양수 = 탈출측(우)
+        self.declare_parameter('exit_lock_release_s', 3.5)   # 탈출 락 시간창(초)
+        self.declare_parameter('exit_straight_s', 0.1)       # 발화 직후 직진 유지 시간
         # 진입 락온 중 조향 피드포워드 (음수 = 링 안쪽/좌). 진입 급좌회전 언더스티어
-        # 대응 — 총 편향 0.15 는 언더스티어 재발(run15), -0.22 사용자 지정.
-        self.declare_parameter('entry_steer_bias', 0.0)   # 07-15 밤 사용자: 진입 0~3s 자율 조향 (0=FF off, 복원값 -0.15)
-        # RA 진입 후 게이트 카운트 금지 시간(진입선 오카운트 방어). 길어서 손해는
-        # "한 바퀴 더"뿐(과회전 허용), 짧으면 조기 탈출=실격 위험 -> 길게 잡는다.
-        # 단, 실측 한 바퀴 시간보다는 반드시 짧아야 함 (트랙에서 라이브 조정).
-        self.declare_parameter('gate_blank_s', 3.5)   # 잔상 '출생' 덮개 (군집 v2 — 무효 판정용, 무스케일)
+        # 대응. 0 = FF off (진입 구간을 PID 자율 조향에 맡김).
+        self.declare_parameter('entry_steer_bias', 0.0)
+        # RA 진입 후 게이트 카운트 금지 시간(진입선 잔상 오카운트 방어, 무스케일).
+        # 길어서 손해는 "한 바퀴 더"뿐(과회전 허용), 짧으면 조기 탈출=실격 위험 ->
+        # 길게 잡는다. 단, 실측 한 바퀴 시간보다는 반드시 짧아야 함.
+        self.declare_parameter('gate_blank_s', 3.5)
         self.declare_parameter('gate_rearm_s', 0.5)          # 가로선이 이 시간 연속 OFF 여야 다음 카운트 무장
         self.declare_parameter('gate_cluster_gap_s', 1.8)    # 목격 간격 이 미만 = 같은 군집 (파편/2조각 병합)
-        self.declare_parameter('gate_cluster_on_s', 0.12)    # 군집 누적 ON 카운트 문턱 (run76 약피처 0.19 배제, 실선 0.5+ 통과)
-        self.declare_parameter('ra_direct_fire', 1)   # 1=카운트 성립 즉시 발화 (07-15 포팅 — stopline_mode 1 필수 세트, 둘 다 소스 박제)
+        self.declare_parameter('gate_cluster_on_s', 0.12)    # 군집 누적 ON 카운트 문턱 (약피처 배제)
+        self.declare_parameter('ra_direct_fire', 1)   # 1=카운트 성립 즉시 발화. perception 의 stopline_mode 1 과 반드시 세트
         # 이 조향적분 전에는 탈출 게이트 잠금 (링 중간 가짜선 차단).
-        # 07-12 재배치 4.2 -> 3.6 (사용자 승인, B안): 4.2 는 진짜 탈출선 실측
-        # (4.12~4.28)과 여유 2%뿐이라 손 개입/빠른 랩에서 yaw 가 모자라 불발 —
-        # run29 진짜 3연타 3.68~3.81 불발, run31 진짜 3.65 불발 -> 둘 다 페일세이프
-        # 강제 탈출 후 이탈. 가짜 실선 실측 최대 3.11 (run31 2.57~2.65) 이라
-        # 3.6 은 가짜/진짜 사이 균형점 (여유 각각 ~0.5).
         self.declare_parameter('yaw_gate_min', 1.0)   # 위생 하한 (위치 판별은 군집 순서가 담당)
 
         g = self.get_parameter
@@ -280,7 +250,6 @@ class DecisionNode(Node):
             'marker_area_trigger': float(g('marker_area_trigger').value),
             'red_slow_ratio': float(g('red_slow_ratio').value),
             'marker_clear_frames': int(g('marker_clear_frames').value),
-            'fork_bias': float(g('fork_bias').value),
             'fork_hold_s': float(g('fork_hold_s').value),
             'enter_sustain_s': float(g('enter_sustain_s').value),
             'ra_min_drive_s': float(g('ra_min_drive_s').value),
@@ -323,7 +292,6 @@ class DecisionNode(Node):
         self.sm = RaceStateMachine(cfg)
 
         # ----- live-tunable params (ros2 param set 으로 주행 중 변경 가능) -----
-        # state_machine 이 매 step 마다 self.sm.cfg 를 읽으므로 값만 갱신하면 즉시 반영됨.
         # state_machine 이 매 step 마다 self.sm.cfg 에서 읽는 값들만 라이브 변경 가능.
         # (steer_center/steer_scale 는 _lane_steer 에서 매번 cfg 를 읽으므로 즉시 반영됨)
         self.live_tunable = {
@@ -332,7 +300,7 @@ class DecisionNode(Node):
             'steer_center', 'steer_scale', 'steer_left_gain',
             'kp', 'ki', 'kd',   # PID 게인 (조향 세기) 트랙에서 라이브 튜닝
             'max_steering_delta', 'steer_slow',   # look-ahead 보조 (rate limit / 조향 감속)
-            'fork_bias', 'fork_hold_s',           # 갈림길 편향 세기 / 유지 시간
+            'fork_hold_s',                        # 갈림길 latch failsafe 시간
             'branch_bias',                        # In/Out 색상 편향 (기본 0=off, 현장 재활성용)
             'roundabout_exit_gates',              # 회전교차로 탈출 게이트 카운트 (트랙 실측)
             'enter_sustain_s', 'ra_min_drive_s',  # 진입 debounce / 진입 무장 지연
@@ -348,7 +316,7 @@ class DecisionNode(Node):
             # 링을 실제 속도로 돌려 실측해야 하므로 주행 중 변경 가능해야 한다.
             # (비상구를 늘리지 못하면 측정 중 강제 탈출해 랩 측정 자체가 불가능하다.)
             'min_loop_time_s', 'ra_failsafe_exit_s',
-            # 07-15 v2.1: 현장 킬스위치 (0/구값 = 구 동작 복귀)
+            # 현장 킬스위치 (0/구값 = 구 동작 복귀)
             'entry_ff_floor', 'exit_cap_throttle', 'ra_fire_min_frac',
             'finish_min_drive_s',                 # 빨간불 무시 최소 주행시간 (오인식 가드)
             'light_min_area',                     # 신호등 bbox 최소 면적 (오검출 필터)
@@ -366,7 +334,7 @@ class DecisionNode(Node):
         self._prev_steer = None   # rate limit 용 직전 조향값
         self._prev_throttle = 0.0   # 스로틀 rate limit 용 직전 출력값
         self._kick_left = 0.0       # 출발 킥 남은 시간(초)
-        # 07-15 v2.1 ⑤b: 마지막 수신 시각 (스테일 게이트용, None=미수신)
+        # 마지막 수신 시각 (스테일 게이트용, None=미수신)
         self._lane_rx = None
         self._aruco_rx = None
         self._dets_rx = None
@@ -394,7 +362,7 @@ class DecisionNode(Node):
         self.create_subscription(ArucoState, str(g('aruco_topic').value), self.on_aruco, 10)
         self.create_subscription(Detections, str(g('detections_topic').value), self.on_dets, 10)
         self.create_subscription(Battery, str(g('battery_topic').value), self.on_battery, 10)
-        # 흰 실선 병합 이벤트 (P1): perception → _exit_active 종료 트리거
+        # 흰 실선 병합 이벤트: perception → _exit_active 종료 트리거
         self._merge_done_sig = False
         self.create_subscription(Bool, '/perception/merge_done', self.on_merge_done, 10)
         self.pub = self.create_publisher(Control, str(g('control_topic').value), 10)
@@ -404,7 +372,7 @@ class DecisionNode(Node):
         self.state_pub = self.create_publisher(String, str(g('state_topic').value), 10)
         # 재획득 규칙 무장 플래그 (RA+reacq_arm_s 경과) -> perception 의
         # "nl 0->1 재획득 = 우측 경계" 규칙 스코프. 토픽명은 perception 리빌드를
-        # 피하려고 구 이름(merge_zone) 그대로 둠 (07-12 의미 변경).
+        # 피하려고 구 이름(merge_zone) 그대로 둠.
         self.merge_pub = self.create_publisher(Bool, '/decision/merge_zone', 10)
 
         self.dt = 1.0 / float(g('control_hz').value)
@@ -490,7 +458,7 @@ class DecisionNode(Node):
 
         # 표지판이 fork_vote_clear_s 이상 안 들어오면 표결 초기화(오래된 표는 버린다).
         # 이건 '떨림 방지창'일 뿐, 갈림길 통과까지의 홀드는 state_machine 이 lane.fork
-        # (도로 재수렴) 기준으로 단독 담당한다 => 예전 홀드 이중적용(≈2×) 제거.
+        # (도로 재수렴) 기준으로 단독 담당한다 (홀드 이중적용 방지).
         if self.last_fork_sign_time is not None:
             age = (self.get_clock().now() - self.last_fork_sign_time).nanoseconds / 1e9
             if age >= self.fork_vote_clear_s:
@@ -510,21 +478,21 @@ class DecisionNode(Node):
                 self.confirmed_fork_direction = self._fork_votes[-1]
 
     def _stale(self, rx, thr_s):
-        """수신 시각 기준 스테일 판정 (07-15 v2.1 ⑤b). 헤더 스탬프가 아니라 '도착'
-        시각을 쓴다 — 파이프라인 상시 랙(0.1~0.3s)이 부하 스파이크에 문턱을 넘어
-        멀쩡한 스트림을 강등하는 오탐을 피하기 위해. 미수신(None)은 스테일 아님
+        """수신 시각 기준 스테일 판정. 헤더 스탬프가 아니라 '도착' 시각을 쓴다 —
+        파이프라인 상시 랙(0.1~0.3s)이 부하 스파이크에 문턱을 넘어 멀쩡한
+        스트림을 강등하는 오탐을 피하기 위해. 미수신(None)은 스테일 아님
         (기동 직후 안전: lane 기본값이 이미 lane_found=False)."""
         if thr_s <= 0.0 or rx is None:
             return False
         return (self.get_clock().now() - rx).nanoseconds / 1e9 >= thr_s
 
     def on_timer(self):
-        # 인지 스테일 게이트 (07-15 v2.1 ⑤b): 노드 사망/카메라 스톨 시 마지막
-        # 메시지가 박제된 채 맹목 주행하는 것을 차단. lane 스테일 -> 소실 취급
-        # (조향은 기존 소실 폴백이 전담), aruco 스테일 -> 미검출 취급 (OBSTACLE_
-        # STOP 영구 정지 방지), dets 스테일 -> WAIT_GREEN 외에서만 비움 (초록
-        # 대기 중 YOLO 워밍업/CPU 경합으로 출발이 밀리는 오탐 방지 — 빨간불
-        # 오검출 정지는 red_frames 래칭이 있어 WAIT_GREEN 제외가 안전측).
+        # 인지 스테일 게이트: 노드 사망/카메라 스톨 시 마지막 메시지가 박제된 채
+        # 맹목 주행하는 것을 차단. lane 스테일 -> 소실 취급 (조향은 기존 소실
+        # 폴백이 전담), aruco 스테일 -> 미검출 취급 (OBSTACLE_STOP 영구 정지 방지),
+        # dets 스테일 -> WAIT_GREEN 외에서만 비움 (초록 대기 중 YOLO 워밍업/CPU
+        # 경합으로 출발이 밀리는 오탐 방지 — 빨간불 오검출 정지는 red_frames
+        # 래칭이 있어 WAIT_GREEN 제외가 안전측).
         if self._stale(self._lane_rx, float(self.get_parameter('lane_stale_s').value)):
             if self.lane.lane_found or self.lane.yellow_crossline:
                 self.get_logger().warning('lane 스테일 — lane_found/crossline 강등')
@@ -571,7 +539,7 @@ class DecisionNode(Node):
         if lg != 1.0 and steer > center:
             steer = max(-1.0, min(1.0, center + (steer - center) * lg))
         # 조향 rate limit: 틱당 변화량 제한으로 프레임 간 조향 급변(튐)을 막는다.
-        # 0 이면 완전 비활성(기존 동작). roundabout 의 yaw 적분은 제한 전 값을 쓰지만
+        # 0 이면 완전 비활성. roundabout 의 yaw 적분은 제한 전 값을 쓰지만
         # 편향이 '늦게 나가기' 쪽이라 랩 카운트 안전에는 문제 없음.
         delta = float(cfg.get('max_steering_delta', 0.0))
         if delta > 0.0 and self._prev_steer is not None:
@@ -603,8 +571,8 @@ class DecisionNode(Node):
         # 적용해야 램프가 킥 값까지 올라간다.
         # In 코스에서 정지->출발이 일어나는 지점: 초록불 출발, 빨간 도로의 ArUco 해제 후.
         # 둘 다 목표가 drive_throttle 이고 그 값이 곧 출발 임계라 킥 없이는 여유가 없다.
-        # 킥에도 동적 보정 가산 ("각 스로틀 값에 +/-"). 첫 출발 킥은 래치 전이라
-        # adj=0 이고, ArUco 재출발 킥부터 보정이 반영된다.
+        # 킥에도 동적 보정을 가산한다. 첫 출발 킥은 래치 전이라 adj=0 이고,
+        # ArUco 재출발 킥부터 보정이 반영된다.
         kick = float(cfg.get('start_kick_throttle', 0.0))
         if kick > 0.0:
             kick = kick + adj
